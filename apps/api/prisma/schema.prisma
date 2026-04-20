@@ -1,0 +1,636 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums existentes (ReportsBizzPm) ──────────────────────────────────────
+
+enum Role {
+  ADMIN
+  CLIENT
+  CUSTOM
+}
+
+enum BalancoTipoEmpresa {
+  MICRO
+  NORMAL_PEQUENA
+  SETOR_NAO_LUCRATIVO
+}
+
+enum ToconlineStatus {
+  UNCONFIGURED
+  PENDING_AUTH
+  ACTIVE
+  ERROR
+}
+
+// ─── Enums novos (tesouraria) ───────────────────────────────────────────────
+
+enum TreasuryCategoryType {
+  REVENUE
+  EXPENSE
+}
+
+enum TreasuryDocOrigin {
+  TOCONLINE
+  LOCAL
+}
+
+enum TreasuryDocStatus {
+  OPEN
+  PARTIAL
+  SETTLED
+  VOID
+}
+
+enum TreasuryMovementStatus {
+  UNCLASSIFIED
+  CLASSIFIED
+  PARTIAL
+  RECONCILED
+}
+
+enum TreasuryMovementSource {
+  CSV_IMPORT
+  PDF_IMPORT
+  OFX_IMPORT
+  OPEN_BANKING
+  MANUAL
+}
+
+enum TreasuryRecurrenceFrequency {
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+  CUSTOM
+}
+
+enum TreasuryReconciliationStatus {
+  DRAFT
+  CONFIRMED
+  REVERSED
+}
+
+enum TreasuryImportStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+  QUARANTINED
+}
+
+// ─── Modelos existentes (ReportsBizzPm) ────────────────────────────────────
+
+model User {
+  id               String    @id @default(cuid())
+  name             String
+  email            String    @unique
+  passwordHash     String?
+  phone            String?
+  isActive         Boolean   @default(true)
+  emailConfirmed   Boolean   @default(false)
+
+  inviteToken          String?   @unique
+  inviteTokenExpiresAt DateTime?
+  inviteTokenPurpose   String?
+  passwordSetAt        DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  userRoles   UserRole[]
+  userClients UserClient[]
+
+  treasuryReceivablesCreated   TreasuryReceivable[]   @relation("ReceivablesCreated")
+  treasuryPayablesCreated      TreasuryPayable[]      @relation("PayablesCreated")
+  treasuryBankImportsCreated   TreasuryBankImport[]
+  treasuryReconciliationsCreated  TreasuryReconciliation[] @relation("ReconciliationsCreated")
+  treasuryReconciliationsReversed TreasuryReconciliation[] @relation("ReconciliationsReversed")
+  treasuryAuditLogs            TreasuryAuditLog[]
+
+  @@index([email])
+  @@index([isActive])
+  @@map("users")
+}
+
+model AppRole {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  level     Int
+  createdAt DateTime @default(now())
+
+  userRoles UserRole[]
+
+  @@map("app_roles")
+}
+
+model UserRole {
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role AppRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model Client {
+  id              String             @id @default(cuid())
+  name            String
+  nif             String             @unique
+  isActive        Boolean            @default(true)
+  companyType     BalancoTipoEmpresa @default(MICRO)
+  countryCode     String             @default("PT")
+  nomeOficial     String?
+  morada          String?
+  codigoPostal    String?            @db.VarChar(20)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  userClients     UserClient[]
+  toconlineConfig ToconlineConfig?
+
+  treasuryCategories          TreasuryCategory[]
+  treasuryBankAccounts        TreasuryBankAccount[]
+  treasuryBankImports         TreasuryBankImport[]
+  treasuryBankMovements       TreasuryBankMovement[]
+  treasuryReceivables         TreasuryReceivable[]
+  treasuryPayables            TreasuryPayable[]
+  treasuryRecurrences         TreasuryRecurrence[]
+  treasuryReconciliations     TreasuryReconciliation[]
+  treasuryClassificationRules TreasuryClassificationRule[]
+  treasurySettings            TreasurySettings?
+  treasuryAuditLogs           TreasuryAuditLog[]
+
+  @@index([isActive])
+  @@index([nif])
+  @@map("clients")
+}
+
+model UserClient {
+  userId    String
+  clientId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@id([userId, clientId])
+  @@map("user_clients")
+}
+
+model ToconlineConfig {
+  id              String          @id @default(cuid())
+  clientId        String          @unique
+  client          Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  oauthUrl        String
+  baseUrl         String
+  tocClientId     String
+  tocClientSecret String
+  accessToken     String?
+  refreshToken    String?
+  tokenExpiresAt  DateTime?
+
+  status    ToconlineStatus @default(UNCONFIGURED)
+  lastError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("toconline_configs")
+}
+
+// ─── Modelos novos (tesouraria) ─────────────────────────────────────────────
+
+model TreasuryCategory {
+  id         String               @id @default(cuid())
+  clientId   String
+  name       String               @db.VarChar(120)
+  type       TreasuryCategoryType
+  launchToc  Boolean              @default(true)
+
+  tocExpenseCategoryId String?
+  tocTaxDescriptorId   String?
+
+  color      String?  @db.VarChar(7)
+  icon       String?  @db.VarChar(40)
+  isArchived Boolean  @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client              Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  receivables         TreasuryReceivable[]
+  payables            TreasuryPayable[]
+  movements           TreasuryBankMovement[]
+  classificationRules TreasuryClassificationRule[]
+
+  @@unique([clientId, name])
+  @@index([clientId, type])
+  @@index([clientId, launchToc])
+  @@map("treasury_categories")
+}
+
+model TreasuryBankAccount {
+  id             String  @id @default(cuid())
+  clientId       String
+  name           String  @db.VarChar(120)
+  bankName       String? @db.VarChar(80)
+  currency       String  @default("EUR") @db.VarChar(3)
+
+  ibanEnc   String?
+  ibanLast4 String? @db.VarChar(4)
+
+  openingBalance Decimal @default(0) @db.Decimal(18, 2)
+  currentBalance Decimal @default(0) @db.Decimal(18, 2)
+  minBalance     Decimal? @db.Decimal(18, 2)
+
+  tocBankAccountId String?
+  tocSyncedAt      DateTime?
+
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client    Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  movements TreasuryBankMovement[]
+  imports   TreasuryBankImport[]
+
+  @@unique([clientId, tocBankAccountId])
+  @@index([clientId, isActive])
+  @@map("treasury_bank_accounts")
+}
+
+model TreasuryBankImport {
+  id            String               @id @default(cuid())
+  clientId      String
+  bankAccountId String
+
+  source           TreasuryMovementSource
+  originalFileName String?
+  storageKey       String?
+  fileSha256       String? @db.VarChar(64)
+  fileSize         Int?
+  mimeType         String? @db.VarChar(80)
+
+  status        TreasuryImportStatus @default(PENDING)
+  rowsTotal     Int                  @default(0)
+  rowsImported  Int                  @default(0)
+  rowsDuplicated Int                 @default(0)
+  rowsFailed    Int                  @default(0)
+  errorMessage  String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdById String
+  createdAt   DateTime @default(now())
+
+  client      Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  bankAccount TreasuryBankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  createdBy   User                @relation(fields: [createdById], references: [id])
+  movements   TreasuryBankMovement[]
+
+  @@index([clientId, bankAccountId, createdAt(sort: Desc)])
+  @@index([fileSha256])
+  @@map("treasury_bank_imports")
+}
+
+model TreasuryBankMovement {
+  id            String @id @default(cuid())
+  clientId      String
+  bankAccountId String
+
+  date            DateTime
+  bookingDate     DateTime?
+  amount          Decimal  @db.Decimal(18, 2)
+  currency        String   @default("EUR") @db.VarChar(3)
+  balanceAfter    Decimal? @db.Decimal(18, 2)
+  description     String   @db.VarChar(500)
+  normalizedDesc  String?  @db.VarChar(500)
+  counterpartName String?  @db.VarChar(200)
+  counterpartIban String?  @db.VarChar(50)
+
+  categoryId String?
+
+  source      TreasuryMovementSource
+  importId    String?
+  dedupeHash  String @db.VarChar(64)
+
+  status           TreasuryMovementStatus @default(UNCLASSIFIED)
+  reconciledAmount Decimal                @default(0) @db.Decimal(18, 2)
+
+  externalRef String? @db.VarChar(120)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client      Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  bankAccount TreasuryBankAccount  @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  category    TreasuryCategory?    @relation(fields: [categoryId], references: [id])
+  import      TreasuryBankImport?  @relation(fields: [importId], references: [id], onDelete: SetNull)
+  reconciliationLinks TreasuryReconciliationMovement[]
+
+  @@unique([clientId, dedupeHash])
+  @@index([clientId, bankAccountId, date(sort: Desc)])
+  @@index([clientId, status])
+  @@index([clientId, categoryId])
+  @@map("treasury_bank_movements")
+}
+
+model TreasuryReceivable {
+  id         String @id @default(cuid())
+  clientId   String
+  categoryId String
+
+  entityName    String  @db.VarChar(200)
+  entityNif     String? @db.VarChar(20)
+  tocCustomerId String?
+
+  reference    String  @db.VarChar(80)
+  description  String? @db.VarChar(500)
+  documentDate DateTime
+  dueDate      DateTime
+
+  currency       String  @default("EUR") @db.VarChar(3)
+  totalAmount    Decimal @db.Decimal(18, 2)
+  receivedAmount Decimal @default(0) @db.Decimal(18, 2)
+  pendingAmount  Decimal @db.Decimal(18, 2)
+
+  status TreasuryDocStatus @default(OPEN)
+  origin TreasuryDocOrigin
+
+  tocSalesDocId String?
+  tocSyncedAt   DateTime?
+  tocSyncError  String?
+
+  recurrenceId String?
+  parentId     String?
+
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  client              Client                            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  category            TreasuryCategory                  @relation(fields: [categoryId], references: [id])
+  recurrence          TreasuryRecurrence?               @relation(fields: [recurrenceId], references: [id])
+  parent              TreasuryReceivable?               @relation("ReceivableChildren", fields: [parentId], references: [id])
+  children            TreasuryReceivable[]              @relation("ReceivableChildren")
+  reconciliationLinks TreasuryReconciliationReceivable[]
+  createdBy           User                              @relation("ReceivablesCreated", fields: [createdById], references: [id])
+
+  @@unique([clientId, reference])
+  @@index([clientId, status, dueDate])
+  @@index([clientId, categoryId])
+  @@index([clientId, origin])
+  @@index([tocSalesDocId])
+  @@map("treasury_receivables")
+}
+
+model TreasuryPayable {
+  id         String @id @default(cuid())
+  clientId   String
+  categoryId String
+
+  entityName    String  @db.VarChar(200)
+  entityNif     String? @db.VarChar(20)
+  tocSupplierId String?
+
+  reference    String  @db.VarChar(80)
+  description  String? @db.VarChar(500)
+  documentDate DateTime
+  dueDate      DateTime
+
+  currency      String  @default("EUR") @db.VarChar(3)
+  totalAmount   Decimal @db.Decimal(18, 2)
+  paidAmount    Decimal @default(0) @db.Decimal(18, 2)
+  pendingAmount Decimal @db.Decimal(18, 2)
+
+  status TreasuryDocStatus @default(OPEN)
+  origin TreasuryDocOrigin
+
+  tocPurchasesDocId String?
+  tocSyncedAt       DateTime?
+  tocSyncError      String?
+
+  recurrenceId String?
+  parentId     String?
+
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  client              Client                         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  category            TreasuryCategory               @relation(fields: [categoryId], references: [id])
+  recurrence          TreasuryRecurrence?            @relation(fields: [recurrenceId], references: [id])
+  parent              TreasuryPayable?               @relation("PayableChildren", fields: [parentId], references: [id])
+  children            TreasuryPayable[]              @relation("PayableChildren")
+  reconciliationLinks TreasuryReconciliationPayable[]
+  createdBy           User                           @relation("PayablesCreated", fields: [createdById], references: [id])
+
+  @@unique([clientId, reference])
+  @@index([clientId, status, dueDate])
+  @@index([clientId, categoryId])
+  @@index([clientId, origin])
+  @@index([tocPurchasesDocId])
+  @@map("treasury_payables")
+}
+
+model TreasuryRecurrence {
+  id       String                      @id @default(cuid())
+  clientId String
+  frequency TreasuryRecurrenceFrequency
+  startDate DateTime
+  endDate   DateTime?
+  occurrences Int?
+  customRrule String?
+  nextRunAt   DateTime?
+  lastRunAt   DateTime?
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client      Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  receivables TreasuryReceivable[]
+  payables    TreasuryPayable[]
+
+  @@index([clientId, isActive, nextRunAt])
+  @@map("treasury_recurrences")
+}
+
+model TreasuryReconciliation {
+  id        String                       @id @default(cuid())
+  clientId  String
+  status    TreasuryReconciliationStatus @default(DRAFT)
+  direction TreasuryCategoryType
+  isDryRun  Boolean                      @default(true)
+
+  totalMovements Decimal @db.Decimal(18, 2)
+  totalAllocated Decimal @db.Decimal(18, 2)
+
+  tocReceiptsCreated Int    @default(0)
+  tocPaymentsCreated Int    @default(0)
+  tocFirstError      String?
+
+  reversedAt     DateTime?
+  reversedById   String?
+  reversedReason String?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  client     Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy  User   @relation("ReconciliationsCreated", fields: [createdById], references: [id])
+  reversedBy User?  @relation("ReconciliationsReversed", fields: [reversedById], references: [id])
+
+  movements   TreasuryReconciliationMovement[]
+  receivables TreasuryReconciliationReceivable[]
+  payables    TreasuryReconciliationPayable[]
+
+  @@index([clientId, status, createdAt(sort: Desc)])
+  @@index([clientId, createdById])
+  @@map("treasury_reconciliations")
+}
+
+model TreasuryReconciliationMovement {
+  id               String  @id @default(cuid())
+  reconciliationId String
+  movementId       String
+  amount           Decimal @db.Decimal(18, 2)
+
+  reconciliation TreasuryReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  movement       TreasuryBankMovement   @relation(fields: [movementId], references: [id], onDelete: Restrict)
+
+  @@unique([reconciliationId, movementId])
+  @@index([movementId])
+  @@map("treasury_reconciliation_movements")
+}
+
+model TreasuryReconciliationReceivable {
+  id               String  @id @default(cuid())
+  reconciliationId String
+  receivableId     String
+  amountAllocated  Decimal @db.Decimal(18, 2)
+
+  tocReceiptId String?
+  tocCreatedAt DateTime?
+  tocError     String?
+
+  reconciliation TreasuryReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  receivable     TreasuryReceivable     @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+
+  @@unique([reconciliationId, receivableId])
+  @@index([receivableId])
+  @@index([tocReceiptId])
+  @@map("treasury_reconciliation_receivables")
+}
+
+model TreasuryReconciliationPayable {
+  id               String  @id @default(cuid())
+  reconciliationId String
+  payableId        String
+  amountAllocated  Decimal @db.Decimal(18, 2)
+
+  tocPaymentId String?
+  tocCreatedAt DateTime?
+  tocError     String?
+
+  reconciliation TreasuryReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  payable        TreasuryPayable        @relation(fields: [payableId], references: [id], onDelete: Restrict)
+
+  @@unique([reconciliationId, payableId])
+  @@index([payableId])
+  @@index([tocPaymentId])
+  @@map("treasury_reconciliation_payables")
+}
+
+model TreasuryClassificationRule {
+  id       String @id @default(cuid())
+  clientId String
+
+  matchField  String  @db.VarChar(20)
+  matchOp     String  @db.VarChar(20)
+  matchValue  String  @db.VarChar(500)
+  amountMin   Decimal? @db.Decimal(18, 2)
+  amountMax   Decimal? @db.Decimal(18, 2)
+  direction   TreasuryCategoryType?
+
+  categoryId String
+  priority   Int     @default(100)
+  isActive   Boolean @default(true)
+
+  hits      Int       @default(0)
+  lastHitAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client   Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  category TreasuryCategory @relation(fields: [categoryId], references: [id])
+
+  @@index([clientId, isActive, priority])
+  @@map("treasury_classification_rules")
+}
+
+model TreasurySettings {
+  id       String @id @default(cuid())
+  clientId String @unique
+
+  reconciliationDryRun  Boolean @default(true)
+  autoMatchEnabled      Boolean @default(false)
+  autoMatchThreshold    Decimal @default(0.95) @db.Decimal(3, 2)
+
+  lowBalanceEnabled  Boolean  @default(true)
+  lowBalanceChannels String[]
+
+  importFileRetentionDays Int @default(30)
+  syncIntervalMinutes     Int @default(15)
+  lastFullSyncAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("treasury_settings")
+}
+
+model TreasuryAuditLog {
+  id         String  @id @default(cuid())
+  clientId   String
+  userId     String?
+  action     String  @db.VarChar(80)
+  entityType String  @db.VarChar(40)
+  entityId   String? @db.VarChar(40)
+  payload    Json?
+  ipAddress  String? @db.VarChar(45)
+  userAgent  String? @db.VarChar(500)
+
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([clientId, createdAt(sort: Desc)])
+  @@index([clientId, action])
+  @@index([entityType, entityId])
+  @@map("treasury_audit_logs")
+}

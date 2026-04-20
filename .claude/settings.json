@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx prisma *)",
+      "Bash(npx tsx *)",
+      "Bash(curl -s http://localhost:3001/health)",
+      "Bash(curl -s -X POST http://localhost:3001/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@mapa-tesouraria.pt\",\"password\":\"admin123\"}')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:3001/api/v1/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@mapa-tesouraria.pt\",\"password\":\"admin123\"}')",
+      "Bash(npx tsc *)",
+      "Read(//c/Projetos/Estagio/Documentação/FW_ Bancos - Movimentos Bancários - programação/**)",
+      "Bash(dir \"C:/Projetos/Estagio/Documentação/FW_ Bancos - Movimentos Bancários - programação\")",
+      "Bash(pkill -f \"tsx watch\")",
+      "Bash(npm run *)",
+      "Read(//tmp/**)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 2704 /F)"
+    ]
+  }
+}
