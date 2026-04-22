@@ -1,18 +1,68 @@
-import { useState, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useRef, useEffect } from 'react'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
-import { formatCurrency, formatDate, statusLabel, statusVariant } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
-import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, Filter, FileUp, CheckCircle2 } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
 
+const PORTUGUESE_BANKS = [
+  'Bankinter',
+  'Millennium BCP',
+  'Banco BPI',
+  'Caixa Geral de Depósitos',
+  'Novo Banco',
+  'Santander',
+]
+
+const BANK_PARSER_CODES: Record<string, SupportedBank> = {
+  'Caixa Geral de Depósitos': 'CGD',
+  'Millennium BCP': 'BCP',
+  'Banco BPI': 'BPI',
+  'Bankinter': 'Bankinter',
+  'Santander': 'Santander',
+}
+
+const BANK_IMPORT_OPTIONS = PORTUGUESE_BANKS.map((name) => ({
+  name,
+  code: BANK_PARSER_CODES[name] ?? name,
+  supported: name in BANK_PARSER_CODES,
+}))
+
+const BANK_BRAND: Record<string, { abbr: string; bg: string }> = {
+  'Bankinter': { abbr: 'BK', bg: '#FF6200' },
+  'Millennium BCP': { abbr: 'BCP', bg: '#DA2128' },
+  'Banco BPI': { abbr: 'BPI', bg: '#F47920' },
+  'Caixa Geral de Depósitos': { abbr: 'CGD', bg: '#008A3B' },
+  'Novo Banco': { abbr: 'NB', bg: '#C8000A' },
+  'Santander': { abbr: 'SAN', bg: '#EC0000' },
+}
+
+function BankAvatar({ bankName }: { bankName: string }) {
+  const brand = BANK_BRAND[bankName]
+  const bg = brand?.bg ?? '#6B7280'
+  const abbr = brand?.abbr ?? bankName.slice(0, 2).toUpperCase()
+  return (
+    <div
+      className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white ${abbr.length <= 2 ? 'text-sm' : 'text-xs'}`}
+      style={{ backgroundColor: bg }}
+    >
+      {abbr}
+    </div>
+  )
+}
+
+function formatIban(raw: string): string {
+  const clean = raw.replace(/\s/g, '').toUpperCase().slice(0, 25)
+  return clean.match(/.{1,4}/g)?.join(' ') ?? clean
+}
+
 interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; ibanLast4: string; currency: string }
-interface Movement { id: string; date: string; amount: number; description: string; status: string; category?: { name: string; color: string }; bankAccount?: { name: string } }
+interface Movement { id: string; date: string; amount: number; description: string; status: string; balanceAfter?: number | null; category?: { name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
 interface MovementsResponse { total: number; page: number; limit: number; items: Movement[] }
 interface Summary { totalIncome: number; totalExpense: number; countIncome: number; countExpense: number; byStatus: Record<string, number> }
 
@@ -20,15 +70,50 @@ export default function BanksPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
   const [selectedAccount, setSelectedAccount] = useState<string>('')
-  const [statusFilter, setStatusFilter] = useState('')
   const [page, setPage] = useState(1)
   const [showNewAccount, setShowNewAccount] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [newAccount, setNewAccount] = useState({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' })
+  const [bankSearch, setBankSearch] = useState('')
+  const [showBankDropdown, setShowBankDropdown] = useState(false)
+  const [ibanTouched, setIbanTouched] = useState(false)
+  const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [direction, setDirection] = useState<'' | 'income' | 'expense'>('')
+  const [sortBy, setSortBy] = useState<'date' | 'amount' | 'description' | 'balanceAfter'>('date')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [importBank, setImportBank] = useState<SupportedBank>('CGD')
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const bankDropdownRef = useRef<HTMLDivElement>(null)
+  const carouselRef = useRef<HTMLDivElement>(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+
+  function checkScroll() {
+    const el = carouselRef.current
+    if (!el) return
+    setCanScrollLeft(el.scrollLeft > 2)
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2)
+  }
+
+  useEffect(() => {
+    if (!showBankDropdown) return
+    function handleClickOutside(e: MouseEvent) {
+      if (bankDropdownRef.current && !bankDropdownRef.current.contains(e.target as Node)) {
+        setShowBankDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showBankDropdown])
+
+  const filteredBanks = PORTUGUESE_BANKS.filter((b) =>
+    b.toLowerCase().includes(bankSearch.toLowerCase())
+  )
 
   const { data: accounts = [] } = useQuery<BankAccount[]>({
     queryKey: ['bank-accounts', selectedClientId],
@@ -36,16 +121,28 @@ export default function BanksPage() {
     enabled: !!selectedClientId,
   })
 
+  useEffect(() => { setTimeout(checkScroll, 0) }, [accounts])
+
   const { data: summary } = useQuery<Summary>({
     queryKey: ['movements-summary', selectedClientId, selectedAccount],
     queryFn: () => api.get(`/treasury/${selectedClientId}/movements/summary${selectedAccount ? `?bankAccountId=${selectedAccount}` : ''}`),
-    enabled: !!selectedClientId,
+    enabled: !!selectedClientId && accounts.length > 0,
   })
 
   const { data: movements } = useQuery<MovementsResponse>({
-    queryKey: ['movements', selectedClientId, selectedAccount, statusFilter, page],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/movements?page=${page}&limit=20${selectedAccount ? `&bankAccountId=${selectedAccount}` : ''}${statusFilter ? `&status=${statusFilter}` : ''}`),
-    enabled: !!selectedClientId,
+    queryKey: ['movements', selectedClientId, selectedAccount, page, search, dateFrom, dateTo, direction, sortBy, sortDir],
+    queryFn: () => {
+      const p = new URLSearchParams({ page: String(page), limit: '20' })
+      if (selectedAccount) p.set('bankAccountId', selectedAccount)
+      if (search) p.set('search', search)
+      if (dateFrom) p.set('dateFrom', dateFrom)
+      if (dateTo) p.set('dateTo', dateTo)
+      if (direction) p.set('direction', direction)
+      if (sortBy !== 'date' || sortDir !== 'desc') { p.set('sortBy', sortBy); p.set('sortDir', sortDir) }
+      return api.get(`/treasury/${selectedClientId}/movements?${p.toString()}`)
+    },
+    enabled: !!selectedClientId && accounts.length > 0,
+    placeholderData: keepPreviousData,
   })
 
   const createAccount = useMutation({
@@ -55,6 +152,17 @@ export default function BanksPage() {
       minBalance: data.minBalance ? parseFloat(data.minBalance) : undefined,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['bank-accounts'] }); setShowNewAccount(false) },
+  })
+
+  const deleteAccount = useMutation({
+    mutationFn: (id: string) => api.delete(`/treasury/${selectedClientId}/bank-accounts/${id}`),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      if (selectedAccount === id) setSelectedAccount('')
+      setConfirmDeleteId(null)
+    },
   })
 
   const uploadStatementMutation = useMutation({
@@ -82,120 +190,351 @@ export default function BanksPage() {
     },
   })
 
-  const totalBalance = accounts.reduce((s, a) => s + a.currentBalance, 0)
+  const selectedAccountData = accounts.find((a) => a.id === selectedAccount)
+  const totalBalance = selectedAccountData ? selectedAccountData.currentBalance : accounts.reduce((s, a) => s + a.currentBalance, 0)
+  const confirmDeleteAccount = accounts.find((a) => a.id === confirmDeleteId)
+
+  const hasFilters = !!(search || dateFrom || dateTo || direction)
+
+  function clearFilters() {
+    setSearch(''); setDateFrom(''); setDateTo(''); setDirection(''); setPage(1)
+  }
+
+  function toggleSort(field: typeof sortBy) {
+    if (sortBy === field) {
+      setSortDir(d => d === 'desc' ? 'asc' : 'desc')
+    } else {
+      setSortBy(field)
+      setSortDir('desc')
+    }
+    setPage(1)
+  }
+
+  function SortIcon({ field }: { field: typeof sortBy }) {
+    if (sortBy !== field) return <ArrowUpDown className="inline w-3 h-3 ml-1 text-gray-300" />
+    return sortDir === 'desc'
+      ? <ArrowDown className="inline w-3 h-3 ml-1 text-primary-500" />
+      : <ArrowUp className="inline w-3 h-3 ml-1 text-primary-500" />
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Bancos & Movimentos</h1>
         <div className="flex gap-2">
-          <button onClick={() => setShowImport(true)} className="btn-secondary flex items-center gap-2"><Upload className="w-4 h-4" />Importar CSV</button>
+          <button onClick={() => setShowImport(true)} className="btn-secondary flex items-center gap-2"><Upload className="w-4 h-4" />Importar movimentos de conta</button>
           <button onClick={() => setShowNewAccount(true)} className="btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />Nova Conta</button>
         </div>
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard title="Saldo Total" value={formatCurrency(totalBalance)} />
-        <KpiCard title="Entradas" value={formatCurrency(summary?.totalIncome ?? 0)} subtitle={`${summary?.countIncome ?? 0} movimentos`} />
-        <KpiCard title="Saídas" value={formatCurrency(summary?.totalExpense ?? 0)} subtitle={`${summary?.countExpense ?? 0} movimentos`} />
-        <KpiCard title="Por classificar" value={String(summary?.byStatus?.UNCLASSIFIED ?? 0)} />
+      <div className="grid grid-cols-3 gap-4">
+        <KpiCard
+          title={selectedAccountData ? 'Saldo da Conta' : 'Saldo total da(s) Conta(s)'}
+          value={formatCurrency(totalBalance)}
+          subtitle={selectedAccountData ? selectedAccountData.name : `${accounts.length} conta${accounts.length !== 1 ? 's' : ''}`}
+        />
+        <KpiCard
+          title="Entradas"
+          value={formatCurrency(summary?.totalIncome ?? 0)}
+          subtitle={`${summary?.countIncome ?? 0} movimentos`}
+        />
+        <KpiCard
+          title="Saídas"
+          value={formatCurrency(summary?.totalExpense ?? 0)}
+          subtitle={`${summary?.countExpense ?? 0} movimentos`}
+        />
       </div>
 
-      {/* Bank cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {accounts.map((acc) => (
+      {/* Bank cards carousel */}
+      <div className="relative">
+        {canScrollLeft && (
           <button
-            key={acc.id}
-            onClick={() => setSelectedAccount(selectedAccount === acc.id ? '' : acc.id)}
-            className={`card p-4 text-left transition-all ${selectedAccount === acc.id ? 'border-primary-400 bg-primary-50' : 'hover:border-gray-300'}`}
+            type="button"
+            onClick={() => carouselRef.current?.scrollBy({ left: -304, behavior: 'smooth' })}
+            className="absolute -left-4 top-1/2 -translate-y-1/2 z-10 w-8 h-8 bg-white border border-gray-200 rounded-full shadow-md flex items-center justify-center hover:bg-gray-50 transition-colors"
           >
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-9 h-9 bg-primary-100 rounded-lg flex items-center justify-center"><Building2 className="w-5 h-5 text-primary-600" /></div>
-              <div className="min-w-0">
-                <div className="font-medium text-gray-900 text-sm truncate">{acc.name}</div>
-                <div className="text-xs text-gray-400">{acc.bankName} •••• {acc.ibanLast4}</div>
-              </div>
-            </div>
-            <div className={`text-xl font-bold ${acc.currentBalance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(acc.currentBalance)}</div>
+            <ChevronLeft className="w-4 h-4 text-gray-600" />
           </button>
-        ))}
+        )}
+        <div className="overflow-hidden">
+          <div
+            ref={carouselRef}
+            onScroll={checkScroll}
+            className="flex gap-4 overflow-x-auto pb-4 -mb-4 snap-x snap-mandatory"
+          >
+            {accounts.map((acc) => (
+              <div
+                key={acc.id}
+                onClick={() => { setSelectedAccount(selectedAccount === acc.id ? '' : acc.id); setPage(1) }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => e.key === 'Enter' && (setSelectedAccount(selectedAccount === acc.id ? '' : acc.id), setPage(1))}
+                className={`snap-start flex-none w-72 card p-4 text-left transition-all cursor-pointer relative group ${selectedAccount === acc.id ? 'border-primary-400 bg-primary-50' : 'hover:border-gray-300'}`}
+              >
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(acc.id) }}
+                  className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                  title="Remover conta"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex items-center gap-3 mb-3">
+                  <BankAvatar bankName={acc.bankName} />
+                  <div className="min-w-0 pr-6">
+                    <div className="font-medium text-gray-900 text-sm truncate">{acc.name}</div>
+                    <div className="text-xs text-gray-400">{acc.bankName} •••• {acc.ibanLast4}</div>
+                  </div>
+                </div>
+                <div className={`text-xl font-bold ${acc.currentBalance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(acc.currentBalance)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {canScrollRight && (
+          <button
+            type="button"
+            onClick={() => carouselRef.current?.scrollBy({ left: 304, behavior: 'smooth' })}
+            className="absolute -right-4 top-1/2 -translate-y-1/2 z-10 w-8 h-8 bg-white border border-gray-200 rounded-full shadow-md flex items-center justify-center hover:bg-gray-50 transition-colors"
+          >
+            <ChevronRight className="w-4 h-4 text-gray-600" />
+          </button>
+        )}
       </div>
 
       {/* Movements table */}
-      <div className="card">
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3">
-          <Filter className="w-4 h-4 text-gray-400" />
-          <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
-            <option value="">Todos os estados</option>
-            <option value="UNCLASSIFIED">Por classificar</option>
-            <option value="CLASSIFIED">Classificados</option>
-            <option value="RECONCILED">Reconciliados</option>
-          </select>
-          <span className="text-sm text-gray-400 ml-auto">{movements?.total ?? 0} movimentos</span>
+      {accounts.length === 0 ? (
+        <div className="card flex flex-col items-center justify-center py-16 text-center">
+          <Building2 className="w-10 h-10 text-gray-300 mb-3" />
+          <p className="text-gray-500 font-medium">Sem contas bancárias</p>
+          <p className="text-sm text-gray-400 mt-1">Adicione uma conta para começar a registar movimentos.</p>
         </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                <th className="text-left px-5 py-3">Data</th>
-                <th className="text-left px-5 py-3">Descrição</th>
-                <th className="text-left px-5 py-3">Categoria</th>
-                <th className="text-right px-5 py-3">Valor</th>
-                <th className="text-left px-5 py-3">Estado</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {movements?.items.map((m) => (
-                <tr key={m.id} className="hover:bg-gray-50">
-                  <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(m.date)}</td>
-                  <td className="px-5 py-3 text-gray-900 max-w-xs truncate">{m.description}</td>
-                  <td className="px-5 py-3">
-                    {m.category ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: m.category.color }} />
-                        <span className="text-gray-700">{m.category.name}</span>
-                      </span>
-                    ) : <span className="text-gray-400">—</span>}
-                  </td>
-                  <td className={`px-5 py-3 text-right font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Number(m.amount))}
-                  </td>
-                  <td className="px-5 py-3"><Badge variant={statusVariant(m.status)}>{statusLabel(m.status)}</Badge></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {movements && movements.total > movements.limit && (
-            <div className="flex justify-center gap-2 px-5 py-4 border-t border-gray-100">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="btn-secondary px-3 py-1 text-xs">‹ Anterior</button>
-              <span className="text-xs text-gray-500 self-center">Pág. {page} de {Math.ceil(movements.total / movements.limit)}</span>
-              <button onClick={() => setPage(p => p + 1)} disabled={page * movements.limit >= movements.total} className="btn-secondary px-3 py-1 text-xs">Seguinte ›</button>
+      ) : (
+        <div className="card">
+          {/* Filter toolbar */}
+          <div className="px-5 py-3 border-b border-gray-100 flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              <input
+                className="input pl-8 text-sm py-1.5 w-52"
+                placeholder="Pesquisar descrição..."
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              />
             </div>
-          )}
+
+            <div className="flex items-center gap-1.5">
+              <input
+                type="date"
+                className="input text-sm py-1.5 w-36"
+                value={dateFrom}
+                onChange={(e) => { setDateFrom(e.target.value); setPage(1) }}
+              />
+              <span className="text-gray-400 text-xs">–</span>
+              <input
+                type="date"
+                className="input text-sm py-1.5 w-36"
+                value={dateTo}
+                onChange={(e) => { setDateTo(e.target.value); setPage(1) }}
+              />
+            </div>
+
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+              {(['', 'income', 'expense'] as const).map((d, i) => (
+                <button
+                  key={d}
+                  onClick={() => { setDirection(d); setPage(1) }}
+                  className={`px-3 py-1.5 transition-colors ${direction === d ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-50'}${i > 0 ? ' border-l border-gray-200' : ''}`}
+                >
+                  {d === '' ? 'Todos' : d === 'income' ? 'Entradas' : 'Saídas'}
+                </button>
+              ))}
+            </div>
+
+            {hasFilters && (
+              <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
+                <X className="w-3.5 h-3.5" /> Limpar
+              </button>
+            )}
+
+            <span className="text-sm text-gray-400 ml-auto">{movements?.total ?? 0} movimentos</span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
+                  <th
+                    onClick={() => toggleSort('date')}
+                    className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none whitespace-nowrap"
+                  >
+                    Data <SortIcon field="date" />
+                  </th>
+                  {!selectedAccount && (
+                    <th className="text-left px-5 py-3 whitespace-nowrap text-xs text-gray-500 uppercase">Conta</th>
+                  )}
+                  <th
+                    onClick={() => toggleSort('description')}
+                    className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none"
+                  >
+                    Descrição <SortIcon field="description" />
+                  </th>
+                  <th
+                    onClick={() => toggleSort('amount')}
+                    className="text-right px-1 py-3 cursor-pointer hover:text-gray-700 select-none whitespace-nowrap"
+                  >
+                    Valor <SortIcon field="amount" />
+                  </th>
+                  <th
+                    onClick={() => toggleSort('balanceAfter')}
+                    className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none whitespace-nowrap"
+                  >
+                    Saldo <SortIcon field="balanceAfter" />
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {movements?.items.map((m) => (
+                  <tr key={m.id} className="hover:bg-gray-50">
+                    <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(m.date)}</td>
+                    {!selectedAccount && (
+                      <td className="px-5 py-3 whitespace-nowrap">
+                        {m.bankAccount && (
+                          <div className="flex items-center gap-2">
+                            <BankAvatar bankName={m.bankAccount.bankName} />
+                            <span className="text-xs text-gray-500 truncate max-w-[8rem]">{m.bankAccount.name}</span>
+                          </div>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-5 py-3 text-gray-900 max-w-xs truncate">{m.description}</td>
+                    <td className={`px-1 py-3 text-right font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                      {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Number(m.amount))}
+                    </td>
+                    <td className="px-5 py-3 text-right text-gray-500 whitespace-nowrap">
+                      {m.balanceAfter != null ? formatCurrency(Number(m.balanceAfter)) : '—'}
+                    </td>
+                  </tr>
+                ))}
+                {movements?.items.length === 0 && (
+                  <tr>
+                    <td colSpan={selectedAccount ? 4 : 5} className="px-5 py-10 text-center text-sm text-gray-400">
+                      {hasFilters ? 'Nenhum movimento corresponde aos filtros.' : 'Sem movimentos.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            {movements && movements.total > movements.limit && (
+              <div className="flex justify-center gap-2 px-5 py-4 border-t border-gray-100">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="btn-secondary px-3 py-1 text-xs">‹ Anterior</button>
+                <span className="text-xs text-gray-500 self-center">Pág. {page} de {Math.ceil(movements.total / movements.limit)}</span>
+                <button onClick={() => setPage(p => p + 1)} disabled={page * movements.limit >= movements.total} className="btn-secondary px-3 py-1 text-xs">Seguinte ›</button>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* New account modal */}
-      <Modal open={showNewAccount} onClose={() => { setShowNewAccount(false); createAccount.reset() }} title="Nova Conta Bancária">
+      {(() => {
+        const ibanChars = newAccount.iban.replace(/\s/g, '').length
+        const ibanInvalid = ibanTouched && ibanChars > 0 && ibanChars !== 25
+        const bankValid = PORTUGUESE_BANKS.includes(newAccount.bankName)
+        const canSubmit = !createAccount.isPending && !!newAccount.name && bankValid && (ibanChars === 0 || ibanChars === 25)
+        const resetModal = () => { setShowNewAccount(false); setBankSearch(''); setShowBankDropdown(false); setIbanTouched(false); setNewAccount({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' }); createAccount.reset() }
+        return (
+          <Modal open={showNewAccount} onClose={resetModal} title="Nova Conta Bancária">
+            <div className="space-y-4">
+              <div>
+                <label className="label">Nome</label>
+                <input className="input" value={newAccount.name} onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })} placeholder="Ex: Conta Principal CGD" />
+              </div>
+
+              <div ref={bankDropdownRef} className="relative">
+                <label className="label">Banco</label>
+                <input
+                  className={`input ${bankSearch && !bankValid ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+                  value={bankSearch}
+                  onChange={(e) => { setBankSearch(e.target.value); setNewAccount({ ...newAccount, bankName: '' }); setShowBankDropdown(true) }}
+                  onFocus={() => setShowBankDropdown(true)}
+                  onBlur={() => { if (!bankValid) { setBankSearch(''); setNewAccount({ ...newAccount, bankName: '' }) } }}
+                  placeholder="Selecionar banco..."
+                  autoComplete="off"
+                />
+                {showBankDropdown && (
+                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                    {filteredBanks.length > 0 ? filteredBanks.map((bank) => (
+                      <button
+                        key={bank}
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 first:rounded-t-lg last:rounded-b-lg"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => { setBankSearch(bank); setNewAccount({ ...newAccount, bankName: bank }); setShowBankDropdown(false) }}
+                      >
+                        {bank}
+                      </button>
+                    )) : (
+                      <p className="px-3 py-2 text-sm text-gray-400">Sem resultados</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="label">IBAN</label>
+                <input
+                  className={`input font-mono tracking-wider ${ibanInvalid ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+                  value={newAccount.iban}
+                  onChange={(e) => setNewAccount({ ...newAccount, iban: formatIban(e.target.value) })}
+                  onBlur={() => setIbanTouched(true)}
+                  placeholder="PT50 0000 0000 0000 0000 0000 0"
+                  maxLength={31}
+                  spellCheck={false}
+                />
+                <p className={`text-xs mt-1 ${ibanInvalid ? 'text-red-500' : 'text-gray-400'}`}>
+                  {ibanChars} / 25 caracteres{ibanInvalid ? ' — IBAN incompleto' : ''}
+                </p>
+              </div>
+
+              {createAccount.isError && (
+                <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
+                  {(createAccount.error as Error).message}
+                </p>
+              )}
+              <div className="flex gap-3 pt-2">
+                <button onClick={resetModal} className="btn-secondary flex-1">Cancelar</button>
+                <button onClick={() => createAccount.mutate(newAccount)} className="btn-primary flex-1" disabled={!canSubmit}>
+                  {createAccount.isPending ? 'A guardar...' : 'Criar conta'}
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )
+      })()}
+
+      {/* Delete confirmation modal */}
+      <Modal open={!!confirmDeleteId} onClose={() => { setConfirmDeleteId(null); deleteAccount.reset() }} title="Remover conta bancária">
         <div className="space-y-4">
-          <div><label className="label">Nome</label><input className="input" value={newAccount.name} onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })} placeholder="Ex: Conta Principal CGD" /></div>
-          <div><label className="label">Banco</label><input className="input" value={newAccount.bankName} onChange={(e) => setNewAccount({ ...newAccount, bankName: e.target.value })} placeholder="Ex: Caixa Geral de Depósitos" /></div>
-          <div><label className="label">IBAN</label><input className="input" value={newAccount.iban} onChange={(e) => setNewAccount({ ...newAccount, iban: e.target.value })} placeholder="PT50 0000 0000 0000 0000 0000 0" /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Saldo inicial (€)</label><input type="number" className="input" value={newAccount.openingBalance} onChange={(e) => setNewAccount({ ...newAccount, openingBalance: e.target.value })} /></div>
-            <div><label className="label">Saldo mínimo (€)</label><input type="number" className="input" value={newAccount.minBalance} onChange={(e) => setNewAccount({ ...newAccount, minBalance: e.target.value })} /></div>
-          </div>
-          {createAccount.isError && (
+          <p className="text-sm text-gray-600">
+            Tem a certeza que pretende remover a conta <span className="font-semibold text-gray-900">{confirmDeleteAccount?.name}</span>?
+            Esta ação irá arquivar a conta e não poderá ser desfeita.
+          </p>
+          {deleteAccount.isError && (
             <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
-              {(createAccount.error as Error).message}
+              {(deleteAccount.error as Error).message}
             </p>
           )}
           <div className="flex gap-3 pt-2">
-            <button onClick={() => { setShowNewAccount(false); createAccount.reset() }} className="btn-secondary flex-1">Cancelar</button>
-            <button onClick={() => createAccount.mutate(newAccount)} className="btn-primary flex-1" disabled={createAccount.isPending || !newAccount.name}>
-              {createAccount.isPending ? 'A guardar...' : 'Criar conta'}
+            <button onClick={() => { setConfirmDeleteId(null); deleteAccount.reset() }} className="btn-secondary flex-1">Cancelar</button>
+            <button
+              type="button"
+              onClick={() => { if (confirmDeleteId) deleteAccount.mutate(confirmDeleteId) }}
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+              disabled={deleteAccount.isPending}
+            >
+              {deleteAccount.isPending ? 'A remover...' : 'Remover conta'}
             </button>
           </div>
         </div>
@@ -231,7 +570,11 @@ export default function BanksPage() {
               <div>
                 <label className="label">Banco</label>
                 <select className="input" value={importBank} onChange={(e) => setImportBank(e.target.value as SupportedBank)}>
-                  {SUPPORTED_BANKS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {BANK_IMPORT_OPTIONS.map((b) => (
+                    <option key={b.code} value={b.code} disabled={!b.supported}>
+                      {b.name}{!b.supported ? ' (não suportado)' : ''}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>

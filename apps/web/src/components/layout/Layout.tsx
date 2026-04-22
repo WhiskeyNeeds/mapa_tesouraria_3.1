@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Building2, RefreshCw, ArrowDownToLine,
   ArrowUpFromLine, TrendingUp, Settings, LogOut, Menu, X, ChevronDown,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
@@ -24,6 +24,18 @@ export default function Layout() {
   const { user, selectedClientId, setSelectedClientId, logout } = useAuth()
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [clientDropdown, setClientDropdown] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!clientDropdown) return
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setClientDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [clientDropdown])
 
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ['clients'],
@@ -82,7 +94,7 @@ export default function Layout() {
           </button>
 
           {/* Company selector */}
-          <div className="relative">
+          <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setClientDropdown(!clientDropdown)}
               className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 bg-gray-100 px-3 py-1.5 rounded-lg"

@@ -5,12 +5,46 @@ import { httpError } from '../../../lib/errors.js'
 export class TreasuryBankAccountsService {
   constructor(private prisma: PrismaClient) {}
 
+  // Resolves the final balance from the movement chain.
+  // When multiple movements share the last date, finds the tail of the chain:
+  // the balanceAfter that is not the starting point of any other movement on that day.
+  private async resolveFinalBalance(bankAccountId: string, openingBalance: number): Promise<number> {
+    const lastDate = await this.prisma.treasuryBankMovement.findFirst({
+      where: { bankAccountId, deletedAt: null, balanceAfter: { not: null } },
+      orderBy: { date: 'desc' },
+      select: { date: true },
+    })
+    if (!lastDate) return openingBalance
+
+    const lastDayMovs = await this.prisma.treasuryBankMovement.findMany({
+      where: { bankAccountId, deletedAt: null, date: lastDate.date!, balanceAfter: { not: null } },
+      select: { amount: true, balanceAfter: true },
+    })
+    if (lastDayMovs.length === 1) return Number(lastDayMovs[0].balanceAfter)
+
+    // Starting balance for each movement = balanceAfter - amount
+    const startingBalances = new Set(
+      lastDayMovs.map((m) => Math.round((Number(m.balanceAfter) - Number(m.amount)) * 100))
+    )
+    // The tail is the movement whose balanceAfter is not a starting point of any other
+    const tail = lastDayMovs.find((m) => !startingBalances.has(Math.round(Number(m.balanceAfter) * 100)))
+    return tail ? Number(tail.balanceAfter) : Number(lastDayMovs[0].balanceAfter)
+  }
+
   async list(clientId: string) {
     const accounts = await this.prisma.treasuryBankAccount.findMany({
       where: { clientId, deletedAt: null, isActive: true },
       orderBy: { name: 'asc' },
     })
-    return accounts.map(({ ibanEnc: _enc, ...acc }) => acc)
+
+    const balances = await Promise.all(
+      accounts.map((a) => this.resolveFinalBalance(a.id, Number(a.openingBalance)))
+    )
+
+    return accounts.map(({ ibanEnc: _enc, ...acc }, i) => ({
+      ...acc,
+      currentBalance: balances[i],
+    }))
   }
 
   async getById(clientId: string, id: string) {
@@ -75,6 +109,14 @@ export class TreasuryBankAccountsService {
     isActive: boolean
   }>) {
     await this.getById(clientId, id)
+
+    if (data.name) {
+      const sameName = await this.prisma.treasuryBankAccount.findFirst({
+        where: { clientId, deletedAt: null, name: { equals: data.name, mode: 'insensitive' }, NOT: { id } },
+      })
+      if (sameName) throw httpError(409, `Já existe uma conta com o nome "${data.name}"`)
+    }
+
     const acc = await this.prisma.treasuryBankAccount.update({ where: { id }, data })
     const { ibanEnc: _enc, ...result } = acc
     return result
@@ -88,17 +130,8 @@ export class TreasuryBankAccountsService {
   async recalcBalance(bankAccountId: string) {
     const account = await this.prisma.treasuryBankAccount.findUnique({ where: { id: bankAccountId } })
     if (!account) return
-
-    const agg = await this.prisma.treasuryBankMovement.aggregate({
-      where: { bankAccountId, deletedAt: null },
-      _sum: { amount: true },
-    })
-
-    const movementsSum = Number(agg._sum.amount ?? 0)
-    await this.prisma.treasuryBankAccount.update({
-      where: { id: bankAccountId },
-      data: { currentBalance: Number(account.openingBalance) + movementsSum },
-    })
+    const currentBalance = await this.resolveFinalBalance(bankAccountId, Number(account.openingBalance))
+    await this.prisma.treasuryBankAccount.update({ where: { id: bankAccountId }, data: { currentBalance } })
   }
 
   decryptIban(ibanEnc: string): string {

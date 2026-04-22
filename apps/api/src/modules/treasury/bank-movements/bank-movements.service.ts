@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import type { PrismaClient, TreasuryMovementSource, TreasuryMovementStatus, Prisma } from '@prisma/client'
+import { Prisma as PrismaRuntime } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { TreasuryBankAccountsService } from '../bank-accounts/bank-accounts.service.js'
 
@@ -21,12 +22,30 @@ export class TreasuryBankMovementsService {
     this.bankSvc = new TreasuryBankAccountsService(prisma)
   }
 
-  private buildDedupeHash(clientId: string, bankAccountId: string, date: string, amount: number, desc: string): string {
-    return createHash('sha256').update(`${clientId}|${bankAccountId}|${date}|${amount}|${desc}`).digest('hex')
+  private buildDedupeHash(clientId: string, bankAccountId: string, date: string, amount: number, desc: string, balanceAfter?: number): string {
+    const balance = balanceAfter != null ? String(balanceAfter) : ''
+    return createHash('sha256').update(`${clientId}|${bankAccountId}|${date}|${amount}|${desc}|${balance}`).digest('hex')
   }
 
   private normalize(text: string): string {
     return text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+  }
+
+  private toDateKey(date: string | Date): string {
+    const d = date instanceof Date ? date : new Date(date)
+    return d.toISOString().substring(0, 10)
+  }
+
+  private toAmountKey(amount: number): string {
+    return Number(amount).toFixed(2)
+  }
+
+  private toBalanceKey(balanceAfter?: number | null): string {
+    return balanceAfter == null ? '' : Number(balanceAfter).toFixed(2)
+  }
+
+  private buildLogicalKey(bankAccountId: string, date: string | Date, amount: number, normalizedDesc: string, balanceAfter?: number | null): string {
+    return `${bankAccountId}|${this.toDateKey(date)}|${this.toAmountKey(amount)}|${normalizedDesc}|${this.toBalanceKey(balanceAfter)}`
   }
 
   async list(clientId: string, filters: {
@@ -34,29 +53,47 @@ export class TreasuryBankMovementsService {
     status?: TreasuryMovementStatus
     dateFrom?: string
     dateTo?: string
+    search?: string
+    direction?: 'income' | 'expense'
+    sortBy?: 'date' | 'amount' | 'description' | 'balanceAfter'
+    sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
   }) {
-    const { page = 1, limit = 50, bankAccountId, status, dateFrom, dateTo } = filters
+    const { page = 1, limit = 50, bankAccountId, status, dateFrom, dateTo, search, direction, sortBy = 'date', sortDir = 'desc' } = filters
     const where: Prisma.TreasuryBankMovementWhereInput = {
       clientId,
       deletedAt: null,
+      bankAccount: { deletedAt: null, isActive: true },
       ...(bankAccountId ? { bankAccountId } : {}),
       ...(status ? { status } : {}),
+      ...(direction === 'income' ? { amount: { gt: 0 } } : direction === 'expense' ? { amount: { lt: 0 } } : {}),
+      ...(search ? { normalizedDesc: { contains: this.normalize(search) } } : {}),
       ...(dateFrom || dateTo ? {
         date: {
           ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-          ...(dateTo ? { lte: new Date(dateTo) } : {}),
+          ...(dateTo ? { lte: new Date(dateTo + 'T23:59:59.999Z') } : {}),
         },
       } : {}),
     }
+
+    const dir = sortDir as 'asc' | 'desc'
+    const orderBy = (
+      sortBy === 'amount'      ? [{ amount: dir },      { date: 'desc' as const }] :
+      sortBy === 'description' ? [{ description: dir }, { date: 'desc' as const }] :
+      sortBy === 'balanceAfter'? [{ balanceAfter: dir }, { date: 'desc' as const }] :
+      [{ date: dir }, { createdAt: 'asc' as const }]
+    ) as Prisma.TreasuryBankMovementOrderByWithRelationInput[]
 
     const [total, items] = await Promise.all([
       this.prisma.treasuryBankMovement.count({ where }),
       this.prisma.treasuryBankMovement.findMany({
         where,
-        include: { category: { select: { id: true, name: true, color: true, type: true } } },
-        orderBy: { date: 'desc' },
+        include: {
+          category: { select: { id: true, name: true, color: true, type: true } },
+          bankAccount: { select: { id: true, name: true, bankName: true } },
+        },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -70,16 +107,71 @@ export class TreasuryBankMovementsService {
     let duplicated = 0
     const failed: string[] = []
 
-    // Apply classification rules
+    // Pre-compute hashes for all incoming movements
+    const incomingWithHash = movements.map((mov) => ({
+      mov,
+      dedupeHash: this.buildDedupeHash(clientId, bankAccountId, mov.date, mov.amount, mov.description, mov.balanceAfter),
+      normalizedDesc: this.normalize(mov.description),
+    }))
+
+    // Bulk pre-check: fetch all existing hashes in one query
+    const allHashes = incomingWithHash.map((m) => m.dedupeHash)
+    const existing = await this.prisma.treasuryBankMovement.findMany({
+      where: { clientId, bankAccountId, dedupeHash: { in: allHashes } },
+      select: { dedupeHash: true },
+    })
+    const existingHashes = new Set(existing.map((e) => e.dedupeHash))
+
+    // Separate new from duplicate movements upfront
+    const hashFiltered = incomingWithHash.filter(({ dedupeHash }) => !existingHashes.has(dedupeHash))
+    duplicated = incomingWithHash.length - hashFiltered.length
+
+    // Second layer: logical duplicate detection (same day/value/normalized description/balance)
+    const candidateDates = [...new Set(hashFiltered.map(({ mov }) => this.toDateKey(mov.date)))]
+    const candidateAmounts = [...new Set(hashFiltered.map(({ mov }) => Number(mov.amount)))]
+    const existingLogicalCandidates = (candidateDates.length && candidateAmounts.length)
+      ? await this.prisma.treasuryBankMovement.findMany({
+          where: {
+            clientId,
+            bankAccountId,
+            deletedAt: null,
+            date: { in: candidateDates.map((d) => new Date(d)) },
+            amount: { in: candidateAmounts },
+          },
+          select: { date: true, amount: true, normalizedDesc: true, balanceAfter: true },
+        })
+      : []
+
+    const existingLogicalKeys = new Set(
+      existingLogicalCandidates.map((m) =>
+        this.buildLogicalKey(
+          bankAccountId,
+          m.date,
+          Number(m.amount),
+          m.normalizedDesc ?? '',
+          m.balanceAfter == null ? null : Number(m.balanceAfter)
+        )
+      )
+    )
+
+    const seenIncomingLogical = new Set<string>()
+    const toInsert = hashFiltered.filter(({ mov, normalizedDesc }) => {
+      const logicalKey = this.buildLogicalKey(bankAccountId, mov.date, mov.amount, normalizedDesc, mov.balanceAfter)
+      if (existingLogicalKeys.has(logicalKey) || seenIncomingLogical.has(logicalKey)) {
+        duplicated++
+        return false
+      }
+      seenIncomingLogical.add(logicalKey)
+      return true
+    })
+
+    // Load classification rules once
     const rules = await this.prisma.treasuryClassificationRule.findMany({
       where: { clientId, isActive: true },
       orderBy: { priority: 'asc' },
     })
 
-    for (const mov of movements) {
-      const dedupeHash = this.buildDedupeHash(clientId, bankAccountId, mov.date, mov.amount, mov.description)
-      const normalizedDesc = this.normalize(mov.description)
-
+    for (const { mov, dedupeHash, normalizedDesc } of toInsert) {
       // Find matching rule
       let categoryId: string | undefined
       for (const rule of rules) {
@@ -130,7 +222,8 @@ export class TreasuryBankMovementsService {
         })
         imported++
       } catch (err: unknown) {
-        if (err instanceof Error && err.message.includes('Unique constraint')) {
+        // Safety net for race conditions: another import inserted same hash concurrently
+        if (err instanceof PrismaRuntime.PrismaClientKnownRequestError && err.code === 'P2002') {
           duplicated++
         } else {
           failed.push(mov.description)
@@ -140,6 +233,45 @@ export class TreasuryBankMovementsService {
 
     await this.bankSvc.recalcBalance(bankAccountId)
     return { imported, duplicated, failed: failed.length }
+  }
+
+  async deduplicateMovements(clientId: string, bankAccountId?: string): Promise<{ removed: number }> {
+    const where = { clientId, deletedAt: null, bankAccount: { deletedAt: null, isActive: true }, ...(bankAccountId ? { bankAccountId } : {}) }
+    const all = await this.prisma.treasuryBankMovement.findMany({
+      where,
+      select: { id: true, bankAccountId: true, date: true, amount: true, normalizedDesc: true, balanceAfter: true, createdAt: true, status: true },
+      orderBy: { createdAt: 'asc' },
+    })
+
+    // Group by (bankAccountId, date, amount, normalizedDesc, balanceAfter) — keep oldest, soft-delete newer duplicates
+    const seen = new Map<string, boolean>()
+    const toRemove: string[] = []
+
+    for (const mov of all) {
+      const balance = mov.balanceAfter != null ? String(mov.balanceAfter) : ''
+      const key = `${mov.bankAccountId}|${mov.date.toISOString()}|${mov.amount}|${mov.normalizedDesc ?? ''}|${balance}`
+      if (seen.has(key)) {
+        if (mov.status !== 'RECONCILED') toRemove.push(mov.id)
+      } else {
+        seen.set(key, true)
+      }
+    }
+
+    if (toRemove.length > 0) {
+      await this.prisma.treasuryBankMovement.updateMany({
+        where: { id: { in: toRemove } },
+        data: { deletedAt: new Date() },
+      })
+      // Recalc balance for affected accounts
+      const affectedAccounts = [...new Set(
+        all.filter((m) => toRemove.includes(m.id)).map((m) => m.bankAccountId)
+      )]
+      for (const accId of affectedAccounts) {
+        await this.bankSvc.recalcBalance(accId)
+      }
+    }
+
+    return { removed: toRemove.length }
   }
 
   async classify(clientId: string, id: string, categoryId: string) {
@@ -155,10 +287,11 @@ export class TreasuryBankMovementsService {
     if (!mov) throw httpError(404, 'Movement not found')
     if (mov.status === 'RECONCILED') throw httpError(409, 'Cannot delete a reconciled movement')
     await this.prisma.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } })
+    await this.bankSvc.recalcBalance(mov.bankAccountId)
   }
 
   async getSummary(clientId: string, bankAccountId?: string) {
-    const where: Prisma.TreasuryBankMovementWhereInput = { clientId, deletedAt: null, ...(bankAccountId ? { bankAccountId } : {}) }
+    const where: Prisma.TreasuryBankMovementWhereInput = { clientId, deletedAt: null, bankAccount: { deletedAt: null, isActive: true }, ...(bankAccountId ? { bankAccountId } : {}) }
     const [incomeAgg, expenseAgg, byStatus] = await Promise.all([
       this.prisma.treasuryBankMovement.aggregate({ where: { ...where, amount: { gt: 0 } }, _sum: { amount: true }, _count: true }),
       this.prisma.treasuryBankMovement.aggregate({ where: { ...where, amount: { lt: 0 } }, _sum: { amount: true }, _count: true }),

@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import type { FastifyInstance } from 'fastify'
 import { TreasuryBankMovementsService } from './bank-movements.service.js'
 import { parseStatementFile } from './parsers/index.js'
@@ -17,6 +18,10 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       status?: TreasuryMovementStatus
       dateFrom?: string
       dateTo?: string
+      search?: string
+      direction?: 'income' | 'expense'
+      sortBy?: 'date' | 'amount' | 'description' | 'balanceAfter'
+      sortDir?: 'asc' | 'desc'
       page?: string
       limit?: string
     }
@@ -52,9 +57,11 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     let bankAccountId = ''
     let bank = ''
     let fileBuffer: Buffer | null = null
+    let originalFileName: string | null = null
 
     for await (const part of request.parts()) {
       if (part.type === 'file') {
+        originalFileName = part.filename ?? null
         const chunks: Buffer[] = []
         for await (const chunk of part.file) chunks.push(chunk)
         fileBuffer = Buffer.concat(chunks)
@@ -68,18 +75,89 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     if (!bankAccountId) throw httpError(400, 'bankAccountId is required')
     if (!bank) throw httpError(400, 'bank is required (CGD | BCP | BPI | Bankinter | Santander | NovoBanco)')
 
-    let movements
+    // File-level duplicate check (account-scoped)
+    const fileSha256 = createHash('sha256').update(fileBuffer).digest('hex')
+    const existingImport = await fastify.prisma.treasuryBankImport.findFirst({
+      where: {
+        clientId,
+        bankAccountId,
+        fileSha256,
+        status: { in: ['PENDING', 'PROCESSING', 'DONE'] },
+      },
+      select: { id: true, createdAt: true, originalFileName: true, bankAccount: { select: { name: true } } },
+    })
+    if (existingImport) {
+      const when = existingImport.createdAt.toLocaleDateString('pt-PT')
+      const fileName = existingImport.originalFileName ? ` ("${existingImport.originalFileName}")` : ''
+      const accountName = existingImport.bankAccount?.name ? ` na conta "${existingImport.bankAccount.name}"` : ''
+      return reply.status(409).send({ error: `Este ficheiro${fileName} já foi importado${accountName} em ${when}.` })
+    }
+
+    // Cross-account duplicate check: same file already imported in another account
+    const importedInAnotherAccount = await fastify.prisma.treasuryBankImport.findFirst({
+      where: {
+        clientId,
+        fileSha256,
+        NOT: { bankAccountId },
+        status: { in: ['PENDING', 'PROCESSING', 'DONE'] },
+      },
+      select: { createdAt: true, originalFileName: true, bankAccount: { select: { name: true } } },
+    })
+    if (importedInAnotherAccount) {
+      const when = importedInAnotherAccount.createdAt.toLocaleDateString('pt-PT')
+      const fileName = importedInAnotherAccount.originalFileName ? ` ("${importedInAnotherAccount.originalFileName}")` : ''
+      const accountName = importedInAnotherAccount.bankAccount?.name ?? 'outra conta'
+      return reply.status(409).send({ error: `Este ficheiro${fileName} já foi importado na conta "${accountName}" em ${when}.` })
+    }
+
+    let movements: ReturnType<typeof parseStatementFile>
     try {
       movements = parseStatementFile(fileBuffer, bank as SupportedBank)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Parse error'
-      throw httpError(422, `Failed to parse ${bank} statement: ${msg}`)
+      const msg = err instanceof Error ? err.message : 'Erro ao processar ficheiro'
+      return reply.status(422).send({ error: msg })
     }
 
-    if (movements.length === 0) throw httpError(422, 'No movements found in file')
+    if (movements.length === 0) return reply.status(422).send({ error: 'No movements found in file' })
 
-    const result = await svc.importMovements(clientId, bankAccountId, movements, 'CSV_IMPORT', request.user.sub)
+    // Create import record
+    const importRecord = await fastify.prisma.treasuryBankImport.create({
+      data: {
+        clientId,
+        bankAccountId,
+        source: 'CSV_IMPORT',
+        originalFileName,
+        fileSha256,
+        fileSize: fileBuffer.length,
+        status: 'PENDING',
+        rowsTotal: movements.length,
+        createdById: request.user.sub,
+        startedAt: new Date(),
+      },
+    })
+
+    const result = await svc.importMovements(clientId, bankAccountId, movements, 'CSV_IMPORT', request.user.sub, importRecord.id)
+
+    // Update import record with result
+    await fastify.prisma.treasuryBankImport.update({
+      where: { id: importRecord.id },
+      data: {
+        status: 'DONE',
+        rowsImported: result.imported,
+        rowsDuplicated: result.duplicated,
+        rowsFailed: result.failed,
+        completedAt: new Date(),
+      },
+    })
+
     return reply.status(201).send({ ...result, parsed: movements.length, bank })
+  })
+
+  fastify.post(`${prefix}/deduplicate`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { bankAccountId } = request.body as { bankAccountId?: string }
+    const result = await svc.deduplicateMovements(clientId, bankAccountId)
+    return reply.send(result)
   })
 
   fastify.patch(`${prefix}/:id/classify`, { onRequest: auth }, async (request, reply) => {

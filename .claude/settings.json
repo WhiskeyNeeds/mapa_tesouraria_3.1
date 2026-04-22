@@ -15,7 +15,16 @@
       "Bash(npm run *)",
       "Read(//tmp/**)",
       "Bash(netstat -ano)",
-      "Bash(taskkill /PID 2704 /F)"
+      "Bash(taskkill /PID 2704 /F)",
+      "Bash(curl -s -X DELETE http://localhost:3000/api/v1/treasury/test/bank-accounts/test)",
+      "Bash(curl -s http://localhost:3000/health)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(npx vite *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f'Total: {d[\\\\\"total\\\\\"]}'\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(xargs grep *)",
+      "Bash(node --import tsx/esm -e ' *)",
+      "WebFetch(domain:api-docs.toconline.pt)"
     ]
   }
 }
