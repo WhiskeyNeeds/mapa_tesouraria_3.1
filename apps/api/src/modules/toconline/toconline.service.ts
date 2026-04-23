@@ -17,22 +17,25 @@ export class ToconlineService {
 
   async getPublicConfig(clientId: string) {
     const cfg = await this.getConfig(clientId)
-    if (!cfg) return null
+    if (!cfg) return { callbackUri: this.getRedirectUri() }
     const { tocClientSecret: _s, accessToken: _a, refreshToken: _r, ...pub } = cfg
-    return pub
+    return { ...pub, callbackUri: this.getRedirectUri() }
   }
 
   async saveCredentials(clientId: string, data: {
     oauthUrl: string
     baseUrl: string
     tocClientId: string
-    tocClientSecret: string
+    tocClientSecret?: string
   }) {
-    const secretEnc = encrypt(data.tocClientSecret)
+    const existing = await this.getConfig(clientId)
+    if (!existing && !data.tocClientSecret) throw httpError(400, 'tocClientSecret is required on first setup')
+    const secretEnc = data.tocClientSecret ? encrypt(data.tocClientSecret) : (existing?.tocClientSecret ?? '')
+    const { tocClientSecret: _, ...rest } = data
     return this.prisma.toconlineConfig.upsert({
       where: { clientId },
-      update: { ...data, tocClientSecret: secretEnc, status: 'UNCONFIGURED', accessToken: null, refreshToken: null },
-      create: { clientId, ...data, tocClientSecret: secretEnc },
+      update: { ...rest, tocClientSecret: secretEnc, status: 'UNCONFIGURED', accessToken: null, refreshToken: null },
+      create: { clientId, ...rest, tocClientSecret: secretEnc },
     })
   }
 
@@ -81,6 +84,24 @@ export class ToconlineService {
         accessToken: encrypt(data.access_token),
         refreshToken: data.refresh_token ? encrypt(data.refresh_token) : null,
         tokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : null,
+        status: 'ACTIVE',
+        lastError: null,
+      },
+    })
+  }
+
+  async setTokensManually(clientId: string, data: {
+    accessToken: string
+    refreshToken?: string
+    expiresIn?: number
+  }) {
+    await this.requireConfig(clientId)
+    return this.prisma.toconlineConfig.update({
+      where: { clientId },
+      data: {
+        accessToken: encrypt(data.accessToken),
+        refreshToken: data.refreshToken ? encrypt(data.refreshToken) : null,
+        tokenExpiresAt: data.expiresIn ? new Date(Date.now() + data.expiresIn * 1000) : null,
         status: 'ACTIVE',
         lastError: null,
       },

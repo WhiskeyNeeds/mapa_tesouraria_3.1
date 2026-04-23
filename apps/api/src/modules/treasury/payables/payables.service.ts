@@ -60,6 +60,7 @@ export class TreasuryPayablesService {
     entityName: string
     entityNif?: string
     tocSupplierId?: string
+    tocPurchasesDocId?: string
     reference: string
     description?: string
     documentDate: string
@@ -70,6 +71,14 @@ export class TreasuryPayablesService {
   }) {
     const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
     if (!category) throw httpError(404, 'Category not found')
+
+    // Dedup by TOConline document ID
+    if (data.tocPurchasesDocId) {
+      const existing = await this.prisma.treasuryPayable.findFirst({
+        where: { clientId, tocPurchasesDocId: data.tocPurchasesDocId, deletedAt: null },
+      })
+      if (existing) throw httpError(409, `Documento ${data.reference} já importado`)
+    }
 
     return this.prisma.treasuryPayable.create({
       data: {
@@ -85,6 +94,7 @@ export class TreasuryPayablesService {
         entityName: data.entityName,
         entityNif: data.entityNif,
         tocSupplierId: data.tocSupplierId,
+        tocPurchasesDocId: data.tocPurchasesDocId,
         reference: data.reference,
         description: data.description,
         recurrenceId: data.recurrenceId,

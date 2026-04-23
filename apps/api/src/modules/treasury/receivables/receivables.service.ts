@@ -64,6 +64,7 @@ export class TreasuryReceivablesService {
     entityName: string
     entityNif?: string
     tocCustomerId?: string
+    tocSalesDocId?: string
     reference: string
     description?: string
     documentDate: string
@@ -74,6 +75,13 @@ export class TreasuryReceivablesService {
   }) {
     const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
     if (!category) throw httpError(404, 'Category not found')
+
+    if (data.tocSalesDocId) {
+      const existing = await this.prisma.treasuryReceivable.findFirst({
+        where: { clientId, tocSalesDocId: data.tocSalesDocId, deletedAt: null },
+      })
+      if (existing) throw httpError(409, `Documento ${data.reference} já importado`)
+    }
 
     return this.prisma.treasuryReceivable.create({
       data: {
@@ -89,6 +97,7 @@ export class TreasuryReceivablesService {
         entityName: data.entityName,
         entityNif: data.entityNif,
         tocCustomerId: data.tocCustomerId,
+        tocSalesDocId: data.tocSalesDocId,
         reference: data.reference,
         description: data.description,
         recurrenceId: data.recurrenceId,

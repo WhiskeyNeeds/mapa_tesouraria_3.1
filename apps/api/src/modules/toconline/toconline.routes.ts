@@ -21,6 +21,13 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.status(204).send()
   })
 
+  fastify.put('/toconline/config/:clientId/tokens', { onRequest: [fastify.requireAdmin] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const body = request.body as { accessToken: string; refreshToken?: string; expiresIn?: number }
+    await svc.setTokensManually(clientId, body)
+    return reply.status(204).send()
+  })
+
   fastify.post('/toconline/config/:clientId/auth', { onRequest: [fastify.requireAdmin] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const url = await svc.getAuthUrl(clientId, fastify.redis)
@@ -35,12 +42,14 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
 
   fastify.get('/toconline/:clientId/purchases', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.send(await svc.getPurchaseDocuments(clientId))
+    const filters = request.query as Record<string, string>
+    return reply.send(await svc.getPurchaseDocuments(clientId, filters))
   })
 
   fastify.get('/toconline/:clientId/sales', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.send(await svc.getSalesDocuments(clientId))
+    const filters = request.query as Record<string, string>
+    return reply.send(await svc.getSalesDocuments(clientId, filters))
   })
 
   fastify.get('/toconline/:clientId/customers', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {

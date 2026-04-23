@@ -8,8 +8,8 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatCurrency(value: number, currency = 'EUR'): string {
-  const parts = new Intl.NumberFormat('pt-PT', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).formatToParts(Number(value))
-  return parts.map((p) => (p.type === 'group' ? '\u00A0' : p.value)).join('')
+  const parts = new Intl.NumberFormat('pt-PT', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: 'always' }).formatToParts(Number(value))
+  return parts.map((p) => (p.type === 'group' ? '\u202F' : p.value)).join('')
 }
 
 export function formatDate(date: string | Date, fmt = 'dd/MM/yyyy'): string {
