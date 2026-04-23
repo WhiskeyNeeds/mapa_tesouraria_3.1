@@ -7,7 +7,7 @@ import type { RedisClient } from '../../plugins/redis.js'
 const TOC_STATE_PREFIX = 'toconline:state:'
 
 export class ToconlineService {
-  constructor(private prisma: PrismaClient) {}
+  constructor(private prisma: PrismaClient) { }
 
   // ── Config ────────────────────────────────────────────────────────────────
 
@@ -30,8 +30,11 @@ export class ToconlineService {
   }) {
     const existing = await this.getConfig(clientId)
     if (!existing && !data.tocClientSecret) throw httpError(400, 'tocClientSecret is required on first setup')
-    const secretEnc = data.tocClientSecret ? encrypt(data.tocClientSecret) : (existing?.tocClientSecret ?? '')
+    const secretEnc = data.tocClientSecret ? encrypt(data.tocClientSecret.trim()) : (existing?.tocClientSecret ?? '')
     const { tocClientSecret: _, ...rest } = data
+    // Strip trailing slashes so paths never double up
+    rest.oauthUrl = rest.oauthUrl.trim().replace(/\/+$/, '')
+    rest.baseUrl = rest.baseUrl.trim().replace(/\/+$/, '')
     return this.prisma.toconlineConfig.upsert({
       where: { clientId },
       update: { ...rest, tocClientSecret: secretEnc, status: 'UNCONFIGURED', accessToken: null, refreshToken: null },
@@ -45,6 +48,7 @@ export class ToconlineService {
     const redirectUri = this.getRedirectUri()
     await redis.setex(`${TOC_STATE_PREFIX}${state}`, 600, clientId)
     await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'PENDING_AUTH' } })
+    const oauthBase = this.getOauthBase(cfg.oauthUrl)
 
     const params = new URLSearchParams({
       response_type: 'code',
@@ -52,7 +56,7 @@ export class ToconlineService {
       redirect_uri: redirectUri,
       state,
     })
-    return `${cfg.oauthUrl}/oauth/authorize?${params}`
+    return `${oauthBase}/oauth/authorize?${params}`
   }
 
   async handleCallback(code: string, state: string, redis: RedisClient): Promise<void> {
@@ -63,8 +67,9 @@ export class ToconlineService {
     const cfg = await this.requireConfig(clientId)
     const redirectUri = this.getRedirectUri()
     const secret = decrypt(cfg.tocClientSecret)
+    const oauthBase = this.getOauthBase(cfg.oauthUrl)
 
-    const res = await fetch(`${cfg.oauthUrl}/oauth/token`, {
+    const res = await fetch(`${oauthBase}/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -96,11 +101,14 @@ export class ToconlineService {
     expiresIn?: number
   }) {
     await this.requireConfig(clientId)
+    const accessToken = data.accessToken.trim()
+    const refreshToken = data.refreshToken?.trim() || null
+    if (!accessToken) throw httpError(400, 'accessToken não pode ser vazio')
     return this.prisma.toconlineConfig.update({
       where: { clientId },
       data: {
-        accessToken: encrypt(data.accessToken),
-        refreshToken: data.refreshToken ? encrypt(data.refreshToken) : null,
+        accessToken: encrypt(accessToken),
+        refreshToken: refreshToken ? encrypt(refreshToken) : null,
         tokenExpiresAt: data.expiresIn ? new Date(Date.now() + data.expiresIn * 1000) : null,
         status: 'ACTIVE',
         lastError: null,
@@ -126,6 +134,9 @@ export class ToconlineService {
     let res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
 
     if (res.status === 401) {
+      let body401 = ''
+      try { body401 = JSON.stringify(await res.clone().json()) } catch { body401 = await res.text().catch(() => '') }
+      console.error(`[TOConline] 401 on GET ${path} for ${clientId}: ${body401}`)
       await this.tryRefreshToken(clientId, cfg)
       const cfg2 = await this.requireActiveConfig(clientId)
       const token2 = decrypt(cfg2.accessToken!)
@@ -163,14 +174,17 @@ export class ToconlineService {
 
   private async tryRefreshToken(clientId: string, cfg: Awaited<ReturnType<typeof this.requireConfig>>) {
     if (!cfg.refreshToken) {
-      await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: 'No refresh token' } })
-      throw httpError(401, 'TOConline session expired. Please re-authenticate.')
+      const msg = 'Sem refresh token — o access token expirou e não é possível renovar automaticamente. Insira um novo token manualmente.'
+      console.error(`[TOConline] no refresh_token for ${clientId}`)
+      await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: msg } })
+      throw httpError(401, msg)
     }
 
     const secret = decrypt(cfg.tocClientSecret)
     const rt = decrypt(cfg.refreshToken)
+    const oauthBase = this.getOauthBase(cfg.oauthUrl)
 
-    const res = await fetch(`${cfg.oauthUrl}/oauth/token`, {
+    const res = await fetch(`${oauthBase}/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -182,8 +196,17 @@ export class ToconlineService {
     })
 
     if (!res.ok) {
-      await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: 'Refresh failed' } })
-      throw httpError(401, 'TOConline session expired. Please re-authenticate.')
+      let detail = `HTTP ${res.status} ${res.statusText}`
+      try {
+        const body = await res.json() as Record<string, unknown>
+        detail = body.error_description as string
+          ?? body.message as string
+          ?? body.error as string
+          ?? JSON.stringify(body)
+      } catch { /* body não é JSON */ }
+      console.error(`[TOConline] refresh_token failed for ${clientId}: ${detail}`)
+      await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: `Refresh falhou: ${detail}` } })
+      throw httpError(401, `TOConline refresh falhou: ${detail}`)
     }
 
     const data = await res.json() as { access_token: string; refresh_token?: string; expires_in?: number }
@@ -270,6 +293,12 @@ export class ToconlineService {
   }
 
   private getRedirectUri(): string {
-    return `${process.env.API_URL ?? 'http://localhost:3001'}/api/v1/toconline/callback`
+    return `${process.env.FRONTEND_URL ?? 'http://localhost:5173'}/toconline/callback`
+  }
+
+  private getOauthBase(oauthUrl: string): string {
+    // Accept both formats from UI: https://host or https://host/oauth
+    const normalized = oauthUrl.trim().replace(/\/+$/, '')
+    return normalized.replace(/\/oauth$/i, '')
   }
 }

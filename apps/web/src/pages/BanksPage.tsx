@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, PenLine } from 'lucide-react'
 
 const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
@@ -62,7 +62,7 @@ function formatIban(raw: string): string {
 }
 
 interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; ibanLast4: string; currency: string }
-interface Movement { id: string; date: string; amount: number; description: string; status: string; balanceAfter?: number | null; category?: { name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
+interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
 interface MovementsResponse { total: number; page: number; limit: number; items: Movement[] }
 interface Summary { totalIncome: number; totalExpense: number; countIncome: number; countExpense: number; byStatus: Record<string, number> }
 
@@ -74,6 +74,7 @@ export default function BanksPage() {
   const [showNewAccount, setShowNewAccount] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [confirmDeleteMovementId, setConfirmDeleteMovementId] = useState<string | null>(null)
   const [newAccount, setNewAccount] = useState({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' })
   const [bankSearch, setBankSearch] = useState('')
   const [showBankDropdown, setShowBankDropdown] = useState(false)
@@ -87,6 +88,8 @@ export default function BanksPage() {
   const [importBank, setImportBank] = useState<SupportedBank>('CGD')
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
+  const [showNewMovement, setShowNewMovement] = useState(false)
+  const [newMovement, setNewMovement] = useState({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' as 'income' | 'expense' })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bankDropdownRef = useRef<HTMLDivElement>(null)
   const carouselRef = useRef<HTMLDivElement>(null)
@@ -165,6 +168,28 @@ export default function BanksPage() {
     },
   })
 
+  const deleteMovement = useMutation({
+    mutationFn: (id: string) => api.delete(`/treasury/${selectedClientId}/movements/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      setConfirmDeleteMovementId(null)
+    },
+  })
+
+  const createMovement = useMutation({
+    mutationFn: (data: { bankAccountId: string; date: string; amount: number; description: string }) =>
+      api.post(`/treasury/${selectedClientId}/movements`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      setShowNewMovement(false)
+      setNewMovement({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' })
+    },
+  })
+
   const uploadStatementMutation = useMutation({
     mutationFn: async ({ file, bank, bankAccountId }: { file: File; bank: string; bankAccountId: string }) => {
       const token = localStorage.getItem('access_token')
@@ -223,6 +248,7 @@ export default function BanksPage() {
         <h1 className="text-2xl font-bold text-gray-900">Bancos & Movimentos</h1>
         <div className="flex gap-2">
           <button onClick={() => setShowImport(true)} className="btn-secondary flex items-center gap-2"><Upload className="w-4 h-4" />Importar movimentos de conta</button>
+          <button onClick={() => { setNewMovement(m => ({ ...m, bankAccountId: selectedAccount || accounts[0]?.id || '', date: new Date().toISOString().slice(0, 10) })); setShowNewMovement(true) }} className="btn-secondary flex items-center gap-2"><PenLine className="w-4 h-4" />Novo Movimento</button>
           <button onClick={() => setShowNewAccount(true)} className="btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />Nova Conta</button>
         </div>
       </div>
@@ -392,11 +418,12 @@ export default function BanksPage() {
                   >
                     Saldo <SortIcon field="balanceAfter" />
                   </th>
+                  <th className="w-8 px-2 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {movements?.items.map((m) => (
-                  <tr key={m.id} className="hover:bg-gray-50">
+                  <tr key={m.id} className="hover:bg-gray-50 group">
                     <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(m.date)}</td>
                     {!selectedAccount && (
                       <td className="px-5 py-3 whitespace-nowrap">
@@ -408,18 +435,33 @@ export default function BanksPage() {
                         )}
                       </td>
                     )}
-                    <td className="px-5 py-3 text-gray-900 max-w-xs truncate">{m.description}</td>
+                    <td className="px-5 py-3 text-gray-900 max-w-xs">
+                      <span className="truncate block">{m.description}</span>
+                      {m.source === 'MANUAL' && <span className="text-xs text-gray-400">manual</span>}
+                    </td>
                     <td className={`px-1 py-3 text-right font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Number(m.amount))}
                     </td>
                     <td className="px-5 py-3 text-right text-gray-500 whitespace-nowrap">
                       {m.balanceAfter != null ? formatCurrency(Number(m.balanceAfter)) : '—'}
                     </td>
+                    <td className="px-2 py-3 w-8">
+                      {m.source === 'MANUAL' && (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteMovementId(m.id)}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                          title="Remover movimento"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {movements?.items.length === 0 && (
                   <tr>
-                    <td colSpan={selectedAccount ? 4 : 5} className="px-5 py-10 text-center text-sm text-gray-400">
+                    <td colSpan={selectedAccount ? 5 : 6} className="px-5 py-10 text-center text-sm text-gray-400">
                       {hasFilters ? 'Nenhum movimento corresponde aos filtros.' : 'Sem movimentos.'}
                     </td>
                   </tr>
@@ -436,6 +478,27 @@ export default function BanksPage() {
           </div>
         </div>
       )}
+
+      {/* Delete movement confirmation modal */}
+      <Modal open={!!confirmDeleteMovementId} onClose={() => { setConfirmDeleteMovementId(null); deleteMovement.reset() }} title="Remover movimento">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">Tem a certeza que pretende remover este movimento manual? Esta ação não pode ser desfeita.</p>
+          {deleteMovement.isError && (
+            <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{(deleteMovement.error as Error).message}</p>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button onClick={() => { setConfirmDeleteMovementId(null); deleteMovement.reset() }} className="btn-secondary flex-1">Cancelar</button>
+            <button
+              type="button"
+              onClick={() => { if (confirmDeleteMovementId) deleteMovement.mutate(confirmDeleteMovementId) }}
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+              disabled={deleteMovement.isPending}
+            >
+              {deleteMovement.isPending ? 'A remover...' : 'Remover'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* New account modal */}
       {(() => {
@@ -535,6 +598,90 @@ export default function BanksPage() {
               disabled={deleteAccount.isPending}
             >
               {deleteAccount.isPending ? 'A remover...' : 'Remover conta'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* New movement modal */}
+      <Modal open={showNewMovement} onClose={() => { setShowNewMovement(false); createMovement.reset() }} title="Novo Movimento Manual">
+        <div className="space-y-4">
+          <div>
+            <label className="label">Conta bancária</label>
+            <select className="input" value={newMovement.bankAccountId} onChange={(e) => setNewMovement({ ...newMovement, bankAccountId: e.target.value })}>
+              <option value="">Selecionar conta...</option>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} — {a.bankName}</option>)}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Data</label>
+              <input type="date" className="input" value={newMovement.date} onChange={(e) => setNewMovement({ ...newMovement, date: e.target.value })} />
+            </div>
+            <div>
+              <label className="label">Tipo</label>
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium h-[38px]">
+                {(['income', 'expense'] as const).map((d, i) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setNewMovement({ ...newMovement, direction: d })}
+                    className={`flex-1 transition-colors ${newMovement.direction === d ? (d === 'income' ? 'bg-green-600 text-white' : 'bg-red-600 text-white') : 'text-gray-600 hover:bg-gray-50'}${i > 0 ? ' border-l border-gray-200' : ''}`}
+                  >
+                    {d === 'income' ? '＋ Entrada' : '－ Saída'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Valor (€)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className="input"
+              placeholder="0,00"
+              value={newMovement.amount}
+              onChange={(e) => setNewMovement({ ...newMovement, amount: e.target.value })}
+            />
+          </div>
+
+          <div>
+            <label className="label">Descrição</label>
+            <input
+              className="input"
+              placeholder="Ex: Transferência recebida"
+              value={newMovement.description}
+              onChange={(e) => setNewMovement({ ...newMovement, description: e.target.value })}
+            />
+          </div>
+
+          {createMovement.isError && (
+            <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
+              {(createMovement.error as Error).message}
+            </p>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button onClick={() => { setShowNewMovement(false); createMovement.reset() }} className="btn-secondary flex-1">Cancelar</button>
+            <button
+              onClick={() => {
+                const amt = parseFloat(newMovement.amount)
+                if (!amt || amt <= 0) return
+                createMovement.mutate({
+                  bankAccountId: newMovement.bankAccountId,
+                  date: newMovement.date,
+                  amount: newMovement.direction === 'income' ? amt : -amt,
+                  description: newMovement.description,
+                })
+              }}
+              className="btn-primary flex-1"
+              disabled={createMovement.isPending || !newMovement.bankAccountId || !newMovement.date || !newMovement.description || !newMovement.amount}
+            >
+              {createMovement.isPending ? 'A guardar...' : 'Criar movimento'}
             </button>
           </div>
         </div>

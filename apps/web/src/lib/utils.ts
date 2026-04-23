@@ -21,6 +21,32 @@ export function formatDatetime(date: string | Date): string {
   return formatDate(date, 'dd/MM/yyyy HH:mm')
 }
 
+export function tocStatusLabel(status: unknown): string {
+  const map: Record<string | number, string> = {
+    0: 'Rascunho', 1: 'Emitido', 2: 'Parcialmente pago', 3: 'Liquidado', 4: 'Anulado', 5: 'Comunicado',
+    draft: 'Rascunho', issued: 'Emitido', partial: 'Parcialmente pago',
+    settled: 'Liquidado', paid: 'Pago', cancelled: 'Anulado', voided: 'Anulado',
+  }
+  if (status == null) return '—'
+  const key = typeof status === 'string' ? status.toLowerCase() : Number(status)
+  return map[key] ?? String(status)
+}
+
+export function tocStatusVariant(status: unknown): 'green' | 'yellow' | 'red' | 'gray' | 'blue' {
+  const n = Number(status)
+  if (n === 3 || n === 2) return 'green'
+  if (n === 1 || n === 5) return 'blue'
+  if (n === 4) return 'red'
+  if (typeof status === 'string') {
+    const s = status.toLowerCase()
+    if (['settled', 'paid', 'partial'].includes(s)) return 'green'
+    if (['issued'].includes(s)) return 'blue'
+    if (['cancelled', 'voided'].includes(s)) return 'red'
+    if (['draft'].includes(s)) return 'gray'
+  }
+  return 'gray'
+}
+
 export function statusLabel(status: string): string {
   const map: Record<string, string> = {
     OPEN: 'Aberto', PARTIAL: 'Parcial', SETTLED: 'Liquidado', VOID: 'Anulado',

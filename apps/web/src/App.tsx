@@ -12,6 +12,7 @@ import ReceivablesPage from '@/pages/ReceivablesPage'
 import PayablesPage from '@/pages/PayablesPage'
 import ForecastPage from '@/pages/ForecastPage'
 import SettingsPage from '@/pages/SettingsPage'
+import ToconlineCallbackPage from '@/pages/ToconlineCallbackPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -48,6 +49,7 @@ export default function App() {
             <Route path="definicoes" element={<SettingsPage />} />
           </Route>
 
+          <Route path="/toconline/callback" element={<ToconlineCallbackPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </BrowserRouter>

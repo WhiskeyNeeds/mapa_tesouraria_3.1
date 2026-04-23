@@ -38,6 +38,23 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.getSummary(clientId, bankAccountId))
   })
 
+  // Manual movement creation
+  fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const body = request.body as { bankAccountId?: string; date?: string; amount?: number; description?: string }
+    if (!body.bankAccountId) throw httpError(400, 'bankAccountId is required')
+    if (!body.date) throw httpError(400, 'date is required')
+    if (body.amount == null) throw httpError(400, 'amount is required')
+    if (!body.description?.trim()) throw httpError(400, 'description is required')
+    const result = await svc.createManual(clientId, {
+      bankAccountId: body.bankAccountId,
+      date: body.date,
+      amount: body.amount,
+      description: body.description,
+    })
+    return reply.status(201).send(result)
+  })
+
   // JSON import (pre-parsed movements)
   fastify.post(`${prefix}/import`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }

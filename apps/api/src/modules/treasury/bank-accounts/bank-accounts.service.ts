@@ -5,30 +5,39 @@ import { httpError } from '../../../lib/errors.js'
 export class TreasuryBankAccountsService {
   constructor(private prisma: PrismaClient) {}
 
-  // Resolves the final balance from the movement chain.
-  // When multiple movements share the last date, finds the tail of the chain:
-  // the balanceAfter that is not the starting point of any other movement on that day.
   private async resolveFinalBalance(bankAccountId: string, openingBalance: number): Promise<number> {
+    // Step 1: derive balance from the imported chain (movements with balanceAfter set by bank statement)
     const lastDate = await this.prisma.treasuryBankMovement.findFirst({
       where: { bankAccountId, deletedAt: null, balanceAfter: { not: null } },
       orderBy: { date: 'desc' },
       select: { date: true },
     })
-    if (!lastDate) return openingBalance
 
-    const lastDayMovs = await this.prisma.treasuryBankMovement.findMany({
-      where: { bankAccountId, deletedAt: null, date: lastDate.date!, balanceAfter: { not: null } },
-      select: { amount: true, balanceAfter: true },
+    let chainBalance: number
+    if (!lastDate) {
+      chainBalance = openingBalance
+    } else {
+      const lastDayMovs = await this.prisma.treasuryBankMovement.findMany({
+        where: { bankAccountId, deletedAt: null, date: lastDate.date!, balanceAfter: { not: null } },
+        select: { amount: true, balanceAfter: true },
+      })
+      if (lastDayMovs.length === 1) {
+        chainBalance = Number(lastDayMovs[0].balanceAfter)
+      } else {
+        const startingBalances = new Set(
+          lastDayMovs.map((m) => Math.round((Number(m.balanceAfter) - Number(m.amount)) * 100))
+        )
+        const tail = lastDayMovs.find((m) => !startingBalances.has(Math.round(Number(m.balanceAfter) * 100)))
+        chainBalance = tail ? Number(tail.balanceAfter) : Number(lastDayMovs[0].balanceAfter)
+      }
+    }
+
+    // Step 2: add movements that are not part of the chain (manual entries have balanceAfter = null)
+    const manualAgg = await this.prisma.treasuryBankMovement.aggregate({
+      where: { bankAccountId, deletedAt: null, balanceAfter: null },
+      _sum: { amount: true },
     })
-    if (lastDayMovs.length === 1) return Number(lastDayMovs[0].balanceAfter)
-
-    // Starting balance for each movement = balanceAfter - amount
-    const startingBalances = new Set(
-      lastDayMovs.map((m) => Math.round((Number(m.balanceAfter) - Number(m.amount)) * 100))
-    )
-    // The tail is the movement whose balanceAfter is not a starting point of any other
-    const tail = lastDayMovs.find((m) => !startingBalances.has(Math.round(Number(m.balanceAfter) * 100)))
-    return tail ? Number(tail.balanceAfter) : Number(lastDayMovs[0].balanceAfter)
+    return chainBalance + Number(manualAgg._sum.amount ?? 0)
   }
 
   async list(clientId: string) {

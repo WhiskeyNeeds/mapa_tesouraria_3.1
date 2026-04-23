@@ -68,7 +68,7 @@ export default function SettingsPage() {
     }
   }, [tocConfig])
 
-  // Detect OAuth callback success
+  // Detect OAuth callback success — via URL param (same tab) or postMessage (new tab/popup)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('toconline') === 'success') {
@@ -77,6 +77,17 @@ export default function SettingsPage() {
       qc.invalidateQueries({ queryKey: ['toconline-config'] })
       window.history.replaceState({}, '', window.location.pathname)
     }
+
+    function onMessage(e: MessageEvent) {
+      if (e.origin !== window.location.origin) return
+      if (e.data?.type === 'toconline-auth-success') {
+        setTab('toconline')
+        setTocSuccess(true)
+        qc.invalidateQueries({ queryKey: ['toconline-config'] })
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
   }, [qc])
 
   const saveTocCreds = useMutation({

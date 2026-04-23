@@ -1,4 +1,4 @@
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import type { PrismaClient, TreasuryMovementSource, TreasuryMovementStatus, Prisma } from '@prisma/client'
 import { Prisma as PrismaRuntime } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
@@ -20,6 +20,39 @@ export class TreasuryBankMovementsService {
 
   constructor(private prisma: PrismaClient) {
     this.bankSvc = new TreasuryBankAccountsService(prisma)
+  }
+
+  private async recalcManualBalances(bankAccountId: string) {
+    const account = await this.prisma.treasuryBankAccount.findUnique({
+      where: { id: bankAccountId },
+      select: { openingBalance: true },
+    })
+
+    const movs = await this.prisma.treasuryBankMovement.findMany({
+      where: { bankAccountId, deletedAt: null },
+      select: { id: true, amount: true, balanceAfter: true },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    })
+
+    let running = Number(account?.openingBalance ?? 0)
+    const updates: { id: string; balanceAfter: number }[] = []
+
+    for (const mov of movs) {
+      if (mov.balanceAfter !== null) {
+        running = Number(mov.balanceAfter)
+      } else {
+        running = running + Number(mov.amount)
+        updates.push({ id: mov.id, balanceAfter: running })
+      }
+    }
+
+    if (updates.length > 0) {
+      await Promise.all(
+        updates.map(({ id, balanceAfter }) =>
+          this.prisma.treasuryBankMovement.update({ where: { id }, data: { balanceAfter } })
+        )
+      )
+    }
   }
 
   private buildDedupeHash(clientId: string, bankAccountId: string, date: string, amount: number, desc: string, balanceAfter?: number): string {
@@ -82,7 +115,7 @@ export class TreasuryBankMovementsService {
       sortBy === 'amount'      ? [{ amount: dir },      { date: 'desc' as const }] :
       sortBy === 'description' ? [{ description: dir }, { date: 'desc' as const }] :
       sortBy === 'balanceAfter'? [{ balanceAfter: dir }, { date: 'desc' as const }] :
-      [{ date: dir }, { createdAt: 'asc' as const }]
+      [{ date: dir }, { source: 'asc' as const }, { createdAt: 'asc' as const }]
     ) as Prisma.TreasuryBankMovementOrderByWithRelationInput[]
 
     const [total, items] = await Promise.all([
@@ -235,6 +268,36 @@ export class TreasuryBankMovementsService {
     return { imported, duplicated, failed: failed.length }
   }
 
+  async createManual(clientId: string, data: {
+    bankAccountId: string
+    date: string
+    amount: number
+    description: string
+  }) {
+    const account = await this.prisma.treasuryBankAccount.findFirst({
+      where: { id: data.bankAccountId, clientId, deletedAt: null, isActive: true },
+    })
+    if (!account) throw httpError(404, 'Bank account not found')
+
+    const movement = await this.prisma.treasuryBankMovement.create({
+      data: {
+        clientId,
+        bankAccountId: data.bankAccountId,
+        date: new Date(data.date),
+        amount: data.amount,
+        description: data.description.trim(),
+        normalizedDesc: this.normalize(data.description),
+        source: 'MANUAL',
+        dedupeHash: randomUUID(),
+        status: 'UNCLASSIFIED',
+      },
+    })
+
+    await this.recalcManualBalances(data.bankAccountId)
+    await this.bankSvc.recalcBalance(data.bankAccountId)
+    return movement
+  }
+
   async deduplicateMovements(clientId: string, bankAccountId?: string): Promise<{ removed: number }> {
     const where = { clientId, deletedAt: null, bankAccount: { deletedAt: null, isActive: true }, ...(bankAccountId ? { bankAccountId } : {}) }
     const all = await this.prisma.treasuryBankMovement.findMany({
@@ -287,6 +350,7 @@ export class TreasuryBankMovementsService {
     if (!mov) throw httpError(404, 'Movement not found')
     if (mov.status === 'RECONCILED') throw httpError(409, 'Cannot delete a reconciled movement')
     await this.prisma.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } })
+    await this.recalcManualBalances(mov.bankAccountId)
     await this.bankSvc.recalcBalance(mov.bankAccountId)
   }
 

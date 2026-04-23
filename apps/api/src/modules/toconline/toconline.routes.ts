@@ -34,10 +34,18 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.send({ url })
   })
 
+  // Legacy backend callback (kept for backwards compat)
   fastify.get('/toconline/callback', async (request, reply) => {
     const { code, state } = request.query as { code: string; state: string }
     await svc.handleCallback(code, state, fastify.redis)
     return reply.redirect(`${process.env.FRONTEND_URL}/definicoes?toconline=success`)
+  })
+
+  // Frontend-initiated callback: frontend sends code+state after the redirect
+  fastify.post('/toconline/callback', async (request, reply) => {
+    const { code, state } = request.body as { code: string; state: string }
+    await svc.handleCallback(code, state, fastify.redis)
+    return reply.status(204).send()
   })
 
   fastify.get('/toconline/:clientId/purchases', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {

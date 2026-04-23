@@ -1,0 +1,108 @@
+import type { PrismaClient } from '@prisma/client';
+export declare class TreasuryBankAccountsService {
+    private prisma;
+    constructor(prisma: PrismaClient);
+    private resolveFinalBalance;
+    list(clientId: string): Promise<{
+        currentBalance: number;
+        clientId: string;
+        createdAt: Date;
+        name: string;
+        id: string;
+        isActive: boolean;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        currency: string;
+        bankName: string | null;
+        ibanLast4: string | null;
+        openingBalance: import("@prisma/client/runtime/library").Decimal;
+        minBalance: import("@prisma/client/runtime/library").Decimal | null;
+        tocBankAccountId: string | null;
+        tocSyncedAt: Date | null;
+    }[]>;
+    getById(clientId: string, id: string): Promise<{
+        clientId: string;
+        createdAt: Date;
+        name: string;
+        id: string;
+        isActive: boolean;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        currency: string;
+        bankName: string | null;
+        ibanLast4: string | null;
+        openingBalance: import("@prisma/client/runtime/library").Decimal;
+        currentBalance: import("@prisma/client/runtime/library").Decimal;
+        minBalance: import("@prisma/client/runtime/library").Decimal | null;
+        tocBankAccountId: string | null;
+        tocSyncedAt: Date | null;
+    }>;
+    create(clientId: string, data: {
+        name: string;
+        bankName?: string;
+        currency?: string;
+        iban?: string;
+        openingBalance?: number;
+        minBalance?: number;
+        tocBankAccountId?: string;
+    }): Promise<{
+        clientId: string;
+        createdAt: Date;
+        name: string;
+        id: string;
+        isActive: boolean;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        currency: string;
+        bankName: string | null;
+        ibanLast4: string | null;
+        openingBalance: import("@prisma/client/runtime/library").Decimal;
+        currentBalance: import("@prisma/client/runtime/library").Decimal;
+        minBalance: import("@prisma/client/runtime/library").Decimal | null;
+        tocBankAccountId: string | null;
+        tocSyncedAt: Date | null;
+    }>;
+    update(clientId: string, id: string, data: Partial<{
+        name: string;
+        bankName: string;
+        minBalance: number;
+        isActive: boolean;
+    }>): Promise<{
+        clientId: string;
+        createdAt: Date;
+        name: string;
+        id: string;
+        isActive: boolean;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        currency: string;
+        bankName: string | null;
+        ibanLast4: string | null;
+        openingBalance: import("@prisma/client/runtime/library").Decimal;
+        currentBalance: import("@prisma/client/runtime/library").Decimal;
+        minBalance: import("@prisma/client/runtime/library").Decimal | null;
+        tocBankAccountId: string | null;
+        tocSyncedAt: Date | null;
+    }>;
+    delete(clientId: string, id: string): Promise<{
+        clientId: string;
+        createdAt: Date;
+        name: string;
+        id: string;
+        isActive: boolean;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        currency: string;
+        bankName: string | null;
+        ibanEnc: string | null;
+        ibanLast4: string | null;
+        openingBalance: import("@prisma/client/runtime/library").Decimal;
+        currentBalance: import("@prisma/client/runtime/library").Decimal;
+        minBalance: import("@prisma/client/runtime/library").Decimal | null;
+        tocBankAccountId: string | null;
+        tocSyncedAt: Date | null;
+    }>;
+    recalcBalance(bankAccountId: string): Promise<void>;
+    decryptIban(ibanEnc: string): string;
+}
+//# sourceMappingURL=bank-accounts.service.d.ts.map
