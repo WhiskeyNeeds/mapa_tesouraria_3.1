@@ -8,8 +8,8 @@ import { formatDatetime } from '@/lib/utils'
 
 interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean }
 interface Settings {
-  reconciliationDryRun: boolean; autoMatchEnabled: boolean; syncIntervalMinutes: number
-  lowBalanceEnabled: boolean; importFileRetentionDays: number
+  reconciliationDryRun: boolean; autoMatchEnabled: boolean; autoMatchThreshold: number
+  syncIntervalMinutes: number; lowBalanceEnabled: boolean; importFileRetentionDays: number
 }
 interface ToconlineConfig {
   id?: string; clientId?: string; oauthUrl?: string; baseUrl?: string; tocClientId?: string
@@ -375,7 +375,46 @@ export default function SettingsPage() {
             <div className="space-y-3">
               <label className="flex items-center gap-3">
                 <input type="checkbox" checked={settingsForm.reconciliationDryRun ?? true} onChange={(e) => setSettingsForm({ ...settingsForm, reconciliationDryRun: e.target.checked })} className="rounded" />
-                <span className="text-sm text-gray-700">Modo dry-run (não escreve no TOConline)</span>
+                <div>
+                  <span className="text-sm text-gray-700">Modo dry-run</span>
+                  <p className="text-xs text-gray-400">Simula a reconciliação sem escrever no TOConline</p>
+                </div>
+              </label>
+              <label className="flex items-center gap-3">
+                <input type="checkbox" checked={settingsForm.autoMatchEnabled ?? false} onChange={(e) => setSettingsForm({ ...settingsForm, autoMatchEnabled: e.target.checked })} className="rounded" />
+                <div>
+                  <span className="text-sm text-gray-700">Correspondência automática</span>
+                  <p className="text-xs text-gray-400">Sugere automaticamente pares movimento ↔ documento na reconciliação</p>
+                </div>
+              </label>
+              {settingsForm.autoMatchEnabled && (
+                <div className="ml-7">
+                  <label className="label">Limiar de confiança</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range" min={0.5} max={1} step={0.05}
+                      value={settingsForm.autoMatchThreshold ?? 0.95}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, autoMatchThreshold: parseFloat(e.target.value) })}
+                      className="w-40"
+                    />
+                    <span className="text-sm font-medium text-gray-700">
+                      {Math.round((settingsForm.autoMatchThreshold ?? 0.95) * 100)}%
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Alertas</h3>
+            <div className="space-y-3">
+              <label className="flex items-center gap-3">
+                <input type="checkbox" checked={settingsForm.lowBalanceEnabled ?? true} onChange={(e) => setSettingsForm({ ...settingsForm, lowBalanceEnabled: e.target.checked })} className="rounded" />
+                <div>
+                  <span className="text-sm text-gray-700">Alerta de saldo mínimo</span>
+                  <p className="text-xs text-gray-400">Mostra um aviso quando o saldo de uma conta desce abaixo do mínimo configurado</p>
+                </div>
               </label>
             </div>
           </div>

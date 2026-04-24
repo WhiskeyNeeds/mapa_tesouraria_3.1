@@ -5,9 +5,9 @@ import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, PenLine } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, PenLine, AlertTriangle } from 'lucide-react'
 
-const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander'] as const
+const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander', 'NovoBanco'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
 
 const PORTUGUESE_BANKS = [
@@ -25,6 +25,7 @@ const BANK_PARSER_CODES: Record<string, SupportedBank> = {
   'Banco BPI': 'BPI',
   'Bankinter': 'Bankinter',
   'Santander': 'Santander',
+  'Novo Banco': 'NovoBanco',
 }
 
 const BANK_IMPORT_OPTIONS = PORTUGUESE_BANKS.map((name) => ({
@@ -61,7 +62,7 @@ function formatIban(raw: string): string {
   return clean.match(/.{1,4}/g)?.join(' ') ?? clean
 }
 
-interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; ibanLast4: string; currency: string }
+interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean }
 interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
 interface MovementsResponse { total: number; page: number; limit: number; items: Movement[] }
 interface Summary { totalIncome: number; totalExpense: number; countIncome: number; countExpense: number; byStatus: Record<string, number> }
@@ -314,6 +315,12 @@ export default function BanksPage() {
                   </div>
                 </div>
                 <div className={`text-xl font-bold ${acc.currentBalance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(acc.currentBalance)}</div>
+                {acc.lowBalanceWarning && (
+                  <div className="flex items-center gap-1 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                    Saldo abaixo do mínimo ({formatCurrency(acc.minBalance ?? 0)})
+                  </div>
+                )}
               </div>
             ))}
           </div>

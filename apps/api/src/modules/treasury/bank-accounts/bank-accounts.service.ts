@@ -53,6 +53,7 @@ export class TreasuryBankAccountsService {
     return accounts.map(({ ibanEnc: _enc, ...acc }, i) => ({
       ...acc,
       currentBalance: balances[i],
+      lowBalanceWarning: acc.minBalance != null && balances[i] < Number(acc.minBalance),
     }))
   }
 
@@ -60,7 +61,8 @@ export class TreasuryBankAccountsService {
     const acc = await this.prisma.treasuryBankAccount.findFirst({ where: { id, clientId, deletedAt: null } })
     if (!acc) throw httpError(404, 'Bank account not found')
     const { ibanEnc: _enc, ...rest } = acc
-    return rest
+    const currentBalance = await this.resolveFinalBalance(id, Number(acc.openingBalance))
+    return { ...rest, currentBalance }
   }
 
   async create(clientId: string, data: {

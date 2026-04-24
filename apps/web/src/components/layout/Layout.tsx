@@ -2,7 +2,7 @@ import { Outlet, NavLink } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   LayoutDashboard, Building2, RefreshCw, ArrowDownToLine,
-  ArrowUpFromLine, TrendingUp, Settings, LogOut, Menu, X, ChevronDown,
+  ArrowUpFromLine, TrendingUp, Settings, LogOut, Menu, X, ChevronDown, AlertTriangle,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -40,6 +40,14 @@ export default function Layout() {
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ['clients'],
     queryFn: () => api.get('/clients'),
+  })
+
+  type TocStatus = { status?: string; lastError?: string | null }
+  const { data: tocConfig } = useQuery<TocStatus | null>({
+    queryKey: ['toconline-config', selectedClientId],
+    queryFn: () => (api.get(`/toconline/config/${selectedClientId}`) as Promise<TocStatus>).catch(() => null),
+    enabled: !!selectedClientId,
+    refetchInterval: 5 * 60 * 1000,
   })
 
   const selectedClient = clients.find((c) => c.id === selectedClientId)
@@ -120,6 +128,16 @@ export default function Layout() {
           </div>
 
           <div className="ml-auto flex items-center gap-3">
+            {tocConfig?.status === 'ERROR' && (
+              <NavLink
+                to="/definicoes"
+                title={tocConfig.lastError ?? 'Erro na ligação TOConline'}
+                className="flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-3 py-1 hover:bg-amber-100 transition-colors"
+              >
+                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                TOConline — erro de autenticação
+              </NavLink>
+            )}
             <div className="text-right">
               <div className="text-sm font-medium text-gray-900">{user?.name}</div>
               <div className="text-xs text-gray-500">{user?.email}</div>
