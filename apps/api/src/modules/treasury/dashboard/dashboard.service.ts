@@ -1,17 +1,47 @@
 import type { PrismaClient } from '@prisma/client'
+import { resolveAccountBalance } from '../bank-accounts/balance.js'
 
 export class TreasuryDashboardService {
   constructor(private prisma: PrismaClient) {}
+
+  private async fetchAccountBalances(clientId: string): Promise<Map<string, number>> {
+    const accounts = await this.prisma.treasuryBankAccount.findMany({
+      where: { clientId, isActive: true, deletedAt: null },
+      select: { id: true, openingBalance: true },
+    })
+    const allMovements = await this.prisma.treasuryBankMovement.findMany({
+      where: { bankAccountId: { in: accounts.map((a) => a.id) }, deletedAt: null },
+      select: { id: true, bankAccountId: true, date: true, amount: true, balanceAfter: true, source: true },
+    })
+    const byAccount = new Map<string, typeof allMovements>()
+    for (const m of allMovements) {
+      if (!byAccount.has(m.bankAccountId)) byAccount.set(m.bankAccountId, [])
+      byAccount.get(m.bankAccountId)!.push(m)
+    }
+    const result = new Map<string, number>()
+    for (const acc of accounts) {
+      const snapshots = (byAccount.get(acc.id) ?? []).map((m) => ({
+        id: m.id,
+        date: m.date,
+        amount: Number(m.amount),
+        balanceAfter: m.balanceAfter !== null ? Number(m.balanceAfter) : null,
+        source: m.source,
+      }))
+      result.set(acc.id, resolveAccountBalance(Number(acc.openingBalance), snapshots))
+    }
+    return result
+  }
 
   async getOverview(clientId: string, days = 30) {
     const now = new Date()
     const from = new Date(Date.now() - days * 86400000)
 
-    const [bankAccounts, receivableKpis, payableKpis, movements, recentMovements] = await Promise.all([
+    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements] = await Promise.all([
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
-        select: { id: true, name: true, bankName: true, currentBalance: true, currency: true, ibanLast4: true, updatedAt: true },
+        select: { id: true, name: true, bankName: true, currency: true, ibanLast4: true },
       }),
+      this.fetchAccountBalances(clientId),
       this.prisma.treasuryReceivable.aggregate({
         where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
         _sum: { pendingAmount: true },
@@ -35,7 +65,7 @@ export class TreasuryDashboardService {
       }),
     ])
 
-    const totalBalance = bankAccounts.reduce((sum, a) => sum + Number(a.currentBalance), 0)
+    const totalBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
     const toReceive = Number(receivableKpis._sum.pendingAmount ?? 0)
     const toPay = Number(payableKpis._sum.pendingAmount ?? 0)
     const cashAvailable = totalBalance - toPay
@@ -79,7 +109,7 @@ export class TreasuryDashboardService {
 
     return {
       kpis: { totalBalance, cashAvailable, toReceive, toPay, countReceivablesOpen: receivableKpis._count, countPayablesOpen: payableKpis._count, overdueReceivables, overduePayables },
-      bankAccounts,
+      bankAccounts: bankAccounts.map((a) => ({ ...a, currentBalance: balances.get(a.id) ?? 0 })),
       chartData: Array.from(dailyMap.entries()).map(([date, data]) => ({ date, ...data })),
       recentMovements,
       topClients: topReceivableEntities.map((e) => ({ name: e.entityName, amount: Number(e._sum.pendingAmount ?? 0) })),
@@ -114,11 +144,14 @@ export class TreasuryDashboardService {
 
   async getForecast(clientId: string, days = 90) {
     const now = new Date()
-    const bankAccounts = await this.prisma.treasuryBankAccount.findMany({
-      where: { clientId, isActive: true, deletedAt: null },
-      select: { currentBalance: true },
-    })
-    const startingBalance = bankAccounts.reduce((sum, a) => sum + Number(a.currentBalance), 0)
+    const [balances, bankAccounts] = await Promise.all([
+      this.fetchAccountBalances(clientId),
+      this.prisma.treasuryBankAccount.findMany({
+        where: { clientId, isActive: true, deletedAt: null },
+        select: { id: true },
+      }),
+    ])
+    const startingBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
 
     const [pendingReceivables, pendingPayables] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({

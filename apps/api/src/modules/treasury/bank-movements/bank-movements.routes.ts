@@ -51,7 +51,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       date: body.date,
       amount: body.amount,
       description: body.description,
-    })
+    }, request.user.sub)
     return reply.status(201).send(result)
   })
 
@@ -167,7 +167,20 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       },
     })
 
+    await fastify.prisma.treasuryAuditLog.create({
+      data: {
+        clientId, userId: request.user.sub,
+        action: 'import.complete', entityType: 'BankImport', entityId: importRecord.id,
+        payload: { bank, bankAccountId, parsed: movements.length, imported: result.imported, duplicated: result.duplicated, failed: result.failed },
+      },
+    })
+
     return reply.status(201).send({ ...result, parsed: movements.length, bank })
+  })
+
+  fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    return reply.send(await svc.applyRulesToExisting(clientId))
   })
 
   fastify.post(`${prefix}/deduplicate`, { onRequest: auth }, async (request, reply) => {
@@ -185,7 +198,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
 
   fastify.delete(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    await svc.delete(clientId, id)
+    await svc.delete(clientId, id, request.user.sub)
     return reply.status(204).send()
   })
 }

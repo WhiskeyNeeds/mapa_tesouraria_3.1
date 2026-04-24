@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -26,6 +26,18 @@ export default function ReconciliationPage() {
   const [allocations, setAllocations] = useState<Allocation[]>([])
   const [isDryRun, setIsDryRun] = useState(true)
   const [previewData, setPreviewData] = useState<{ direction: string; totalMovements: number; totalAllocated: number; tocActions: unknown[] } | null>(null)
+
+  const { data: settings } = useQuery({
+    queryKey: ['settings', selectedClientId],
+    queryFn: () => api.get<{ reconciliationDryRun: boolean }>(`/treasury/${selectedClientId}/settings`),
+    enabled: !!selectedClientId,
+  })
+
+  useEffect(() => {
+    if (settings?.reconciliationDryRun !== undefined) {
+      setIsDryRun(settings.reconciliationDryRun)
+    }
+  }, [settings?.reconciliationDryRun])
 
   const { data: movementsData } = useQuery({
     queryKey: ['movements-pending', selectedClientId],

@@ -95,8 +95,15 @@ export class TreasuryReconciliationsService {
     return { direction, totalMovements: Math.abs(totalMovements), totalAllocated, tocActions, isDryRun: data.isDryRun ?? true }
   }
 
+  private async isDryRunForClient(clientId: string, explicitValue?: boolean): Promise<boolean> {
+    if (explicitValue !== undefined) return explicitValue
+    const settings = await this.prisma.treasurySettings.findUnique({ where: { clientId } })
+    return settings?.reconciliationDryRun ?? true
+  }
+
   async confirm(clientId: string, userId: string, data: ReconciliationItem) {
-    const preview = await this.preview(clientId, data)
+    const isDryRun = await this.isDryRunForClient(clientId, data.isDryRun)
+    const preview = await this.preview(clientId, { ...data, isDryRun })
 
     return this.prisma.$transaction(async (tx) => {
       const recon = await tx.treasuryReconciliation.create({
@@ -104,7 +111,7 @@ export class TreasuryReconciliationsService {
           clientId,
           createdById: userId,
           direction: preview.direction,
-          isDryRun: data.isDryRun ?? true,
+          isDryRun,
           status: 'CONFIRMED',
           totalMovements: preview.totalMovements,
           totalAllocated: preview.totalAllocated,
@@ -142,7 +149,7 @@ export class TreasuryReconciliationsService {
           let tocReceiptId: string | undefined
           let tocError: string | undefined
 
-          if (launchToc && !data.isDryRun) {
+          if (launchToc && !isDryRun) {
             try {
               const result = await this.tocSvc.createSalesReceipt(clientId, {
                 sales_document_id: (await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } }))?.tocSalesDocId,
@@ -177,7 +184,7 @@ export class TreasuryReconciliationsService {
           let tocPaymentId: string | undefined
           let tocError: string | undefined
 
-          if (launchToc && !data.isDryRun) {
+          if (launchToc && !isDryRun) {
             try {
               const result = await this.tocSvc.createPurchasePayment(clientId, {
                 purchases_document_id: (await tx.treasuryPayable.findUnique({ where: { id: alloc.id } }))?.tocPurchasesDocId,
@@ -224,7 +231,7 @@ export class TreasuryReconciliationsService {
           action: 'reconciliation.confirm',
           entityType: 'Reconciliation',
           entityId: recon.id,
-          payload: { isDryRun: data.isDryRun, movementsCount: data.movementIds.length, allocationsCount: data.allocations.length },
+          payload: { isDryRun, movementsCount: data.movementIds.length, allocationsCount: data.allocations.length },
         },
       })
 

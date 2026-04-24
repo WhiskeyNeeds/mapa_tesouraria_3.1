@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import Modal from '@/components/ui/Modal'
-import { Plus, Tag, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check } from 'lucide-react'
+import { Plus, Tag, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
 
 interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean }
@@ -11,6 +11,24 @@ interface Settings {
   reconciliationDryRun: boolean; autoMatchEnabled: boolean; autoMatchThreshold: number
   syncIntervalMinutes: number; lowBalanceEnabled: boolean; importFileRetentionDays: number
 }
+interface ClassificationRule {
+  id: string; matchField: string; matchOp: string; matchValue: string
+  amountMin: number | null; amountMax: number | null; direction: string | null
+  categoryId: string; priority: number; isActive: boolean; hits: number; lastHitAt: string | null
+  category: { id: string; name: string; color: string }
+}
+
+const MATCH_FIELDS = [
+  { value: 'description', label: 'Descrição' },
+  { value: 'counterpart', label: 'Contraparte' },
+  { value: 'iban', label: 'IBAN contraparte' },
+]
+const MATCH_OPS = [
+  { value: 'contains', label: 'contém' },
+  { value: 'equals', label: 'é igual a' },
+  { value: 'startsWith', label: 'começa por' },
+  { value: 'regex', label: 'regex' },
+]
 interface ToconlineConfig {
   id?: string; clientId?: string; oauthUrl?: string; baseUrl?: string; tocClientId?: string
   tokenExpiresAt?: string | null; status?: 'UNCONFIGURED' | 'PENDING_AUTH' | 'ACTIVE' | 'ERROR'
@@ -20,7 +38,7 @@ interface ToconlineConfig {
 export default function SettingsPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
-  const [tab, setTab] = useState<'categories' | 'settings' | 'toconline'>('categories')
+  const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline'>('categories')
   const [showNewCat, setShowNewCat] = useState(false)
   const [newCat, setNewCat] = useState({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' })
 
@@ -38,6 +56,55 @@ export default function SettingsPage() {
 
   const [settingsForm, setSettingsForm] = useState<Partial<Settings>>({})
   useEffect(() => { if (settings) setSettingsForm(settings) }, [settings])
+
+  // Classification rules
+  const { data: rules = [] } = useQuery<ClassificationRule[]>({
+    queryKey: ['classification-rules', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/classification-rules`),
+    enabled: !!selectedClientId,
+  })
+
+  const emptyRule = { matchField: 'description', matchOp: 'contains', matchValue: '', amountMin: '', amountMax: '', direction: '', categoryId: '', priority: 50 }
+  const [showNewRule, setShowNewRule] = useState(false)
+  const [newRule, setNewRule] = useState(emptyRule)
+  const [applyResult, setApplyResult] = useState<{ classified: number; skipped: number } | null>(null)
+
+  const createRule = useMutation({
+    mutationFn: () => api.post(`/treasury/${selectedClientId}/classification-rules`, {
+      matchField: newRule.matchField,
+      matchOp: newRule.matchOp,
+      matchValue: newRule.matchValue,
+      categoryId: newRule.categoryId,
+      priority: Number(newRule.priority),
+      ...(newRule.direction ? { direction: newRule.direction } : {}),
+      ...(newRule.amountMin !== '' ? { amountMin: Number(newRule.amountMin) } : {}),
+      ...(newRule.amountMax !== '' ? { amountMax: Number(newRule.amountMax) } : {}),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['classification-rules'] })
+      setShowNewRule(false)
+      setNewRule(emptyRule)
+    },
+  })
+
+  const toggleRule = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api.patch(`/treasury/${selectedClientId}/classification-rules/${id}`, { isActive }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['classification-rules'] }),
+  })
+
+  const deleteRule = useMutation({
+    mutationFn: (id: string) => api.delete(`/treasury/${selectedClientId}/classification-rules/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['classification-rules'] }),
+  })
+
+  const applyRules = useMutation({
+    mutationFn: () => api.post<{ classified: number; skipped: number }>(`/treasury/${selectedClientId}/movements/apply-rules`, {}),
+    onSuccess: (data) => {
+      setApplyResult(data)
+      qc.invalidateQueries({ queryKey: ['movements'] })
+    },
+  })
 
   const createCat = useMutation({
     mutationFn: () => api.post(`/treasury/${selectedClientId}/categories`, newCat),
@@ -126,6 +193,7 @@ export default function SettingsPage() {
 
   const tabs = [
     { id: 'categories', label: 'Categorias' },
+    { id: 'rules', label: 'Regras de Classificação' },
     { id: 'settings', label: 'Configurações' },
     { id: 'toconline', label: 'TOConline' },
   ] as const
@@ -194,6 +262,160 @@ export default function SettingsPage() {
                   {createCat.isPending ? 'A guardar...' : 'Criar'}
                 </button>
               </div>
+            </div>
+          </Modal>
+        </div>
+      )}
+
+      {tab === 'rules' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-500">As regras são aplicadas automaticamente na importação e na criação manual de movimentos. A ordem de prioridade determina qual regra é usada primeiro.</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setApplyResult(null); applyRules.mutate() }}
+                disabled={applyRules.isPending}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <Play className="w-4 h-4" />
+                {applyRules.isPending ? 'A aplicar...' : 'Aplicar a não classificados'}
+              </button>
+              <button onClick={() => setShowNewRule(true)} className="btn-primary flex items-center gap-2">
+                <Plus className="w-4 h-4" />Nova Regra
+              </button>
+            </div>
+          </div>
+
+          {applyResult && (
+            <div className="flex items-center gap-2 text-sm px-4 py-3 bg-green-50 border border-green-200 rounded-lg text-green-800">
+              <CheckCircle className="w-4 h-4 flex-shrink-0" />
+              Classificados {applyResult.classified} movimento(s). {applyResult.skipped} ficaram sem correspondência.
+            </div>
+          )}
+
+          <div className="card divide-y divide-gray-50">
+            {rules.length === 0 && (
+              <div className="px-5 py-10 text-center text-gray-400 text-sm">
+                Sem regras definidas. Crie uma regra para classificar automaticamente os movimentos.
+              </div>
+            )}
+            {rules.map((rule) => (
+              <div key={rule.id} className={`flex items-center gap-4 px-5 py-3 ${!rule.isActive ? 'opacity-50' : ''}`}>
+                <GripVertical className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                <div className="w-8 text-xs font-mono text-gray-400 text-center">{rule.priority}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-gray-900">
+                    <span className="font-medium">{MATCH_FIELDS.find(f => f.value === rule.matchField)?.label ?? rule.matchField}</span>
+                    {' '}<span className="text-gray-500">{MATCH_OPS.find(o => o.value === rule.matchOp)?.label ?? rule.matchOp}</span>
+                    {' '}<span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-xs">{rule.matchValue}</span>
+                    {rule.direction && (
+                      <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full font-medium ${rule.direction === 'REVENUE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        {rule.direction === 'REVENUE' ? 'Entrada' : 'Saída'}
+                      </span>
+                    )}
+                    {(rule.amountMin != null || rule.amountMax != null) && (
+                      <span className="ml-2 text-xs text-gray-400">
+                        {rule.amountMin != null && `≥ ${rule.amountMin}€`}
+                        {rule.amountMin != null && rule.amountMax != null && ' '}
+                        {rule.amountMax != null && `≤ ${rule.amountMax}€`}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: rule.category.color }} />
+                    <span className="text-xs text-gray-500">{rule.category.name}</span>
+                    {rule.hits > 0 && <span className="text-xs text-gray-400">· {rule.hits} uso(s)</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => toggleRule.mutate({ id: rule.id, isActive: !rule.isActive })}
+                    className={`text-xs px-2 py-1 rounded-full font-medium border transition-colors ${rule.isActive ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100' : 'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100'}`}
+                  >
+                    {rule.isActive ? 'Ativa' : 'Inativa'}
+                  </button>
+                  <button
+                    onClick={() => { if (confirm('Eliminar esta regra?')) deleteRule.mutate(rule.id) }}
+                    className="p-1.5 text-gray-400 hover:text-red-600 transition-colors rounded"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <Modal open={showNewRule} onClose={() => { setShowNewRule(false); setNewRule(emptyRule) }} title="Nova Regra de Classificação">
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Campo</label>
+                  <select className="input" value={newRule.matchField} onChange={(e) => setNewRule({ ...newRule, matchField: e.target.value })}>
+                    {MATCH_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Operação</label>
+                  <select className="input" value={newRule.matchOp} onChange={(e) => setNewRule({ ...newRule, matchOp: e.target.value })}>
+                    {MATCH_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Valor a pesquisar</label>
+                <input className="input font-mono text-sm" placeholder={newRule.matchOp === 'regex' ? '^TRF.*' : 'ex: PAGAMENTO TSU'} value={newRule.matchValue} onChange={(e) => setNewRule({ ...newRule, matchValue: e.target.value })} />
+              </div>
+
+              <div>
+                <label className="label">Categoria de destino</label>
+                <select className="input" value={newRule.categoryId} onChange={(e) => setNewRule({ ...newRule, categoryId: e.target.value })}>
+                  <option value="">Selecionar...</option>
+                  {['REVENUE', 'EXPENSE'].map((type) => (
+                    <optgroup key={type} label={type === 'REVENUE' ? 'Receita' : 'Despesa'}>
+                      {categories.filter(c => c.type === type && !c.isArchived).map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="label">Direção</label>
+                  <select className="input" value={newRule.direction} onChange={(e) => setNewRule({ ...newRule, direction: e.target.value })}>
+                    <option value="">Qualquer</option>
+                    <option value="REVENUE">Entrada</option>
+                    <option value="EXPENSE">Saída</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Valor mín. (€)</label>
+                  <input type="number" className="input" placeholder="0" value={newRule.amountMin} onChange={(e) => setNewRule({ ...newRule, amountMin: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Valor máx. (€)</label>
+                  <input type="number" className="input" placeholder="∞" value={newRule.amountMax} onChange={(e) => setNewRule({ ...newRule, amountMax: e.target.value })} />
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Prioridade <span className="text-gray-400 font-normal">(menor = maior prioridade)</span></label>
+                <input type="number" className="input w-24" min={1} max={999} value={newRule.priority} onChange={(e) => setNewRule({ ...newRule, priority: Number(e.target.value) })} />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => { setShowNewRule(false); setNewRule(emptyRule) }} className="btn-secondary flex-1">Cancelar</button>
+                <button
+                  onClick={() => createRule.mutate()}
+                  className="btn-primary flex-1"
+                  disabled={createRule.isPending || !newRule.matchValue || !newRule.categoryId}
+                >
+                  {createRule.isPending ? 'A guardar...' : 'Criar Regra'}
+                </button>
+              </div>
+              {createRule.isError && <p className="text-sm text-red-600">{(createRule.error as Error).message}</p>}
             </div>
           </Modal>
         </div>

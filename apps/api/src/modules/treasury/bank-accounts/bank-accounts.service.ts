@@ -41,19 +41,24 @@ export class TreasuryBankAccountsService {
   }
 
   async list(clientId: string) {
-    const accounts = await this.prisma.treasuryBankAccount.findMany({
-      where: { clientId, deletedAt: null, isActive: true },
-      orderBy: { name: 'asc' },
-    })
+    const [accounts, settings] = await Promise.all([
+      this.prisma.treasuryBankAccount.findMany({
+        where: { clientId, deletedAt: null, isActive: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.treasurySettings.findUnique({ where: { clientId } }),
+    ])
 
     const balances = await Promise.all(
       accounts.map((a) => this.resolveFinalBalance(a.id, Number(a.openingBalance)))
     )
 
+    const lowBalanceEnabled = settings?.lowBalanceEnabled ?? true
+
     return accounts.map(({ ibanEnc: _enc, ...acc }, i) => ({
       ...acc,
       currentBalance: balances[i],
-      lowBalanceWarning: acc.minBalance != null && balances[i] < Number(acc.minBalance),
+      lowBalanceWarning: lowBalanceEnabled && acc.minBalance != null && balances[i] < Number(acc.minBalance),
     }))
   }
 
@@ -198,8 +203,7 @@ export class TreasuryBankAccountsService {
     const account = await this.prisma.treasuryBankAccount.findUnique({ where: { id: bankAccountId } })
     if (!account) return
     await this.recalcManualBalances(bankAccountId)
-    const currentBalance = await this.resolveFinalBalance(bankAccountId, Number(account.openingBalance))
-    await this.prisma.treasuryBankAccount.update({ where: { id: bankAccountId }, data: { currentBalance } })
+    // currentBalance is always derived dynamically in list()/getById() — no need to persist it
   }
 
   decryptIban(ibanEnc: string): string {

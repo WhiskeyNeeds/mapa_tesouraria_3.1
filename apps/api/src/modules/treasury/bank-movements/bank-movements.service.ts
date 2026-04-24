@@ -22,6 +22,34 @@ export class TreasuryBankMovementsService {
     this.bankSvc = new TreasuryBankAccountsService(prisma)
   }
 
+  private findMatchingRule(
+    rules: { id: string; direction: string | null; amountMin: unknown; amountMax: unknown; matchField: string; matchOp: string; matchValue: string; categoryId: string }[],
+    amount: number,
+    normalizedDesc: string,
+    counterpartName?: string | null,
+    counterpartIban?: string | null,
+  ): { categoryId: string | undefined; ruleId: string | undefined } {
+    for (const rule of rules) {
+      if (rule.direction && ((rule.direction === 'REVENUE') !== (amount > 0))) continue
+      if (rule.amountMin && Math.abs(amount) < Number(rule.amountMin)) continue
+      if (rule.amountMax && Math.abs(amount) > Number(rule.amountMax)) continue
+
+      const field = rule.matchField === 'description' ? normalizedDesc
+        : rule.matchField === 'counterpart' ? this.normalize(counterpartName ?? '')
+        : this.normalize(counterpartIban ?? '')
+
+      const value = this.normalize(rule.matchValue)
+      let matches = false
+      if (rule.matchOp === 'contains') matches = field.includes(value)
+      else if (rule.matchOp === 'equals') matches = field === value
+      else if (rule.matchOp === 'startsWith') matches = field.startsWith(value)
+      else if (rule.matchOp === 'regex') { try { matches = new RegExp(rule.matchValue, 'i').test(field) } catch { matches = false } }
+
+      if (matches) return { categoryId: rule.categoryId, ruleId: rule.id }
+    }
+    return { categoryId: undefined, ruleId: undefined }
+  }
+
   private buildDedupeHash(clientId: string, bankAccountId: string, date: string, amount: number, desc: string, balanceAfter?: number): string {
     const balance = balanceAfter != null ? String(balanceAfter) : ''
     return createHash('sha256').update(`${clientId}|${bankAccountId}|${date}|${amount}|${desc}|${balance}`).digest('hex')
@@ -222,31 +250,12 @@ export class TreasuryBankMovementsService {
     })
 
     for (const { mov, dedupeHash, normalizedDesc } of toInsert) {
-      // Find matching rule
-      let categoryId: string | undefined
-      for (const rule of rules) {
-        if (rule.direction && ((rule.direction === 'REVENUE') !== (mov.amount > 0))) continue
-        if (rule.amountMin && Math.abs(mov.amount) < Number(rule.amountMin)) continue
-        if (rule.amountMax && Math.abs(mov.amount) > Number(rule.amountMax)) continue
-
-        const field = rule.matchField === 'description' ? normalizedDesc
-          : rule.matchField === 'counterpart' ? (mov.counterpartName ?? '')
-          : (mov.counterpartIban ?? '')
-
-        let matches = false
-        if (rule.matchOp === 'contains') matches = field.includes(this.normalize(rule.matchValue))
-        else if (rule.matchOp === 'equals') matches = field === this.normalize(rule.matchValue)
-        else if (rule.matchOp === 'startsWith') matches = field.startsWith(this.normalize(rule.matchValue))
-        else if (rule.matchOp === 'regex') matches = new RegExp(rule.matchValue, 'i').test(field)
-
-        if (matches) {
-          categoryId = rule.categoryId
-          await this.prisma.treasuryClassificationRule.update({
-            where: { id: rule.id },
-            data: { hits: { increment: 1 }, lastHitAt: new Date() },
-          })
-          break
-        }
+      const { categoryId, ruleId } = this.findMatchingRule(rules, mov.amount, normalizedDesc, mov.counterpartName, mov.counterpartIban)
+      if (ruleId) {
+        await this.prisma.treasuryClassificationRule.update({
+          where: { id: ruleId },
+          data: { hits: { increment: 1 }, lastHitAt: new Date() },
+        })
       }
 
       try {
@@ -290,11 +299,24 @@ export class TreasuryBankMovementsService {
     date: string
     amount: number
     description: string
-  }) {
+  }, userId?: string) {
     const account = await this.prisma.treasuryBankAccount.findFirst({
       where: { id: data.bankAccountId, clientId, deletedAt: null, isActive: true },
     })
     if (!account) throw httpError(404, 'Bank account not found')
+
+    const normalizedDesc = this.normalize(data.description)
+    const rules = await this.prisma.treasuryClassificationRule.findMany({
+      where: { clientId, isActive: true },
+      orderBy: { priority: 'asc' },
+    })
+    const { categoryId, ruleId } = this.findMatchingRule(rules, data.amount, normalizedDesc)
+    if (ruleId) {
+      await this.prisma.treasuryClassificationRule.update({
+        where: { id: ruleId },
+        data: { hits: { increment: 1 }, lastHitAt: new Date() },
+      })
+    }
 
     const movement = await this.prisma.treasuryBankMovement.create({
       data: {
@@ -303,12 +325,20 @@ export class TreasuryBankMovementsService {
         date: new Date(data.date),
         amount: data.amount,
         description: data.description.trim(),
-        normalizedDesc: this.normalize(data.description),
+        normalizedDesc,
         source: 'MANUAL',
         dedupeHash: randomUUID(),
-        status: 'UNCLASSIFIED',
+        status: categoryId ? 'CLASSIFIED' : 'UNCLASSIFIED',
+        categoryId: categoryId ?? null,
       },
     })
+
+    if (userId) {
+      await this.prisma.treasuryAuditLog.create({
+        data: { clientId, userId, action: 'movement.create', entityType: 'BankMovement', entityId: movement.id,
+          payload: { bankAccountId: data.bankAccountId, date: data.date, amount: data.amount } },
+      })
+    }
 
     await this.bankSvc.recalcBalance(data.bankAccountId)
     return movement
@@ -361,12 +391,62 @@ export class TreasuryBankMovementsService {
     return this.prisma.treasuryBankMovement.update({ where: { id }, data: { categoryId, status: newStatus } })
   }
 
-  async delete(clientId: string, id: string) {
+  async delete(clientId: string, id: string, userId?: string) {
     const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId } })
     if (!mov) throw httpError(404, 'Movement not found')
     if (mov.status === 'RECONCILED') throw httpError(409, 'Cannot delete a reconciled movement')
     await this.prisma.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } })
+    if (userId) {
+      await this.prisma.treasuryAuditLog.create({
+        data: { clientId, userId, action: 'movement.delete', entityType: 'BankMovement', entityId: id,
+          payload: { bankAccountId: mov.bankAccountId, amount: Number(mov.amount), source: mov.source } },
+      })
+    }
     await this.bankSvc.recalcBalance(mov.bankAccountId)
+  }
+
+  async applyRulesToExisting(clientId: string): Promise<{ classified: number; skipped: number }> {
+    const [rules, unclassified] = await Promise.all([
+      this.prisma.treasuryClassificationRule.findMany({
+        where: { clientId, isActive: true },
+        orderBy: { priority: 'asc' },
+      }),
+      this.prisma.treasuryBankMovement.findMany({
+        where: { clientId, deletedAt: null, status: 'UNCLASSIFIED' },
+        select: { id: true, amount: true, normalizedDesc: true, counterpartName: true, counterpartIban: true },
+      }),
+    ])
+
+    if (rules.length === 0 || unclassified.length === 0) return { classified: 0, skipped: unclassified.length }
+
+    let classified = 0
+    const ruleHits = new Map<string, number>()
+
+    for (const mov of unclassified) {
+      const { categoryId, ruleId } = this.findMatchingRule(
+        rules, Number(mov.amount), mov.normalizedDesc ?? '', mov.counterpartName, mov.counterpartIban
+      )
+      if (categoryId && ruleId) {
+        await this.prisma.treasuryBankMovement.update({
+          where: { id: mov.id },
+          data: { categoryId, status: 'CLASSIFIED' },
+        })
+        ruleHits.set(ruleId, (ruleHits.get(ruleId) ?? 0) + 1)
+        classified++
+      }
+    }
+
+    // Batch update rule hit counts
+    await Promise.all(
+      Array.from(ruleHits.entries()).map(([id, count]) =>
+        this.prisma.treasuryClassificationRule.update({
+          where: { id },
+          data: { hits: { increment: count }, lastHitAt: new Date() },
+        })
+      )
+    )
+
+    return { classified, skipped: unclassified.length - classified }
   }
 
   async getSummary(clientId: string, bankAccountId?: string) {

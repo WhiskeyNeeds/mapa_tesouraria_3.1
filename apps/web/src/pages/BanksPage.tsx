@@ -28,6 +28,10 @@ const BANK_PARSER_CODES: Record<string, SupportedBank> = {
   'Novo Banco': 'NovoBanco',
 }
 
+const BANK_CODE_TO_NAME: Record<SupportedBank, string> = Object.fromEntries(
+  Object.entries(BANK_PARSER_CODES).map(([name, code]) => [code, name])
+) as Record<SupportedBank, string>
+
 const BANK_IMPORT_OPTIONS = PORTUGUESE_BANKS.map((name) => ({
   name,
   code: BANK_PARSER_CODES[name] ?? name,
@@ -87,6 +91,7 @@ export default function BanksPage() {
   const [sortBy, setSortBy] = useState<'date' | 'amount' | 'description' | 'balanceAfter'>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [importBank, setImportBank] = useState<SupportedBank>('CGD')
+  const [importAccountId, setImportAccountId] = useState<string>('')
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
   const [showNewMovement, setShowNewMovement] = useState(false)
@@ -259,16 +264,20 @@ export default function BanksPage() {
         <KpiCard
           title={selectedAccountData ? 'Saldo da Conta' : 'Saldo total da(s) Conta(s)'}
           value={formatCurrency(totalBalance)}
+          valueColor="auto"
+          rawValue={totalBalance}
           subtitle={selectedAccountData ? selectedAccountData.name : `${accounts.length} conta${accounts.length !== 1 ? 's' : ''}`}
         />
         <KpiCard
           title="Entradas"
           value={formatCurrency(summary?.totalIncome ?? 0)}
+          valueColor="green"
           subtitle={`${summary?.countIncome ?? 0} movimentos`}
         />
         <KpiCard
           title="Saídas"
           value={formatCurrency(summary?.totalExpense ?? 0)}
+          valueColor="red"
           subtitle={`${summary?.countExpense ?? 0} movimentos`}
         />
       </div>
@@ -695,7 +704,7 @@ export default function BanksPage() {
       </Modal>
 
       {/* Import modal */}
-      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportResult(null); setImportBank('CGD') }} title="Importar Extrato Bancário" size="lg">
+      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} title="Importar Extrato Bancário" size="lg">
         {importResult ? (
           <div className="space-y-5">
             <div className="flex flex-col items-center gap-3 py-4">
@@ -716,14 +725,24 @@ export default function BanksPage() {
                 <div className="text-xs text-red-600 mt-1">Com erro</div>
               </div>
             </div>
-            <button onClick={() => { setShowImport(false); setImportFile(null); setImportResult(null); setImportBank('CGD') }} className="btn-primary w-full">Fechar</button>
+            <button onClick={() => { setShowImport(false); setImportFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} className="btn-primary w-full">Fechar</button>
           </div>
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label">Banco</label>
-                <select className="input" value={importBank} onChange={(e) => setImportBank(e.target.value as SupportedBank)}>
+                <select
+                  className="input"
+                  value={importBank}
+                  onChange={(e) => {
+                    const bank = e.target.value as SupportedBank
+                    setImportBank(bank)
+                    const bankName = BANK_CODE_TO_NAME[bank]
+                    const first = accounts.find((a) => a.bankName === bankName)
+                    setImportAccountId(first?.id ?? '')
+                  }}
+                >
                   {BANK_IMPORT_OPTIONS.map((b) => (
                     <option key={b.code} value={b.code} disabled={!b.supported}>
                       {b.name}{!b.supported ? ' (não suportado)' : ''}
@@ -733,9 +752,19 @@ export default function BanksPage() {
               </div>
               <div>
                 <label className="label">Conta de destino</label>
-                <select className="input" value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
-                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
+                {(() => {
+                  const bankName = BANK_CODE_TO_NAME[importBank]
+                  const filtered = bankName ? accounts.filter((a) => a.bankName === bankName) : accounts
+                  if (filtered.length === 0) {
+                    return <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Nenhuma conta de {bankName ?? importBank} encontrada.</p>
+                  }
+                  const value = importAccountId && filtered.find((a) => a.id === importAccountId) ? importAccountId : filtered[0].id
+                  return (
+                    <select className="input" value={value} onChange={(e) => setImportAccountId(e.target.value)}>
+                      {filtered.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  )
+                })()}
               </div>
             </div>
 
@@ -769,14 +798,23 @@ export default function BanksPage() {
             )}
 
             <div className="flex gap-3 pt-1">
-              <button onClick={() => { setShowImport(false); setImportFile(null) }} className="btn-secondary flex-1">Cancelar</button>
+              <button onClick={() => { setShowImport(false); setImportFile(null); setImportAccountId('') }} className="btn-secondary flex-1">Cancelar</button>
               <button
                 onClick={() => {
-                  if (!importFile || (!selectedAccount && !accounts[0]?.id)) return
-                  uploadStatementMutation.mutate({ file: importFile, bank: importBank, bankAccountId: selectedAccount || accounts[0].id })
+                  const bankName = BANK_CODE_TO_NAME[importBank]
+                  const filtered = bankName ? accounts.filter((a) => a.bankName === bankName) : accounts
+                  const targetId = (importAccountId && filtered.find((a) => a.id === importAccountId))
+                    ? importAccountId
+                    : filtered[0]?.id
+                  if (!importFile || !targetId) return
+                  uploadStatementMutation.mutate({ file: importFile, bank: importBank, bankAccountId: targetId })
                 }}
                 className="btn-primary flex-1"
-                disabled={uploadStatementMutation.isPending || !importFile || accounts.length === 0}
+                disabled={uploadStatementMutation.isPending || !importFile || (() => {
+                  const bankName = BANK_CODE_TO_NAME[importBank]
+                  const filtered = bankName ? accounts.filter((a) => a.bankName === bankName) : accounts
+                  return filtered.length === 0
+                })()}
               >
                 {uploadStatementMutation.isPending ? 'A importar...' : 'Importar'}
               </button>
