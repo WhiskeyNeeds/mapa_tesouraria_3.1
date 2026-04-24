@@ -22,39 +22,6 @@ export class TreasuryBankMovementsService {
     this.bankSvc = new TreasuryBankAccountsService(prisma)
   }
 
-  private async recalcManualBalances(bankAccountId: string) {
-    const account = await this.prisma.treasuryBankAccount.findUnique({
-      where: { id: bankAccountId },
-      select: { openingBalance: true },
-    })
-
-    const movs = await this.prisma.treasuryBankMovement.findMany({
-      where: { bankAccountId, deletedAt: null },
-      select: { id: true, amount: true, balanceAfter: true },
-      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
-    })
-
-    let running = Number(account?.openingBalance ?? 0)
-    const updates: { id: string; balanceAfter: number }[] = []
-
-    for (const mov of movs) {
-      if (mov.balanceAfter !== null) {
-        running = Number(mov.balanceAfter)
-      } else {
-        running = running + Number(mov.amount)
-        updates.push({ id: mov.id, balanceAfter: running })
-      }
-    }
-
-    if (updates.length > 0) {
-      await Promise.all(
-        updates.map(({ id, balanceAfter }) =>
-          this.prisma.treasuryBankMovement.update({ where: { id }, data: { balanceAfter } })
-        )
-      )
-    }
-  }
-
   private buildDedupeHash(clientId: string, bankAccountId: string, date: string, amount: number, desc: string, balanceAfter?: number): string {
     const balance = balanceAfter != null ? String(balanceAfter) : ''
     return createHash('sha256').update(`${clientId}|${bankAccountId}|${date}|${amount}|${desc}|${balance}`).digest('hex')
@@ -115,7 +82,7 @@ export class TreasuryBankMovementsService {
       sortBy === 'amount'      ? [{ amount: dir },      { date: 'desc' as const }] :
       sortBy === 'description' ? [{ description: dir }, { date: 'desc' as const }] :
       sortBy === 'balanceAfter'? [{ balanceAfter: dir }, { date: 'desc' as const }] :
-      [{ date: dir }, { source: 'asc' as const }, { createdAt: 'asc' as const }]
+      [{ date: dir }, { source: 'desc' as const }, { createdAt: 'asc' as const }]
     ) as Prisma.TreasuryBankMovementOrderByWithRelationInput[]
 
     const [total, items] = await Promise.all([
@@ -131,6 +98,56 @@ export class TreasuryBankMovementsService {
         take: limit,
       }),
     ])
+
+    // Guarantee MANUAL movements appear last within each calendar day
+    if (sortBy === 'date' || !sortBy) {
+      items.sort((a, b) => {
+        const dayA = a.date.toISOString().slice(0, 10)
+        const dayB = b.date.toISOString().slice(0, 10)
+        if (dayA !== dayB) return dir === 'desc' ? dayB.localeCompare(dayA) : dayA.localeCompare(dayB)
+        const aM = a.source === 'MANUAL' ? 1 : 0
+        const bM = b.source === 'MANUAL' ? 1 : 0
+        return bM - aM
+      })
+    }
+
+    // Adjust displayed balanceAfter for imported movements: add cumulative manual offset
+    // so that bank-verified balances remain visually continuous after manual insertions
+    const affectedAccountIds = bankAccountId
+      ? [bankAccountId]
+      : [...new Set(items.map((i) => i.bankAccountId))]
+
+    if (affectedAccountIds.length > 0) {
+      const manualMovements = await this.prisma.treasuryBankMovement.findMany({
+        where: {
+          bankAccountId: { in: affectedAccountIds },
+          deletedAt: null,
+          source: 'MANUAL',
+        },
+        select: { bankAccountId: true, date: true, amount: true },
+        orderBy: { date: 'asc' },
+      })
+
+      // Build per-account sorted list of manual offsets
+      const manualsByAccount = new Map<string, { dateMs: number; amount: number }[]>()
+      for (const m of manualMovements) {
+        if (!manualsByAccount.has(m.bankAccountId)) manualsByAccount.set(m.bankAccountId, [])
+        manualsByAccount.get(m.bankAccountId)!.push({ dateMs: m.date.getTime(), amount: Number(m.amount) })
+      }
+
+      const adjustedItems = items.map((item) => {
+        if (item.source === 'MANUAL' || item.balanceAfter == null) return item
+        const manuals = manualsByAccount.get(item.bankAccountId) ?? []
+        const itemDateMs = item.date.getTime()
+        const offset = manuals
+          .filter((m) => m.dateMs < itemDateMs)
+          .reduce((sum, m) => sum + m.amount, 0)
+        if (offset === 0) return item
+        return { ...item, balanceAfter: Number(item.balanceAfter) + offset }
+      })
+
+      return { total, page, limit, items: adjustedItems }
+    }
 
     return { total, page, limit, items }
   }
@@ -293,7 +310,6 @@ export class TreasuryBankMovementsService {
       },
     })
 
-    await this.recalcManualBalances(data.bankAccountId)
     await this.bankSvc.recalcBalance(data.bankAccountId)
     return movement
   }
@@ -350,7 +366,6 @@ export class TreasuryBankMovementsService {
     if (!mov) throw httpError(404, 'Movement not found')
     if (mov.status === 'RECONCILED') throw httpError(409, 'Cannot delete a reconciled movement')
     await this.prisma.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } })
-    await this.recalcManualBalances(mov.bankAccountId)
     await this.bankSvc.recalcBalance(mov.bankAccountId)
   }
 

@@ -6,9 +6,9 @@ export class TreasuryBankAccountsService {
   constructor(private prisma: PrismaClient) {}
 
   private async resolveFinalBalance(bankAccountId: string, openingBalance: number): Promise<number> {
-    // Step 1: derive balance from the imported chain (movements with balanceAfter set by bank statement)
+    // Step 1: derive balance from the imported chain only (exclude MANUAL — they never have bank-verified balances)
     const lastDate = await this.prisma.treasuryBankMovement.findFirst({
-      where: { bankAccountId, deletedAt: null, balanceAfter: { not: null } },
+      where: { bankAccountId, deletedAt: null, source: { not: 'MANUAL' }, balanceAfter: { not: null } },
       orderBy: { date: 'desc' },
       select: { date: true },
     })
@@ -18,7 +18,7 @@ export class TreasuryBankAccountsService {
       chainBalance = openingBalance
     } else {
       const lastDayMovs = await this.prisma.treasuryBankMovement.findMany({
-        where: { bankAccountId, deletedAt: null, date: lastDate.date!, balanceAfter: { not: null } },
+        where: { bankAccountId, deletedAt: null, source: { not: 'MANUAL' }, date: lastDate.date!, balanceAfter: { not: null } },
         select: { amount: true, balanceAfter: true },
       })
       if (lastDayMovs.length === 1) {
@@ -32,9 +32,9 @@ export class TreasuryBankAccountsService {
       }
     }
 
-    // Step 2: add movements that are not part of the chain (manual entries have balanceAfter = null)
+    // Step 2: add all MANUAL movements on top — bank chain is unaware of them regardless of date
     const manualAgg = await this.prisma.treasuryBankMovement.aggregate({
-      where: { bankAccountId, deletedAt: null, balanceAfter: null },
+      where: { bankAccountId, deletedAt: null, source: 'MANUAL' },
       _sum: { amount: true },
     })
     return chainBalance + Number(manualAgg._sum.amount ?? 0)
@@ -136,9 +136,66 @@ export class TreasuryBankAccountsService {
     return this.prisma.treasuryBankAccount.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } })
   }
 
+  private async recalcManualBalances(bankAccountId: string) {
+    const account = await this.prisma.treasuryBankAccount.findUnique({
+      where: { id: bankAccountId },
+      select: { openingBalance: true },
+    })
+
+    const movs = await this.prisma.treasuryBankMovement.findMany({
+      where: { bankAccountId, deletedAt: null },
+      select: { id: true, amount: true, balanceAfter: true, source: true, date: true },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    })
+
+    // Group by calendar day (Map preserves insertion order → days processed chronologically)
+    const byDay = new Map<string, typeof movs>()
+    for (const mov of movs) {
+      const day = mov.date.toISOString().slice(0, 10)
+      if (!byDay.has(day)) byDay.set(day, [])
+      byDay.get(day)!.push(mov)
+    }
+
+    // Track bank chain end separately from accumulated manual offset
+    // so that resetting to the bank anchor doesn't discard previous manual adjustments
+    let bankRunning = Number(account?.openingBalance ?? 0)
+    let manualCumulative = 0
+    const updates: { id: string; balanceAfter: number }[] = []
+
+    for (const dayMovs of byDay.values()) {
+      // Find the bank-verified end-of-day balance via tail detection
+      // (CSVs are newest-first so createdAt order ≠ chain order — tail detection is required)
+      const imported = dayMovs.filter((m) => m.source !== 'MANUAL' && m.balanceAfter !== null)
+      if (imported.length === 1) {
+        bankRunning = Number(imported[0].balanceAfter)
+      } else if (imported.length > 1) {
+        const startingBalances = new Set(
+          imported.map((m) => Math.round((Number(m.balanceAfter) - Number(m.amount)) * 100))
+        )
+        const tail = imported.find((m) => !startingBalances.has(Math.round(Number(m.balanceAfter) * 100)))
+        bankRunning = tail ? Number(tail.balanceAfter) : Number(imported[imported.length - 1].balanceAfter)
+      }
+
+      // Stack manual movements: bankRunning stays at bank anchor, manualCumulative accumulates across days
+      for (const mov of dayMovs.filter((m) => m.source === 'MANUAL')) {
+        manualCumulative += Number(mov.amount)
+        updates.push({ id: mov.id, balanceAfter: bankRunning + manualCumulative })
+      }
+    }
+
+    if (updates.length > 0) {
+      await Promise.all(
+        updates.map(({ id, balanceAfter }) =>
+          this.prisma.treasuryBankMovement.update({ where: { id }, data: { balanceAfter } })
+        )
+      )
+    }
+  }
+
   async recalcBalance(bankAccountId: string) {
     const account = await this.prisma.treasuryBankAccount.findUnique({ where: { id: bankAccountId } })
     if (!account) return
+    await this.recalcManualBalances(bankAccountId)
     const currentBalance = await this.resolveFinalBalance(bankAccountId, Number(account.openingBalance))
     await this.prisma.treasuryBankAccount.update({ where: { id: bankAccountId }, data: { currentBalance } })
   }

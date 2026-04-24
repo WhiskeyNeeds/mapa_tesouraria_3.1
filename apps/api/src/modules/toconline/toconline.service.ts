@@ -48,7 +48,6 @@ export class ToconlineService {
     const redirectUri = this.getRedirectUri()
     await redis.setex(`${TOC_STATE_PREFIX}${state}`, 600, clientId)
     await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'PENDING_AUTH' } })
-    const oauthBase = this.getOauthBase(cfg.oauthUrl)
 
     const params = new URLSearchParams({
       response_type: 'code',
@@ -56,7 +55,7 @@ export class ToconlineService {
       redirect_uri: redirectUri,
       state,
     })
-    return `${oauthBase}/oauth/authorize?${params}`
+    return `${cfg.oauthUrl}/oauth/authorize?${params}`
   }
 
   async handleCallback(code: string, state: string, redis: RedisClient): Promise<void> {
@@ -67,9 +66,8 @@ export class ToconlineService {
     const cfg = await this.requireConfig(clientId)
     const redirectUri = this.getRedirectUri()
     const secret = decrypt(cfg.tocClientSecret)
-    const oauthBase = this.getOauthBase(cfg.oauthUrl)
 
-    const res = await fetch(`${oauthBase}/oauth/token`, {
+    const res = await fetch(`${cfg.oauthUrl}/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -182,9 +180,8 @@ export class ToconlineService {
 
     const secret = decrypt(cfg.tocClientSecret)
     const rt = decrypt(cfg.refreshToken)
-    const oauthBase = this.getOauthBase(cfg.oauthUrl)
 
-    const res = await fetch(`${oauthBase}/oauth/token`, {
+    const res = await fetch(`${cfg.oauthUrl}/oauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -276,6 +273,27 @@ export class ToconlineService {
     return this.apiGet<unknown[]>(clientId, '/api/tax_descriptors')
   }
 
+  // ── Background token refresh ───────────────────────────────────────────────
+
+  async refreshAllExpiring(thresholdMs = 10 * 60 * 1000): Promise<void> {
+    const cutoff = new Date(Date.now() + thresholdMs)
+    const expiring = await this.prisma.toconlineConfig.findMany({
+      where: {
+        status: 'ACTIVE',
+        tokenExpiresAt: { lte: cutoff },
+        refreshToken: { not: null },
+      },
+    })
+    for (const cfg of expiring) {
+      try {
+        await this.tryRefreshToken(cfg.clientId, cfg)
+        console.info(`[TOConline] background token refreshed for ${cfg.clientId}`)
+      } catch {
+        // error already persisted to DB as ERROR status inside tryRefreshToken
+      }
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private async requireConfig(clientId: string) {
@@ -289,16 +307,15 @@ export class ToconlineService {
     if (cfg.status !== 'ACTIVE' || !cfg.accessToken) {
       throw httpError(401, 'TOConline not authenticated. Please complete OAuth flow.')
     }
+    // Proactively refresh if token expires within the next 60 seconds
+    if (cfg.tokenExpiresAt && cfg.tokenExpiresAt.getTime() - Date.now() < 60_000) {
+      await this.tryRefreshToken(clientId, cfg)
+      return this.requireConfig(clientId)
+    }
     return cfg
   }
 
   private getRedirectUri(): string {
     return `${process.env.FRONTEND_URL ?? 'http://localhost:5173'}/toconline/callback`
-  }
-
-  private getOauthBase(oauthUrl: string): string {
-    // Accept both formats from UI: https://host or https://host/oauth
-    const normalized = oauthUrl.trim().replace(/\/+$/, '')
-    return normalized.replace(/\/oauth$/i, '')
   }
 }

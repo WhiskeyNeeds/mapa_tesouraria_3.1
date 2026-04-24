@@ -6,6 +6,7 @@ import multipart from '@fastify/multipart'
 import prismaPlugin from './plugins/prisma.js'
 import redisPlugin from './plugins/redis.js'
 import authPlugin from './plugins/auth.js'
+import tokenRefreshPlugin from './plugins/token-refresh.js'
 
 import { authRoutes } from './modules/auth/auth.routes.js'
 import { clientsRoutes } from './modules/clients/clients.routes.js'
@@ -36,6 +37,7 @@ await fastify.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } })
 await fastify.register(prismaPlugin)
 await fastify.register(redisPlugin)
 await fastify.register(authPlugin)
+await fastify.register(tokenRefreshPlugin)
 
 // ── Global error handler ───────────────────────────────────────────────────
 
