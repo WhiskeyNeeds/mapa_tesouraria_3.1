@@ -106,6 +106,7 @@ export async function bankMovementsRoutes(fastify) {
                 bankAccountId,
                 fileSha256,
                 status: { in: ['PENDING', 'PROCESSING', 'DONE'] },
+                bankAccount: { deletedAt: null, isActive: true },
             },
             select: { id: true, createdAt: true, originalFileName: true, bankAccount: { select: { name: true } } },
         });
@@ -122,6 +123,7 @@ export async function bankMovementsRoutes(fastify) {
                 fileSha256,
                 NOT: { bankAccountId },
                 status: { in: ['PENDING', 'PROCESSING', 'DONE'] },
+                bankAccount: { deletedAt: null, isActive: true },
             },
             select: { createdAt: true, originalFileName: true, bankAccount: { select: { name: true } } },
         });

@@ -1,9 +1,10 @@
 import type { PrismaClient } from '@prisma/client'
 import { encrypt, decrypt } from '../../../plugins/encrypt.js'
 import { httpError } from '../../../lib/errors.js'
+import { sanitizeIban, assertValidIban } from './iban.js'
 
 export class TreasuryBankAccountsService {
-  constructor(private prisma: PrismaClient) {}
+  constructor(private prisma: PrismaClient) { }
 
   private async resolveFinalBalance(bankAccountId: string, openingBalance: number): Promise<number> {
     // Step 1: derive balance from the imported chain only (exclude MANUAL — they never have bank-verified balances)
@@ -80,6 +81,11 @@ export class TreasuryBankAccountsService {
     tocBankAccountId?: string
   }) {
     const { iban, openingBalance = 0, ...rest } = data
+    const normalizedIban = iban ? sanitizeIban(iban) : undefined
+
+    if (normalizedIban) {
+      assertValidIban(normalizedIban)
+    }
 
     // Name duplicate check
     const sameName = await this.prisma.treasuryBankAccount.findFirst({
@@ -88,21 +94,20 @@ export class TreasuryBankAccountsService {
     if (sameName) throw httpError(409, `Já existe uma conta com o nome "${data.name}"`)
 
     // IBAN duplicate check (decrypt existing accounts in memory — clients have few accounts)
-    if (iban) {
-      const normalizedIban = iban.replace(/\s/g, '').toUpperCase()
+    if (normalizedIban) {
       const existing = await this.prisma.treasuryBankAccount.findMany({
         where: { clientId, deletedAt: null, ibanEnc: { not: null } },
         select: { id: true, name: true, ibanEnc: true },
       })
       for (const acc of existing) {
-        if (acc.ibanEnc && decrypt(acc.ibanEnc).replace(/\s/g, '').toUpperCase() === normalizedIban) {
+        if (acc.ibanEnc && sanitizeIban(decrypt(acc.ibanEnc)) === normalizedIban) {
           throw httpError(409, `O IBAN já está associado à conta "${acc.name}"`)
         }
       }
     }
 
-    const ibanEnc = iban ? encrypt(iban) : undefined
-    const ibanLast4 = iban ? iban.replace(/\s/g, '').slice(-4) : undefined
+    const ibanEnc = normalizedIban ? encrypt(normalizedIban) : undefined
+    const ibanLast4 = normalizedIban ? normalizedIban.slice(-4) : undefined
 
     const acc = await this.prisma.treasuryBankAccount.create({
       data: {

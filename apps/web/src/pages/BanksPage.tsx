@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatIbanInput, sanitizeIban, validateIban } from '@/lib/iban'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
 import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX } from 'lucide-react'
@@ -60,11 +61,6 @@ function BankAvatar({ bankName }: { bankName: string }) {
       {abbr}
     </div>
   )
-}
-
-function formatIban(raw: string): string {
-  const clean = raw.replace(/\s/g, '').toUpperCase().slice(0, 25)
-  return clean.match(/.{1,4}/g)?.join(' ') ?? clean
 }
 
 interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean }
@@ -209,6 +205,7 @@ export default function BanksPage() {
   const createAccount = useMutation({
     mutationFn: (data: typeof newAccount) => api.post(`/treasury/${selectedClientId}/bank-accounts`, {
       ...data,
+      iban: data.iban ? sanitizeIban(data.iban) : undefined,
       openingBalance: parseFloat(data.openingBalance),
       minBalance: data.minBalance ? parseFloat(data.minBalance) : undefined,
     }),
@@ -696,8 +693,8 @@ export default function BanksPage() {
                               type="button"
                               onClick={() => setClassifyMovementId(classifyMovementId === m.id ? null : m.id)}
                               className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border transition-colors ${m.category
-                                  ? 'border-transparent hover:border-gray-200 hover:bg-gray-50'
-                                  : 'border-dashed border-gray-300 text-gray-400 hover:border-primary-400 hover:text-primary-600 hover:bg-primary-50'
+                                ? 'border-transparent hover:border-gray-200 hover:bg-gray-50'
+                                : 'border-dashed border-gray-300 text-gray-400 hover:border-primary-400 hover:text-primary-600 hover:bg-primary-50'
                                 }`}
                               title={m.category ? 'Alterar categoria' : 'Classificar movimento'}
                             >
@@ -875,10 +872,31 @@ export default function BanksPage() {
 
       {/* New account modal */}
       {(() => {
-        const ibanChars = newAccount.iban.replace(/\s/g, '').length
-        const ibanInvalid = ibanTouched && ibanChars > 0 && ibanChars !== 25
+        const ibanSanitized = sanitizeIban(newAccount.iban)
+        const ibanValidation = validateIban(ibanSanitized)
+        const ibanInvalid = ibanTouched && ibanSanitized.length > 0 && !ibanValidation.isValid
+        const ibanChecksumWarning = ibanTouched && ibanSanitized.length === 25 && ibanValidation.isValid && !ibanValidation.controlDigitsValid
         const bankValid = PORTUGUESE_BANKS.includes(newAccount.bankName)
-        const canSubmit = !createAccount.isPending && !!newAccount.name && bankValid && (ibanChars === 0 || ibanChars === 25)
+        const canSubmit = !createAccount.isPending && !!newAccount.name && bankValid && (ibanSanitized.length === 0 || ibanValidation.isValid)
+        const ibanFeedback = (() => {
+          if (ibanSanitized.length === 0) return 'Opcional. Se preenchido, deve ser IBAN PT (25 caracteres) e válido por MOD-97.'
+          if (!ibanTouched) {
+            return ibanValidation.expectedLength
+              ? `${ibanValidation.actualLength} / ${ibanValidation.expectedLength} caracteres`
+              : `${ibanValidation.actualLength} caracteres`
+          }
+          if (!ibanInvalid) {
+            if (ibanChecksumWarning) {
+              return 'Formato válido, mas os dígitos de controlo não passam MOD-97. Pode continuar, mas confirma o IBAN.'
+            }
+            return `IBAN válido (${ibanValidation.countryCode})`
+          }
+          if (ibanValidation.reason === 'invalid-country') return 'Código de país inválido (2 primeiras posições).'
+          if (ibanValidation.reason === 'not-portuguese') return 'Contas bancárias portuguesas devem começar por PT.'
+          if (ibanValidation.reason === 'invalid-length') return `Comprimento inválido para ${ibanValidation.countryCode}: esperado ${ibanValidation.expectedLength}.`
+          if (ibanValidation.reason === 'invalid-characters') return 'IBAN contém caracteres inválidos.'
+          return 'IBAN inválido.'
+        })()
         const resetModal = () => { setShowNewAccount(false); setBankSearch(''); setShowBankDropdown(false); setIbanTouched(false); setNewAccount({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' }); createAccount.reset() }
         return (
           <Modal open={showNewAccount} onClose={resetModal} title="Nova Conta Bancária">
@@ -923,14 +941,14 @@ export default function BanksPage() {
                 <input
                   className={`input font-mono tracking-wider ${ibanInvalid ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
                   value={newAccount.iban}
-                  onChange={(e) => setNewAccount({ ...newAccount, iban: formatIban(e.target.value) })}
+                  onChange={(e) => setNewAccount({ ...newAccount, iban: formatIbanInput(e.target.value) })}
                   onBlur={() => setIbanTouched(true)}
                   placeholder="PT50 0000 0000 0000 0000 0000 0"
                   maxLength={31}
                   spellCheck={false}
                 />
-                <p className={`text-xs mt-1 ${ibanInvalid ? 'text-red-500' : 'text-gray-400'}`}>
-                  {ibanChars} / 25 caracteres{ibanInvalid ? ' — IBAN incompleto' : ''}
+                <p className={`text-xs mt-1 ${ibanInvalid ? 'text-red-500' : ibanChecksumWarning ? 'text-amber-600' : 'text-gray-400'}`}>
+                  {ibanFeedback}
                 </p>
               </div>
 
