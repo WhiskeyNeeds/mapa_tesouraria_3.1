@@ -9,8 +9,8 @@ export async function categoriesRoutes(fastify: FastifyInstance) {
 
   fastify.get(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const { type } = request.query as { type?: TreasuryCategoryType }
-    return reply.send(await svc.list(clientId, type))
+    const { type, includeArchived } = request.query as { type?: TreasuryCategoryType; includeArchived?: string }
+    return reply.send(await svc.list(clientId, type, includeArchived === 'true'))
   })
 
   fastify.post(prefix, { onRequest: auth }, async (request, reply) => {

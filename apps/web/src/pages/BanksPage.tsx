@@ -2,10 +2,11 @@ import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
+import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, PenLine, AlertTriangle } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX } from 'lucide-react'
 
 const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander', 'NovoBanco'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
@@ -67,19 +68,23 @@ function formatIban(raw: string): string {
 }
 
 interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean }
-interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
+interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { id: string; name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
 interface MovementsResponse { total: number; page: number; limit: number; items: Movement[] }
 interface Summary { totalIncome: number; totalExpense: number; countIncome: number; countExpense: number; byStatus: Record<string, number> }
+interface Category { id: string; name: string; type: string; color: string; isArchived: boolean }
 
 export default function BanksPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
+  const toast = useToast()
   const [selectedAccount, setSelectedAccount] = useState<string>('')
   const [page, setPage] = useState(1)
   const [showNewAccount, setShowNewAccount] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [confirmDeleteMovementId, setConfirmDeleteMovementId] = useState<string | null>(null)
+  const [editAccountId, setEditAccountId] = useState<string | null>(null)
+  const [editAccountForm, setEditAccountForm] = useState({ name: '', minBalance: '' })
   const [newAccount, setNewAccount] = useState({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' })
   const [bankSearch, setBankSearch] = useState('')
   const [showBankDropdown, setShowBankDropdown] = useState(false)
@@ -90,12 +95,17 @@ export default function BanksPage() {
   const [direction, setDirection] = useState<'' | 'income' | 'expense'>('')
   const [sortBy, setSortBy] = useState<'date' | 'amount' | 'description' | 'balanceAfter'>('date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [statusFilter, setStatusFilter] = useState<'' | 'UNCLASSIFIED' | 'CLASSIFIED' | 'RECONCILED'>('')
+  const [classifyMovementId, setClassifyMovementId] = useState<string | null>(null)
+  const [categoryFilter, setCategoryFilter] = useState('')
   const [importBank, setImportBank] = useState<SupportedBank>('CGD')
   const [importAccountId, setImportAccountId] = useState<string>('')
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
   const [showNewMovement, setShowNewMovement] = useState(false)
   const [newMovement, setNewMovement] = useState({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' as 'income' | 'expense' })
+  const [editDescId, setEditDescId] = useState<string | null>(null)
+  const [editDesc, setEditDesc] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bankDropdownRef = useRef<HTMLDivElement>(null)
   const carouselRef = useRef<HTMLDivElement>(null)
@@ -120,6 +130,13 @@ export default function BanksPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showBankDropdown])
 
+  useEffect(() => {
+    if (!classifyMovementId) return
+    function handleClickOutside() { setClassifyMovementId(null) }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [classifyMovementId])
+
   const filteredBanks = PORTUGUESE_BANKS.filter((b) =>
     b.toLowerCase().includes(bankSearch.toLowerCase())
   )
@@ -133,13 +150,24 @@ export default function BanksPage() {
   useEffect(() => { setTimeout(checkScroll, 0) }, [accounts])
 
   const { data: summary } = useQuery<Summary>({
-    queryKey: ['movements-summary', selectedClientId, selectedAccount],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/movements/summary${selectedAccount ? `?bankAccountId=${selectedAccount}` : ''}`),
+    queryKey: ['movements-summary', selectedClientId, selectedAccount, dateFrom, dateTo, search, direction, statusFilter, categoryFilter],
+    queryFn: () => {
+      const p = new URLSearchParams()
+      if (selectedAccount) p.set('bankAccountId', selectedAccount)
+      if (dateFrom) p.set('dateFrom', dateFrom)
+      if (dateTo) p.set('dateTo', dateTo)
+      if (search) p.set('search', search)
+      if (direction) p.set('direction', direction)
+      if (statusFilter) p.set('status', statusFilter)
+      if (categoryFilter) p.set('categoryId', categoryFilter)
+      const qs = p.toString()
+      return api.get(`/treasury/${selectedClientId}/movements/summary${qs ? `?${qs}` : ''}`)
+    },
     enabled: !!selectedClientId && accounts.length > 0,
   })
 
   const { data: movements } = useQuery<MovementsResponse>({
-    queryKey: ['movements', selectedClientId, selectedAccount, page, search, dateFrom, dateTo, direction, sortBy, sortDir],
+    queryKey: ['movements', selectedClientId, selectedAccount, page, search, dateFrom, dateTo, direction, statusFilter, categoryFilter, sortBy, sortDir],
     queryFn: () => {
       const p = new URLSearchParams({ page: String(page), limit: '20' })
       if (selectedAccount) p.set('bankAccountId', selectedAccount)
@@ -147,11 +175,19 @@ export default function BanksPage() {
       if (dateFrom) p.set('dateFrom', dateFrom)
       if (dateTo) p.set('dateTo', dateTo)
       if (direction) p.set('direction', direction)
+      if (statusFilter) p.set('status', statusFilter)
+      if (categoryFilter) p.set('categoryId', categoryFilter)
       if (sortBy !== 'date' || sortDir !== 'desc') { p.set('sortBy', sortBy); p.set('sortDir', sortDir) }
       return api.get(`/treasury/${selectedClientId}/movements?${p.toString()}`)
     },
     enabled: !!selectedClientId && accounts.length > 0,
     placeholderData: keepPreviousData,
+  })
+
+  const { data: categories = [] } = useQuery<Category[]>({
+    queryKey: ['categories-all', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/categories`),
+    enabled: !!selectedClientId,
   })
 
   const createAccount = useMutation({
@@ -184,6 +220,51 @@ export default function BanksPage() {
     },
   })
 
+  const updateAccount = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: { name?: string; minBalance?: number | null } }) =>
+      api.patch(`/treasury/${selectedClientId}/bank-accounts/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      setEditAccountId(null)
+      toast.success('Conta atualizada.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const updateDescription = useMutation({
+    mutationFn: ({ id, description }: { id: string; description: string }) =>
+      api.patch(`/treasury/${selectedClientId}/movements/${id}`, { description }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      setEditDescId(null)
+      toast.success('Descrição atualizada.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const classify = useMutation({
+    mutationFn: ({ id, categoryId }: { id: string; categoryId: string }) =>
+      api.patch(`/treasury/${selectedClientId}/movements/${id}/classify`, { categoryId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      setClassifyMovementId(null)
+      toast.success('Movimento classificado.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const deduplicateMutation = useMutation({
+    mutationFn: () => api.post<{ removed: number }>(`/treasury/${selectedClientId}/movements/deduplicate`, selectedAccount ? { bankAccountId: selectedAccount } : {}),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      if (data.removed > 0) toast.success(`${data.removed} movimento(s) duplicado(s) removido(s).`)
+      else toast.info('Nenhum duplicado encontrado.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
   const createMovement = useMutation({
     mutationFn: (data: { bankAccountId: string; date: string; amount: number; description: string }) =>
       api.post(`/treasury/${selectedClientId}/movements`, data),
@@ -193,7 +274,9 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       setShowNewMovement(false)
       setNewMovement({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' })
+      toast.success('Movimento criado.')
     },
+    onError: (e) => toast.error((e as Error).message),
   })
 
   const uploadStatementMutation = useMutation({
@@ -218,17 +301,19 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['movements'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       setImportResult(data)
+      toast.success(`${data.imported} movimento(s) importado(s).`)
     },
+    onError: (e) => toast.error((e as Error).message),
   })
 
   const selectedAccountData = accounts.find((a) => a.id === selectedAccount)
   const totalBalance = selectedAccountData ? selectedAccountData.currentBalance : accounts.reduce((s, a) => s + a.currentBalance, 0)
   const confirmDeleteAccount = accounts.find((a) => a.id === confirmDeleteId)
 
-  const hasFilters = !!(search || dateFrom || dateTo || direction)
+  const hasFilters = !!(search || dateFrom || dateTo || direction || statusFilter || categoryFilter)
 
   function clearFilters() {
-    setSearch(''); setDateFrom(''); setDateTo(''); setDirection(''); setPage(1)
+    setSearch(''); setDateFrom(''); setDateTo(''); setDirection(''); setStatusFilter(''); setCategoryFilter(''); setPage(1)
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -248,6 +333,29 @@ export default function BanksPage() {
       : <ArrowUp className="inline w-3 h-3 ml-1 text-primary-500" />
   }
 
+  async function exportCsv() {
+    const token = localStorage.getItem('access_token')
+    const p = new URLSearchParams()
+    if (selectedAccount) p.set('bankAccountId', selectedAccount)
+    if (search) p.set('search', search)
+    if (dateFrom) p.set('dateFrom', dateFrom)
+    if (dateTo) p.set('dateTo', dateTo)
+    if (direction) p.set('direction', direction)
+    if (statusFilter) p.set('status', statusFilter)
+    if (categoryFilter) p.set('categoryId', categoryFilter)
+    const res = await fetch(`/api/v1/treasury/${selectedClientId}/movements/export.csv?${p}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'movimentos.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -260,7 +368,7 @@ export default function BanksPage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           title={selectedAccountData ? 'Saldo da Conta' : 'Saldo total da(s) Conta(s)'}
           value={formatCurrency(totalBalance)}
@@ -279,6 +387,13 @@ export default function BanksPage() {
           value={formatCurrency(summary?.totalExpense ?? 0)}
           valueColor="red"
           subtitle={`${summary?.countExpense ?? 0} movimentos`}
+        />
+        <KpiCard
+          title="Resultado do período"
+          value={formatCurrency((summary?.totalIncome ?? 0) - (summary?.totalExpense ?? 0))}
+          valueColor="auto"
+          rawValue={(summary?.totalIncome ?? 0) - (summary?.totalExpense ?? 0)}
+          subtitle={hasFilters ? 'Filtros aplicados' : 'Todos os movimentos'}
         />
       </div>
 
@@ -308,14 +423,24 @@ export default function BanksPage() {
                 onKeyDown={(e) => e.key === 'Enter' && (setSelectedAccount(selectedAccount === acc.id ? '' : acc.id), setPage(1))}
                 className={`snap-start flex-none w-72 card p-4 text-left transition-all cursor-pointer relative group ${selectedAccount === acc.id ? 'border-primary-400 bg-primary-50' : 'hover:border-gray-300'}`}
               >
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(acc.id) }}
-                  className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                  title="Remover conta"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setEditAccountId(acc.id); setEditAccountForm({ name: acc.name, minBalance: acc.minBalance != null ? String(acc.minBalance) : '' }) }}
+                    className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-all"
+                    title="Editar conta"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(acc.id) }}
+                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                    title="Remover conta"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
                 <div className="flex items-center gap-3 mb-3">
                   <BankAvatar bankName={acc.bankName} />
                   <div className="min-w-0 pr-6">
@@ -394,6 +519,48 @@ export default function BanksPage() {
               ))}
             </div>
 
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+              {([
+                { v: '' as const, label: 'Todos', statusKey: '' },
+                { v: 'UNCLASSIFIED' as const, label: 'Não classif.', statusKey: 'UNCLASSIFIED' },
+                { v: 'CLASSIFIED' as const, label: 'Classificado', statusKey: 'CLASSIFIED' },
+                { v: 'RECONCILED' as const, label: 'Reconciliado', statusKey: 'RECONCILED' },
+              ]).map(({ v, label, statusKey }, i) => {
+                const count = statusKey ? summary?.byStatus[statusKey] : undefined
+                return (
+                  <button
+                    key={v}
+                    onClick={() => { setStatusFilter(v); setPage(1) }}
+                    className={`px-3 py-1.5 transition-colors flex items-center gap-1 ${statusFilter === v ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-50'}${i > 0 ? ' border-l border-gray-200' : ''}`}
+                  >
+                    {label}
+                    {count != null && count > 0 && (
+                      <span className={`text-xs rounded-full px-1.5 py-0.5 leading-none font-bold ${statusFilter === v ? 'bg-white/20 text-white' : statusKey === 'UNCLASSIFIED' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+
+            <select
+              className="input w-auto text-xs py-1.5"
+              value={categoryFilter}
+              onChange={(e) => { setCategoryFilter(e.target.value); setPage(1) }}
+            >
+              <option value="">Todas as cat.</option>
+              {['REVENUE', 'EXPENSE'].map((type) => {
+                const cats = categories.filter((c) => c.type === type && !c.isArchived)
+                if (!cats.length) return null
+                return (
+                  <optgroup key={type} label={type === 'REVENUE' ? 'Receita' : 'Despesa'}>
+                    {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </optgroup>
+                )
+              })}
+            </select>
+
             {hasFilters && (
               <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                 <X className="w-3.5 h-3.5" /> Limpar
@@ -401,6 +568,17 @@ export default function BanksPage() {
             )}
 
             <span className="text-sm text-gray-400 ml-auto">{movements?.total ?? 0} movimentos</span>
+            <button
+              onClick={() => { if (confirm('Remover movimentos duplicados? Esta ação não pode ser desfeita.')) deduplicateMutation.mutate() }}
+              title="Remover duplicados"
+              disabled={deduplicateMutation.isPending}
+              className="text-gray-400 hover:text-amber-600 p-1.5 hover:bg-amber-50 rounded-lg transition-colors"
+            >
+              <FilterX className="w-4 h-4" />
+            </button>
+            <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
+              <Download className="w-4 h-4" />
+            </button>
           </div>
 
           <div className="overflow-x-auto">
@@ -422,6 +600,7 @@ export default function BanksPage() {
                   >
                     Descrição <SortIcon field="description" />
                   </th>
+                  <th className="text-left px-3 py-3 whitespace-nowrap">Categoria</th>
                   <th
                     onClick={() => toggleSort('amount')}
                     className="text-right px-1 py-3 cursor-pointer hover:text-gray-700 select-none whitespace-nowrap"
@@ -455,29 +634,87 @@ export default function BanksPage() {
                       <span className="truncate block">{m.description}</span>
                       {m.source === 'MANUAL' && <span className="text-xs text-gray-400">manual</span>}
                     </td>
+                    <td className="px-3 py-3 relative">
+                      {m.status === 'RECONCILED' ? (
+                        <span className="text-xs text-gray-400 flex items-center gap-1">
+                          {m.category && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: m.category.color }} />}
+                          {m.category?.name ?? '—'}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setClassifyMovementId(classifyMovementId === m.id ? null : m.id)}
+                          className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border transition-colors ${
+                            m.category
+                              ? 'border-transparent hover:border-gray-200 hover:bg-gray-50'
+                              : 'border-dashed border-gray-300 text-gray-400 hover:border-primary-400 hover:text-primary-600 hover:bg-primary-50'
+                          }`}
+                          title={m.category ? 'Alterar categoria' : 'Classificar movimento'}
+                        >
+                          {m.category
+                            ? <><span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: m.category.color }} />{m.category.name}</>
+                            : <><Tag className="w-3 h-3" />N/C</>
+                          }
+                        </button>
+                      )}
+                      {classifyMovementId === m.id && (
+                        <div onMouseDown={(e) => e.stopPropagation()} className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg py-1 w-52 max-h-64 overflow-y-auto">
+                          {['REVENUE', 'EXPENSE'].map((type) => {
+                            const cats = categories.filter((c) => c.type === type && !c.isArchived)
+                            if (!cats.length) return null
+                            return (
+                              <div key={type}>
+                                <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase">{type === 'REVENUE' ? 'Receita' : 'Despesa'}</div>
+                                {cats.map((c) => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => classify.mutate({ id: m.id, categoryId: c.id })}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                                  >
+                                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
+                                    {c.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </td>
                     <td className={`px-1 py-3 text-right font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Number(m.amount))}
                     </td>
                     <td className="px-5 py-3 text-right text-gray-500 whitespace-nowrap">
                       {m.balanceAfter != null ? formatCurrency(Number(m.balanceAfter)) : '—'}
                     </td>
-                    <td className="px-2 py-3 w-8">
-                      {m.source === 'MANUAL' && (
+                    <td className="px-2 py-3">
+                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
-                          onClick={() => setConfirmDeleteMovementId(m.id)}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-all"
-                          title="Remover movimento"
+                          onClick={() => { setEditDescId(m.id); setEditDesc(m.description) }}
+                          className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-all"
+                          title="Editar descrição"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <PenLine className="w-3.5 h-3.5" />
                         </button>
-                      )}
+                        {m.source === 'MANUAL' && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteMovementId(m.id)}
+                            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                            title="Remover movimento"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
                 {movements?.items.length === 0 && (
                   <tr>
-                    <td colSpan={selectedAccount ? 5 : 6} className="px-5 py-10 text-center text-sm text-gray-400">
+                    <td colSpan={selectedAccount ? 6 : 7} className="px-5 py-10 text-center text-sm text-gray-400">
                       {hasFilters ? 'Nenhum movimento corresponde aos filtros.' : 'Sem movimentos.'}
                     </td>
                   </tr>
@@ -485,15 +722,43 @@ export default function BanksPage() {
               </tbody>
             </table>
             {movements && movements.total > movements.limit && (
-              <div className="flex justify-center gap-2 px-5 py-4 border-t border-gray-100">
-                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="btn-secondary px-3 py-1 text-xs">‹ Anterior</button>
-                <span className="text-xs text-gray-500 self-center">Pág. {page} de {Math.ceil(movements.total / movements.limit)}</span>
-                <button onClick={() => setPage(p => p + 1)} disabled={page * movements.limit >= movements.total} className="btn-secondary px-3 py-1 text-xs">Seguinte ›</button>
+              <div className="flex justify-between items-center px-5 py-3 border-t border-gray-100">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="btn-secondary text-xs py-1">‹ Anterior</button>
+                <span className="text-xs text-gray-500">
+                  {(page - 1) * movements.limit + 1}–{Math.min(page * movements.limit, movements.total)} de {movements.total}
+                </span>
+                <button onClick={() => setPage(p => p + 1)} disabled={page * movements.limit >= movements.total} className="btn-secondary text-xs py-1">Seguinte ›</button>
               </div>
             )}
           </div>
         </div>
       )}
+
+      {/* Edit movement description modal */}
+      <Modal open={!!editDescId} onClose={() => setEditDescId(null)} title="Editar Descrição">
+        <div className="space-y-4">
+          <div>
+            <label className="label">Descrição</label>
+            <input
+              className="input"
+              value={editDesc}
+              onChange={(e) => setEditDesc(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter' && editDescId && editDesc.trim()) updateDescription.mutate({ id: editDescId, description: editDesc }) }}
+            />
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button onClick={() => setEditDescId(null)} className="btn-secondary flex-1">Cancelar</button>
+            <button
+              onClick={() => { if (editDescId) updateDescription.mutate({ id: editDescId, description: editDesc }) }}
+              className="btn-primary flex-1"
+              disabled={updateDescription.isPending || !editDesc.trim()}
+            >
+              {updateDescription.isPending ? 'A guardar...' : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Delete movement confirmation modal */}
       <Modal open={!!confirmDeleteMovementId} onClose={() => { setConfirmDeleteMovementId(null); deleteMovement.reset() }} title="Remover movimento">
@@ -511,6 +776,46 @@ export default function BanksPage() {
               disabled={deleteMovement.isPending}
             >
               {deleteMovement.isPending ? 'A remover...' : 'Remover'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Edit account modal */}
+      <Modal open={!!editAccountId} onClose={() => setEditAccountId(null)} title="Editar Conta Bancária">
+        <div className="space-y-4">
+          <div>
+            <label className="label">Nome</label>
+            <input className="input" value={editAccountForm.name} onChange={(e) => setEditAccountForm({ ...editAccountForm, name: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Saldo mínimo (€)</label>
+            <input
+              type="number"
+              step="0.01"
+              className="input w-40"
+              value={editAccountForm.minBalance}
+              onChange={(e) => setEditAccountForm({ ...editAccountForm, minBalance: e.target.value })}
+              placeholder="Sem mínimo"
+            />
+            <p className="text-xs text-gray-400 mt-1">Deixe vazio para desativar o alerta de saldo baixo.</p>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button onClick={() => setEditAccountId(null)} className="btn-secondary flex-1">Cancelar</button>
+            <button
+              onClick={() => {
+                if (editAccountId) updateAccount.mutate({
+                  id: editAccountId,
+                  data: {
+                    name: editAccountForm.name,
+                    minBalance: editAccountForm.minBalance !== '' ? parseFloat(editAccountForm.minBalance) : null,
+                  },
+                })
+              }}
+              className="btn-primary flex-1"
+              disabled={updateAccount.isPending || !editAccountForm.name}
+            >
+              {updateAccount.isPending ? 'A guardar...' : 'Guardar'}
             </button>
           </div>
         </div>

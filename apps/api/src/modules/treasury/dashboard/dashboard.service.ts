@@ -1,8 +1,13 @@
 import type { PrismaClient } from '@prisma/client'
 import { resolveAccountBalance } from '../bank-accounts/balance.js'
+import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
 
 export class TreasuryDashboardService {
-  constructor(private prisma: PrismaClient) {}
+  private recurrencesSvc: TreasuryRecurrencesService
+
+  constructor(private prisma: PrismaClient) {
+    this.recurrencesSvc = new TreasuryRecurrencesService(prisma)
+  }
 
   private async fetchAccountBalances(clientId: string): Promise<Map<string, number>> {
     const accounts = await this.prisma.treasuryBankAccount.findMany({
@@ -36,10 +41,10 @@ export class TreasuryDashboardService {
     const now = new Date()
     const from = new Date(Date.now() - days * 86400000)
 
-    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements] = await Promise.all([
+    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements, settings] = await Promise.all([
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
-        select: { id: true, name: true, bankName: true, currency: true, ibanLast4: true },
+        select: { id: true, name: true, bankName: true, currency: true, ibanLast4: true, minBalance: true },
       }),
       this.fetchAccountBalances(clientId),
       this.prisma.treasuryReceivable.aggregate({
@@ -63,6 +68,7 @@ export class TreasuryDashboardService {
         orderBy: { date: 'desc' },
         take: 10,
       }),
+      this.prisma.treasurySettings.findUnique({ where: { clientId } }),
     ])
 
     const totalBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
@@ -91,29 +97,63 @@ export class TreasuryDashboardService {
       where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
     })
 
-    // Top entities
-    const topReceivableEntities = await this.prisma.treasuryReceivable.groupBy({
-      by: ['entityName'],
-      where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
-      _sum: { pendingAmount: true },
-      orderBy: { _sum: { pendingAmount: 'desc' } },
-      take: 5,
-    })
-    const topPayableEntities = await this.prisma.treasuryPayable.groupBy({
-      by: ['entityName'],
-      where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
-      _sum: { pendingAmount: true },
-      orderBy: { _sum: { pendingAmount: 'desc' } },
-      take: 5,
-    })
+    const nextDays = new Date(Date.now() + 14 * 86400000)
+
+    // Top entities and upcoming dues
+    const [topReceivableEntities, topPayableEntities, upcomingReceivables, upcomingPayables] = await Promise.all([
+      this.prisma.treasuryReceivable.groupBy({
+        by: ['entityName'],
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        _sum: { pendingAmount: true },
+        orderBy: { _sum: { pendingAmount: 'desc' } },
+        take: 5,
+      }),
+      this.prisma.treasuryPayable.groupBy({
+        by: ['entityName'],
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        _sum: { pendingAmount: true },
+        orderBy: { _sum: { pendingAmount: 'desc' } },
+        take: 5,
+      }),
+      this.prisma.treasuryReceivable.findMany({
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lte: nextDays } },
+        select: { entityName: true, reference: true, dueDate: true, pendingAmount: true },
+        orderBy: { dueDate: 'asc' },
+        take: 5,
+      }),
+      this.prisma.treasuryPayable.findMany({
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lte: nextDays } },
+        select: { entityName: true, reference: true, dueDate: true, pendingAmount: true },
+        orderBy: { dueDate: 'asc' },
+        take: 5,
+      }),
+    ])
 
     return {
       kpis: { totalBalance, cashAvailable, toReceive, toPay, countReceivablesOpen: receivableKpis._count, countPayablesOpen: payableKpis._count, overdueReceivables, overduePayables },
-      bankAccounts: bankAccounts.map((a) => ({ ...a, currentBalance: balances.get(a.id) ?? 0 })),
+      bankAccounts: bankAccounts.map((a) => {
+        const currentBalance = balances.get(a.id) ?? 0
+        const lowBalanceEnabled = settings?.lowBalanceEnabled ?? true
+        const lowBalanceWarning = lowBalanceEnabled && a.minBalance != null && currentBalance < Number(a.minBalance)
+        return { ...a, currentBalance, lowBalanceWarning }
+      }),
       chartData: Array.from(dailyMap.entries()).map(([date, data]) => ({ date, ...data })),
-      recentMovements,
+      recentMovements: recentMovements.map((m) => ({
+        id: m.id,
+        date: m.date.toISOString(),
+        amount: Number(m.amount),
+        description: m.description,
+        counterpartName: m.counterpartName ?? null,
+        status: m.status,
+        bankAccount: m.bankAccount ? { name: m.bankAccount.name } : null,
+        category: m.category ? { name: m.category.name, color: m.category.color } : null,
+      })),
       topClients: topReceivableEntities.map((e) => ({ name: e.entityName, amount: Number(e._sum.pendingAmount ?? 0) })),
       topSuppliers: topPayableEntities.map((e) => ({ name: e.entityName, amount: Number(e._sum.pendingAmount ?? 0) })),
+      upcomingDues: {
+        receivables: upcomingReceivables.map((r) => ({ entityName: r.entityName, reference: r.reference, dueDate: r.dueDate.toISOString().slice(0, 10), pendingAmount: Number(r.pendingAmount) })),
+        payables: upcomingPayables.map((p) => ({ entityName: p.entityName, reference: p.reference, dueDate: p.dueDate.toISOString().slice(0, 10), pendingAmount: Number(p.pendingAmount) })),
+      },
     }
   }
 
@@ -142,7 +182,38 @@ export class TreasuryDashboardService {
     return { year, months }
   }
 
+  async getCategoryBreakdown(clientId: string, days = 30) {
+    const from = new Date(Date.now() - days * 86400000)
+    const movements = await this.prisma.treasuryBankMovement.findMany({
+      where: { clientId, deletedAt: null, date: { gte: from }, categoryId: { not: null } },
+      include: { category: { select: { name: true, color: true } } },
+    })
+    const revenueMap = new Map<string, { name: string; color: string; amount: number }>()
+    const expenseMap = new Map<string, { name: string; color: string; amount: number }>()
+    for (const m of movements) {
+      if (!m.category || !m.categoryId) continue
+      const amount = Number(m.amount)
+      if (amount > 0) {
+        const entry = revenueMap.get(m.categoryId) ?? { name: m.category.name, color: m.category.color ?? '#6b7280', amount: 0 }
+        entry.amount += amount
+        revenueMap.set(m.categoryId, entry)
+      } else if (amount < 0) {
+        const entry = expenseMap.get(m.categoryId) ?? { name: m.category.name, color: m.category.color ?? '#6b7280', amount: 0 }
+        entry.amount += Math.abs(amount)
+        expenseMap.set(m.categoryId, entry)
+      }
+    }
+    const sortDesc = (a: { amount: number }, b: { amount: number }) => b.amount - a.amount
+    return {
+      revenue: Array.from(revenueMap.values()).sort(sortDesc).slice(0, 8),
+      expense: Array.from(expenseMap.values()).sort(sortDesc).slice(0, 8),
+    }
+  }
+
   async getForecast(clientId: string, days = 90) {
+    // Ensure recurring entries are generated up to the forecast horizon before computing
+    await this.recurrencesSvc.processForClient(clientId, days + 30)
+
     const now = new Date()
     const [balances, bankAccounts] = await Promise.all([
       this.fetchAccountBalances(clientId),

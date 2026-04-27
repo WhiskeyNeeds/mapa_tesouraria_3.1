@@ -9,9 +9,10 @@ interface KpiCardProps {
   trend?: { value: string; positive: boolean }
   icon?: React.ReactNode
   className?: string
+  onClick?: () => void
 }
 
-export default function KpiCard({ title, value, valueColor = 'default', rawValue, subtitle, trend, icon, className }: KpiCardProps) {
+export default function KpiCard({ title, value, valueColor = 'default', rawValue, subtitle, trend, icon, className, onClick }: KpiCardProps) {
   const colorClass =
     valueColor === 'green' ? 'text-green-600' :
     valueColor === 'red'   ? 'text-red-600' :
@@ -19,7 +20,7 @@ export default function KpiCard({ title, value, valueColor = 'default', rawValue
     'text-gray-900'
 
   return (
-    <div className={cn('card p-5', className)}>
+    <div className={cn('card p-5', className)} onClick={onClick} role={onClick ? 'button' : undefined}>
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm text-gray-500 font-medium">{title}</p>

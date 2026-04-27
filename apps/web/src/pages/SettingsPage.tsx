@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
+import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
-import { Plus, Tag, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical } from 'lucide-react'
+import { Plus, Tag, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
 
-interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean }
+interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean; usageCount: number }
 interface Settings {
   reconciliationDryRun: boolean; autoMatchEnabled: boolean; autoMatchThreshold: number
   syncIntervalMinutes: number; lowBalanceEnabled: boolean; importFileRetentionDays: number
@@ -38,13 +39,17 @@ interface ToconlineConfig {
 export default function SettingsPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
+  const toast = useToast()
   const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline'>('categories')
   const [showNewCat, setShowNewCat] = useState(false)
   const [newCat, setNewCat] = useState({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' })
+  const [editCat, setEditCat] = useState<Category | null>(null)
+  const [editCatForm, setEditCatForm] = useState({ name: '', color: '#6b7280', launchToc: false })
+  const [showArchived, setShowArchived] = useState(false)
 
   const { data: categories = [] } = useQuery<Category[]>({
-    queryKey: ['categories', selectedClientId],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/categories`),
+    queryKey: ['categories', selectedClientId, showArchived],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/categories${showArchived ? '?includeArchived=true' : ''}`),
     enabled: !!selectedClientId,
   })
 
@@ -67,6 +72,8 @@ export default function SettingsPage() {
   const emptyRule = { matchField: 'description', matchOp: 'contains', matchValue: '', amountMin: '', amountMax: '', direction: '', categoryId: '', priority: 50 }
   const [showNewRule, setShowNewRule] = useState(false)
   const [newRule, setNewRule] = useState(emptyRule)
+  const [editRule, setEditRule] = useState<ClassificationRule | null>(null)
+  const [editRuleForm, setEditRuleForm] = useState(emptyRule)
   const [applyResult, setApplyResult] = useState<{ classified: number; skipped: number } | null>(null)
 
   const createRule = useMutation({
@@ -93,6 +100,18 @@ export default function SettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['classification-rules'] }),
   })
 
+  const updateRule = useMutation({
+    mutationFn: (form: typeof emptyRule) => api.patch(`/treasury/${selectedClientId}/classification-rules/${editRule?.id}`, {
+      matchField: form.matchField, matchOp: form.matchOp, matchValue: form.matchValue, categoryId: form.categoryId,
+      priority: Number(form.priority),
+      ...(form.direction ? { direction: form.direction } : { direction: null }),
+      ...(form.amountMin !== '' ? { amountMin: Number(form.amountMin) } : { amountMin: null }),
+      ...(form.amountMax !== '' ? { amountMax: Number(form.amountMax) } : { amountMax: null }),
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['classification-rules'] }); setEditRule(null) },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
   const deleteRule = useMutation({
     mutationFn: (id: string) => api.delete(`/treasury/${selectedClientId}/classification-rules/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['classification-rules'] }),
@@ -108,7 +127,54 @@ export default function SettingsPage() {
 
   const createCat = useMutation({
     mutationFn: () => api.post(`/treasury/${selectedClientId}/categories`, newCat),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['categories'] }); setShowNewCat(false); setNewCat({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' }) },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      setShowNewCat(false)
+      setNewCat({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' })
+      toast.success('Categoria criada.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const updateCat = useMutation({
+    mutationFn: () => api.patch(`/treasury/${selectedClientId}/categories/${editCat?.id}`, editCatForm),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['categories-all'] })
+      setEditCat(null)
+      toast.success('Categoria atualizada.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const deleteCat = useMutation({
+    mutationFn: (id: string) => api.delete(`/treasury/${selectedClientId}/categories/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['categories-all'] })
+      toast.success('Categoria eliminada.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const archiveCat = useMutation({
+    mutationFn: (id: string) => api.patch(`/treasury/${selectedClientId}/categories/${id}`, { isArchived: true }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['categories-all'] })
+      toast.success('Categoria arquivada.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const restoreCat = useMutation({
+    mutationFn: (id: string) => api.patch(`/treasury/${selectedClientId}/categories/${id}`, { isArchived: false }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['categories'] })
+      qc.invalidateQueries({ queryKey: ['categories-all'] })
+      toast.success('Categoria restaurada.')
+    },
+    onError: (e) => toast.error((e as Error).message),
   })
 
   const updateSettings = useMutation({
@@ -213,7 +279,15 @@ export default function SettingsPage() {
       {tab === 'categories' && (
         <div className="space-y-4">
           <div className="flex justify-between items-center">
-            <p className="text-sm text-gray-500">Gerencie as categorias de tesouraria e o flag "Lança no TOConline".</p>
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-gray-500">Gerencie as categorias de tesouraria e o flag "Lança no TOConline".</p>
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className={`text-xs font-medium px-2 py-1 rounded-lg border transition-colors ${showArchived ? 'bg-gray-100 border-gray-300 text-gray-700' : 'border-gray-200 text-gray-400 hover:text-gray-600'}`}
+              >
+                {showArchived ? 'Ocultar arquivadas' : 'Mostrar arquivadas'}
+              </button>
+            </div>
             <button onClick={() => setShowNewCat(true)} className="btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />Nova Categoria</button>
           </div>
 
@@ -223,17 +297,54 @@ export default function SettingsPage() {
                 <div className="px-5 py-3 bg-gray-50">
                   <span className="text-xs font-semibold text-gray-500 uppercase">{type === 'REVENUE' ? 'Receita' : 'Despesa'}</span>
                 </div>
-                {categories.filter((c) => c.type === type && !c.isArchived).map((c) => (
-                  <div key={c.id} className="flex items-center gap-4 px-5 py-3">
+                {categories.filter((c) => c.type === type && (showArchived ? true : !c.isArchived)).map((c) => (
+                  <div key={c.id} className={`flex items-center gap-4 px-5 py-3 group ${c.isArchived ? 'opacity-50' : ''}`}>
                     <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
                     <div className="flex-1">
                       <span className="text-sm font-medium text-gray-900">{c.name}</span>
+                      {c.isArchived && <span className="ml-2 text-xs text-gray-400">arquivada</span>}
                     </div>
                     <div className="flex items-center gap-2">
+                      {c.usageCount > 0 && (
+                        <span className="text-xs text-gray-400">{c.usageCount} mov.</span>
+                      )}
                       <Tag className="w-3.5 h-3.5 text-gray-400" />
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${c.launchToc ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
                         {c.launchToc ? 'Lança TOConline' : 'Apenas local'}
                       </span>
+                      {c.isArchived ? (
+                        <button
+                          onClick={() => restoreCat.mutate(c.id)}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-green-600 rounded transition-all"
+                          title="Restaurar"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => { setEditCat(c); setEditCatForm({ name: c.name, color: c.color, launchToc: c.launchToc }) }}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-600 rounded transition-all"
+                            title="Editar"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => { if (confirm(`Arquivar categoria "${c.name}"?`)) archiveCat.mutate(c.id) }}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-amber-600 rounded transition-all"
+                            title="Arquivar"
+                          >
+                            <Archive className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => { if (confirm(`Eliminar permanentemente "${c.name}"? Esta ação não pode ser desfeita.`)) deleteCat.mutate(c.id) }}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-600 rounded transition-all"
+                            title="Eliminar"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -260,6 +371,29 @@ export default function SettingsPage() {
                 <button onClick={() => setShowNewCat(false)} className="btn-secondary flex-1">Cancelar</button>
                 <button onClick={() => createCat.mutate()} className="btn-primary flex-1" disabled={createCat.isPending || !newCat.name}>
                   {createCat.isPending ? 'A guardar...' : 'Criar'}
+                </button>
+              </div>
+            </div>
+          </Modal>
+
+          <Modal open={!!editCat} onClose={() => setEditCat(null)} title="Editar Categoria">
+            <div className="space-y-4">
+              <div><label className="label">Nome</label><input className="input" value={editCatForm.name} onChange={(e) => setEditCatForm({ ...editCatForm, name: e.target.value })} /></div>
+              <div className="flex items-center gap-4">
+                <div>
+                  <label className="label">Cor</label>
+                  <input type="color" className="h-9 w-20 rounded cursor-pointer border border-gray-300" value={editCatForm.color} onChange={(e) => setEditCatForm({ ...editCatForm, color: e.target.value })} />
+                </div>
+                <div className="w-4 h-4 rounded-full mt-5 flex-shrink-0" style={{ backgroundColor: editCatForm.color }} />
+              </div>
+              <div className="flex items-center gap-3">
+                <input type="checkbox" id="editLaunchToc" checked={editCatForm.launchToc} onChange={(e) => setEditCatForm({ ...editCatForm, launchToc: e.target.checked })} className="rounded" />
+                <label htmlFor="editLaunchToc" className="text-sm text-gray-700">Lança no TOConline</label>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setEditCat(null)} className="btn-secondary flex-1">Cancelar</button>
+                <button onClick={() => updateCat.mutate()} className="btn-primary flex-1" disabled={updateCat.isPending || !editCatForm.name}>
+                  {updateCat.isPending ? 'A guardar...' : 'Guardar'}
                 </button>
               </div>
             </div>
@@ -328,6 +462,13 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => { setEditRule(rule); setEditRuleForm({ matchField: rule.matchField, matchOp: rule.matchOp, matchValue: rule.matchValue, amountMin: rule.amountMin != null ? String(rule.amountMin) : '', amountMax: rule.amountMax != null ? String(rule.amountMax) : '', direction: rule.direction ?? '', categoryId: rule.categoryId, priority: rule.priority }) }}
+                    className="p-1.5 text-gray-400 hover:text-primary-600 transition-colors rounded"
+                    title="Editar"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
                   <button
                     onClick={() => toggleRule.mutate({ id: rule.id, isActive: !rule.isActive })}
                     className={`text-xs px-2 py-1 rounded-full font-medium border transition-colors ${rule.isActive ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100' : 'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100'}`}
@@ -416,6 +557,80 @@ export default function SettingsPage() {
                 </button>
               </div>
               {createRule.isError && <p className="text-sm text-red-600">{(createRule.error as Error).message}</p>}
+            </div>
+          </Modal>
+
+          <Modal open={!!editRule} onClose={() => setEditRule(null)} title="Editar Regra de Classificação">
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Campo</label>
+                  <select className="input" value={editRuleForm.matchField} onChange={(e) => setEditRuleForm({ ...editRuleForm, matchField: e.target.value })}>
+                    {MATCH_FIELDS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Operação</label>
+                  <select className="input" value={editRuleForm.matchOp} onChange={(e) => setEditRuleForm({ ...editRuleForm, matchOp: e.target.value })}>
+                    {MATCH_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Valor a pesquisar</label>
+                <input className="input font-mono text-sm" placeholder={editRuleForm.matchOp === 'regex' ? '^TRF.*' : 'ex: PAGAMENTO TSU'} value={editRuleForm.matchValue} onChange={(e) => setEditRuleForm({ ...editRuleForm, matchValue: e.target.value })} />
+              </div>
+
+              <div>
+                <label className="label">Categoria de destino</label>
+                <select className="input" value={editRuleForm.categoryId} onChange={(e) => setEditRuleForm({ ...editRuleForm, categoryId: e.target.value })}>
+                  <option value="">Selecionar...</option>
+                  {['REVENUE', 'EXPENSE'].map((type) => (
+                    <optgroup key={type} label={type === 'REVENUE' ? 'Receita' : 'Despesa'}>
+                      {categories.filter(c => c.type === type && !c.isArchived).map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="label">Direção</label>
+                  <select className="input" value={editRuleForm.direction} onChange={(e) => setEditRuleForm({ ...editRuleForm, direction: e.target.value })}>
+                    <option value="">Qualquer</option>
+                    <option value="REVENUE">Entrada</option>
+                    <option value="EXPENSE">Saída</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Valor mín. (€)</label>
+                  <input type="number" className="input" placeholder="0" value={editRuleForm.amountMin} onChange={(e) => setEditRuleForm({ ...editRuleForm, amountMin: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Valor máx. (€)</label>
+                  <input type="number" className="input" placeholder="∞" value={editRuleForm.amountMax} onChange={(e) => setEditRuleForm({ ...editRuleForm, amountMax: e.target.value })} />
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Prioridade <span className="text-gray-400 font-normal">(menor = maior prioridade)</span></label>
+                <input type="number" className="input w-24" min={1} max={999} value={editRuleForm.priority} onChange={(e) => setEditRuleForm({ ...editRuleForm, priority: Number(e.target.value) })} />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setEditRule(null)} className="btn-secondary flex-1">Cancelar</button>
+                <button
+                  onClick={() => updateRule.mutate(editRuleForm)}
+                  className="btn-primary flex-1"
+                  disabled={updateRule.isPending || !editRuleForm.matchValue || !editRuleForm.categoryId}
+                >
+                  {updateRule.isPending ? 'A guardar...' : 'Guardar alterações'}
+                </button>
+              </div>
+              {updateRule.isError && <p className="text-sm text-red-600">{(updateRule.error as Error).message}</p>}
             </div>
           </Modal>
         </div>

@@ -22,4 +22,10 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
     const { days } = request.query as { days?: string }
     return reply.send(await svc.getForecast(clientId, days ? parseInt(days) : 90))
   })
+
+  fastify.get('/treasury/:clientId/dashboard/category-breakdown', { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { days } = request.query as { days?: string }
+    return reply.send(await svc.getCategoryBreakdown(clientId, days ? parseInt(days) : 30))
+  })
 }

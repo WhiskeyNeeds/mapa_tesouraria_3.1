@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatCurrency(value: number, currency = 'EUR'): string {
-  const parts = new Intl.NumberFormat('pt-PT', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: 'always' }).formatToParts(Number(value))
+  const parts = new Intl.NumberFormat('pt-PT', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true }).formatToParts(Number(value))
   return parts.map((p) => (p.type === 'group' ? '\u202F' : p.value)).join('')
 }
 
@@ -19,6 +19,17 @@ export function formatDate(date: string | Date, fmt = 'dd/MM/yyyy'): string {
 
 export function formatDatetime(date: string | Date): string {
   return formatDate(date, 'dd/MM/yyyy HH:mm')
+}
+
+export function formatDateRelative(date: string | Date): string {
+  const d = typeof date === 'string' ? parseISO(date) : date
+  const now = new Date()
+  const diffMs = now.getTime() - d.getTime()
+  const diffDays = Math.floor(diffMs / 86400000)
+  if (diffDays === 0) return 'hoje'
+  if (diffDays === 1) return 'ontem'
+  if (diffDays <= 6) return `há ${diffDays} dias`
+  return format(d, 'dd/MM/yyyy', { locale: pt })
 }
 
 export function tocStatusLabel(status: unknown): string {

@@ -28,10 +28,12 @@ export function parseNovoBanco(buffer: Buffer): ParsedMovement[] {
       const dateIdx = norm.findIndex((c) => c.includes('data lancamento') || c.includes('data movimento'))
       if (dateIdx === -1) continue
 
-      // Identify amount columns
+      // Identify amount columns — exclude 'data valor' from amount detection
       debitCol  = norm.findIndex((c) => c.includes('debito') || c === 'debito')
       creditCol = norm.findIndex((c) => c.includes('credito') || c === 'credito')
-      amountCol = norm.findIndex((c) => c.includes('montante') || c.includes('valor') || c.includes('importe'))
+      const montanteIdx = norm.findIndex((c) => c.includes('montante') || c.includes('importe'))
+      const valorIdx = norm.findIndex((c) => !c.includes('data') && c.includes('valor'))
+      amountCol = montanteIdx !== -1 ? montanteIdx : valorIdx
       balanceCol = norm.findIndex((c) => c.includes('saldo'))
 
       dataStarted = true

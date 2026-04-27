@@ -6,6 +6,7 @@ interface AuthContextValue {
   isLoading: boolean
   selectedClientId: string | null
   setSelectedClientId: (id: string) => void
+  clearSelectedClientId: () => void
   logout: () => void
   refetch: () => void
 }
@@ -32,6 +33,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSelectedClientIdState(id)
   }
 
+  const clearSelectedClientId = () => {
+    localStorage.removeItem('selected_client_id')
+    setSelectedClientIdState(null)
+  }
+
   const logout = useCallback(() => {
     clearTokens()
     setUser(null)
@@ -40,7 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, selectedClientId, setSelectedClientId, logout, refetch }}>
+    <AuthContext.Provider value={{ user, isLoading, selectedClientId, setSelectedClientId, clearSelectedClientId, logout, refetch }}>
       {children}
     </AuthContext.Provider>
   )

@@ -1,28 +1,37 @@
-import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, Prisma } from '@prisma/client'
+import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
+import { computeNextDate } from '../recurrences/utils.js'
 
 export class TreasuryPayablesService {
   constructor(private prisma: PrismaClient) {}
 
   async list(clientId: string, filters: {
-    status?: TreasuryDocStatus
+    status?: TreasuryDocStatus | TreasuryDocStatus[]
     origin?: TreasuryDocOrigin
     categoryId?: string
     entityName?: string
     dueDateFrom?: string
     dueDateTo?: string
     isRecurrent?: boolean
+    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'
+    sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
   }) {
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, isRecurrent } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, isRecurrent, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const statusFilter = Array.isArray(status)
+      ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
+      : status ? { status } : {}
     const where: Prisma.TreasuryPayableWhereInput = {
       clientId,
       deletedAt: null,
-      ...(status ? { status } : {}),
+      ...statusFilter,
       ...(origin ? { origin } : {}),
       ...(categoryId ? { categoryId } : {}),
-      ...(entityName ? { entityName: { contains: entityName, mode: 'insensitive' } } : {}),
+      ...(entityName ? { OR: [
+        { entityName: { contains: entityName, mode: 'insensitive' } },
+        { reference: { contains: entityName, mode: 'insensitive' } },
+      ] } : {}),
       ...(dueDateFrom || dueDateTo ? {
         dueDate: {
           ...(dueDateFrom ? { gte: new Date(dueDateFrom) } : {}),
@@ -37,7 +46,7 @@ export class TreasuryPayablesService {
       this.prisma.treasuryPayable.findMany({
         where,
         include: { category: { select: { id: true, name: true, color: true, launchToc: true } } },
-        orderBy: { dueDate: 'asc' },
+        orderBy: { [sortBy]: sortDir },
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -68,16 +77,33 @@ export class TreasuryPayablesService {
     totalAmount: number
     currency?: string
     recurrenceId?: string
+    recurrence?: { frequency: TreasuryRecurrenceFrequency; endDate?: string; occurrences?: number }
   }) {
     const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
     if (!category) throw httpError(404, 'Category not found')
 
-    // Dedup by TOConline document ID
     if (data.tocPurchasesDocId) {
       const existing = await this.prisma.treasuryPayable.findFirst({
         where: { clientId, tocPurchasesDocId: data.tocPurchasesDocId, deletedAt: null },
       })
       if (existing) throw httpError(409, `Documento ${data.reference} já importado`)
+    }
+
+    let recurrenceId = data.recurrenceId
+
+    if (data.recurrence) {
+      const firstDueDate = new Date(data.dueDate)
+      const rec = await this.prisma.treasuryRecurrence.create({
+        data: {
+          clientId,
+          frequency: data.recurrence.frequency,
+          startDate: firstDueDate,
+          endDate: data.recurrence.endDate ? new Date(data.recurrence.endDate) : null,
+          occurrences: data.recurrence.occurrences ?? null,
+          nextRunAt: computeNextDate(firstDueDate, data.recurrence.frequency),
+        },
+      })
+      recurrenceId = rec.id
     }
 
     return this.prisma.treasuryPayable.create({
@@ -97,7 +123,7 @@ export class TreasuryPayablesService {
         tocPurchasesDocId: data.tocPurchasesDocId,
         reference: data.reference,
         description: data.description,
-        recurrenceId: data.recurrenceId,
+        recurrenceId,
       },
     })
   }
@@ -107,6 +133,30 @@ export class TreasuryPayablesService {
     return this.prisma.treasuryPayable.update({
       where: { id },
       data: { ...data, ...(data.dueDate ? { dueDate: new Date(data.dueDate) } : {}) },
+    })
+  }
+
+  async settle(clientId: string, id: string) {
+    const item = await this.getById(clientId, id)
+    if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
+    if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided payable')
+    return this.prisma.treasuryPayable.update({
+      where: { id },
+      data: { status: 'SETTLED', pendingAmount: 0, paidAmount: item.totalAmount },
+    })
+  }
+
+  async partialPayment(clientId: string, id: string, amount: number) {
+    const item = await this.getById(clientId, id)
+    if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
+    if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
+    if (amount <= 0) throw httpError(400, 'Amount must be positive')
+    const newPaid = Number(item.paidAmount ?? 0) + amount
+    const newPending = Math.max(0, Number(item.totalAmount) - newPaid)
+    const newStatus = newPending < 0.005 ? 'SETTLED' : 'PARTIAL'
+    return this.prisma.treasuryPayable.update({
+      where: { id },
+      data: { paidAmount: newPaid, pendingAmount: newPending, status: newStatus },
     })
   }
 
@@ -138,11 +188,20 @@ export class TreasuryPayablesService {
       }),
     ])
 
+    const buckets = await Promise.all([30, 60, 90].map(async (days, i) => {
+      const from = i === 0 ? new Date(0) : new Date(Date.now() - days * 86400000)
+      const to = new Date(Date.now() - (i === 0 ? 0 : (i === 1 ? 31 : (i === 2 ? 61 : 91))) * 86400000)
+      return this.prisma.treasuryPayable.count({
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now, gte: from, lte: to } },
+      })
+    }))
+
     return {
       totalPending: Number(totalOpen._sum.pendingAmount ?? 0),
       countOpen: totalOpen._count,
       countOverdue: overdue,
       paidThisMonth: Number(paidMonth._sum.totalAmount ?? 0),
+      aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
     }
   }
 }

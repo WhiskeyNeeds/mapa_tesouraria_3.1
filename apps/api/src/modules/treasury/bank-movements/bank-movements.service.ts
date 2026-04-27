@@ -79,6 +79,7 @@ export class TreasuryBankMovementsService {
   async list(clientId: string, filters: {
     bankAccountId?: string
     status?: TreasuryMovementStatus
+    categoryId?: string
     dateFrom?: string
     dateTo?: string
     search?: string
@@ -88,13 +89,14 @@ export class TreasuryBankMovementsService {
     page?: number
     limit?: number
   }) {
-    const { page = 1, limit = 50, bankAccountId, status, dateFrom, dateTo, search, direction, sortBy = 'date', sortDir = 'desc' } = filters
+    const { page = 1, limit = 50, bankAccountId, status, categoryId, dateFrom, dateTo, search, direction, sortBy = 'date', sortDir = 'desc' } = filters
     const where: Prisma.TreasuryBankMovementWhereInput = {
       clientId,
       deletedAt: null,
       bankAccount: { deletedAt: null, isActive: true },
       ...(bankAccountId ? { bankAccountId } : {}),
       ...(status ? { status } : {}),
+      ...(categoryId ? { categoryId } : {}),
       ...(direction === 'income' ? { amount: { gt: 0 } } : direction === 'expense' ? { amount: { lt: 0 } } : {}),
       ...(search ? { normalizedDesc: { contains: this.normalize(search) } } : {}),
       ...(dateFrom || dateTo ? {
@@ -383,6 +385,13 @@ export class TreasuryBankMovementsService {
     return { removed: toRemove.length }
   }
 
+  async updateDescription(clientId: string, id: string, description: string) {
+    const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId, deletedAt: null } })
+    if (!mov) throw httpError(404, 'Movement not found')
+    if (!description.trim()) throw httpError(400, 'Description cannot be empty')
+    return this.prisma.treasuryBankMovement.update({ where: { id }, data: { description: description.trim() } })
+  }
+
   async classify(clientId: string, id: string, categoryId: string) {
     const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId, deletedAt: null } })
     if (!mov) throw httpError(404, 'Movement not found')
@@ -449,8 +458,32 @@ export class TreasuryBankMovementsService {
     return { classified, skipped: unclassified.length - classified }
   }
 
-  async getSummary(clientId: string, bankAccountId?: string) {
-    const where: Prisma.TreasuryBankMovementWhereInput = { clientId, deletedAt: null, bankAccount: { deletedAt: null, isActive: true }, ...(bankAccountId ? { bankAccountId } : {}) }
+  async getSummary(clientId: string, filters: {
+    bankAccountId?: string
+    dateFrom?: string
+    dateTo?: string
+    search?: string
+    direction?: 'income' | 'expense'
+    status?: TreasuryMovementStatus
+    categoryId?: string
+  } = {}) {
+    const { bankAccountId, dateFrom, dateTo, search, direction, status, categoryId } = filters
+    const where: Prisma.TreasuryBankMovementWhereInput = {
+      clientId,
+      deletedAt: null,
+      bankAccount: { deletedAt: null, isActive: true },
+      ...(bankAccountId ? { bankAccountId } : {}),
+      ...(status ? { status } : {}),
+      ...(categoryId ? { categoryId } : {}),
+      ...(direction === 'income' ? { amount: { gt: 0 } } : direction === 'expense' ? { amount: { lt: 0 } } : {}),
+      ...(search ? { normalizedDesc: { contains: this.normalize(search) } } : {}),
+      ...(dateFrom || dateTo ? {
+        date: {
+          ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+          ...(dateTo ? { lte: new Date(dateTo + 'T23:59:59.999Z') } : {}),
+        },
+      } : {}),
+    }
     const [incomeAgg, expenseAgg, byStatus] = await Promise.all([
       this.prisma.treasuryBankMovement.aggregate({ where: { ...where, amount: { gt: 0 } }, _sum: { amount: true }, _count: true }),
       this.prisma.treasuryBankMovement.aggregate({ where: { ...where, amount: { lt: 0 } }, _sum: { amount: true }, _count: true }),

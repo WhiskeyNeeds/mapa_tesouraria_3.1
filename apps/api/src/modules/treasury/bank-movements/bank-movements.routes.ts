@@ -16,6 +16,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const q = request.query as {
       bankAccountId?: string
       status?: TreasuryMovementStatus
+      categoryId?: string
       dateFrom?: string
       dateTo?: string
       search?: string
@@ -34,8 +35,40 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
 
   fastify.get(`${prefix}/summary`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const { bankAccountId } = request.query as { bankAccountId?: string }
-    return reply.send(await svc.getSummary(clientId, bankAccountId))
+    const q = request.query as {
+      bankAccountId?: string; dateFrom?: string; dateTo?: string; search?: string
+      direction?: 'income' | 'expense'; status?: TreasuryMovementStatus; categoryId?: string
+    }
+    return reply.send(await svc.getSummary(clientId, q))
+  })
+
+  fastify.get(`${prefix}/export.csv`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const q = request.query as {
+      bankAccountId?: string; status?: TreasuryMovementStatus; categoryId?: string; dateFrom?: string
+      dateTo?: string; search?: string; direction?: 'income' | 'expense'
+    }
+    const { items } = await svc.list(clientId, { ...q, limit: 10000, page: 1 })
+
+    const header = 'Data;Conta;Descrição;Categoria;Valor;Saldo\n'
+    const rows = items.map((m) => {
+      const dateStr = m.date instanceof Date ? m.date.toISOString().slice(0, 10) : String(m.date)
+      const ba = (m as unknown as { bankAccount?: { name: string } }).bankAccount
+      const cat = (m as unknown as { category?: { name: string } }).category
+      return [
+        dateStr,
+        ba?.name ?? '',
+        `"${(m.description ?? '').replace(/"/g, '""')}"`,
+        cat?.name ?? '',
+        Number(m.amount).toFixed(2).replace('.', ','),
+        m.balanceAfter != null ? Number(m.balanceAfter).toFixed(2).replace('.', ',') : '',
+      ].join(';')
+    }).join('\n')
+
+    reply
+      .header('Content-Type', 'text/csv; charset=utf-8')
+      .header('Content-Disposition', 'attachment; filename="movimentos.csv"')
+    return reply.send('﻿' + header + rows)
   })
 
   // Manual movement creation
@@ -188,6 +221,13 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const { bankAccountId } = request.body as { bankAccountId?: string }
     const result = await svc.deduplicateMovements(clientId, bankAccountId)
     return reply.send(result)
+  })
+
+  fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const { description } = request.body as { description?: string }
+    if (description === undefined) throw httpError(400, 'description is required')
+    return reply.send(await svc.updateDescription(clientId, id, description))
   })
 
   fastify.patch(`${prefix}/:id/classify`, { onRequest: auth }, async (request, reply) => {

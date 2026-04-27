@@ -63,6 +63,10 @@ export class TreasuryReconciliationsService {
     })
     if (movements.length !== data.movementIds.length) throw httpError(404, 'One or more movements not found')
 
+    const hasPositive = movements.some((m) => Number(m.amount) > 0)
+    const hasNegative = movements.some((m) => Number(m.amount) < 0)
+    if (hasPositive && hasNegative) throw httpError(400, 'Não é possível misturar movimentos de entrada e saída na mesma reconciliação')
+
     const totalMovements = movements.reduce((sum, m) => sum + Number(m.amount), 0)
     const direction: TreasuryCategoryType = totalMovements >= 0 ? 'REVENUE' : 'EXPENSE'
 

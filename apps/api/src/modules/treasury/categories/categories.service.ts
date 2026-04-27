@@ -4,11 +4,20 @@ import { httpError } from '../../../lib/errors.js'
 export class TreasuryCategoriesService {
   constructor(private prisma: PrismaClient) {}
 
-  async list(clientId: string, type?: TreasuryCategoryType) {
-    return this.prisma.treasuryCategory.findMany({
-      where: { clientId, deletedAt: null, isArchived: false, ...(type ? { type } : {}) },
-      orderBy: { name: 'asc' },
-    })
+  async list(clientId: string, type?: TreasuryCategoryType, includeArchived = false) {
+    const [categories, movementCounts] = await Promise.all([
+      this.prisma.treasuryCategory.findMany({
+        where: { clientId, deletedAt: null, ...(includeArchived ? {} : { isArchived: false }), ...(type ? { type } : {}) },
+        orderBy: [{ isArchived: 'asc' }, { name: 'asc' }],
+      }),
+      this.prisma.treasuryBankMovement.groupBy({
+        by: ['categoryId'],
+        where: { clientId, deletedAt: null, categoryId: { not: null } },
+        _count: { id: true },
+      }),
+    ])
+    const countMap = new Map(movementCounts.map((c) => [c.categoryId, c._count.id]))
+    return categories.map((cat) => ({ ...cat, usageCount: countMap.get(cat.id) ?? 0 }))
   }
 
   async getById(clientId: string, id: string) {

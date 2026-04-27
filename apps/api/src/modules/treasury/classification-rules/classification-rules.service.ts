@@ -6,9 +6,9 @@ export class TreasuryClassificationRulesService {
 
   async list(clientId: string) {
     return this.prisma.treasuryClassificationRule.findMany({
-      where: { clientId, isActive: true },
+      where: { clientId },
       include: { category: { select: { id: true, name: true, color: true } } },
-      orderBy: { priority: 'asc' },
+      orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
     })
   }
 

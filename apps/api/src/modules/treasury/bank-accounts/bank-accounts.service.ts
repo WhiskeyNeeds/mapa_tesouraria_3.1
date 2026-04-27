@@ -121,7 +121,7 @@ export class TreasuryBankAccountsService {
   async update(clientId: string, id: string, data: Partial<{
     name: string
     bankName: string
-    minBalance: number
+    minBalance: number | null
     isActive: boolean
   }>) {
     await this.getById(clientId, id)

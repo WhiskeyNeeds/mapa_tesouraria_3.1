@@ -2,11 +2,12 @@ import { Outlet, NavLink } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   LayoutDashboard, Building2, RefreshCw, ArrowDownToLine,
-  ArrowUpFromLine, TrendingUp, Settings, LogOut, Menu, X, ChevronDown, AlertTriangle,
+  ArrowUpFromLine, TrendingUp, Settings, LogOut, Menu, X, ChevronDown, AlertTriangle, SlidersHorizontal,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import CompanyManagerModal from '@/components/ui/CompanyManagerModal'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
@@ -24,6 +25,7 @@ export default function Layout() {
   const { user, selectedClientId, setSelectedClientId, logout } = useAuth()
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [clientDropdown, setClientDropdown] = useState(false)
+  const [showManager, setShowManager] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -50,6 +52,19 @@ export default function Layout() {
     refetchInterval: 5 * 60 * 1000,
   })
 
+  const { data: receivablesKpis } = useQuery<{ countOverdue: number }>({
+    queryKey: ['receivables-kpis', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/receivables/kpis`),
+    enabled: !!selectedClientId,
+    staleTime: 60_000,
+  })
+  const { data: payablesKpis } = useQuery<{ countOverdue: number }>({
+    queryKey: ['payables-kpis', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/payables/kpis`),
+    enabled: !!selectedClientId,
+    staleTime: 60_000,
+  })
+
   const selectedClient = clients.find((c) => c.id === selectedClientId)
 
   return (
@@ -64,21 +79,33 @@ export default function Layout() {
 
         {/* Nav */}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {nav.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.exact}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  isActive ? 'bg-primary-50 text-primary-700' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-                }`
-              }
-            >
-              <item.icon className="w-5 h-5 flex-shrink-0" />
-              {sidebarOpen && <span>{item.label}</span>}
-            </NavLink>
-          ))}
+          {nav.map((item) => {
+            const overdueCount =
+              item.to === '/contas-a-receber' ? receivablesKpis?.countOverdue
+              : item.to === '/contas-a-pagar' ? payablesKpis?.countOverdue
+              : undefined
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.exact}
+                title={!sidebarOpen ? item.label : undefined}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isActive ? 'bg-primary-50 text-primary-700' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                  }`
+                }
+              >
+                <item.icon className="w-5 h-5 flex-shrink-0" />
+                {sidebarOpen && <span className="flex-1">{item.label}</span>}
+                {sidebarOpen && !!overdueCount && (
+                  <span className="ml-auto text-xs bg-red-100 text-red-700 rounded-full px-1.5 py-0.5 font-semibold min-w-[1.25rem] text-center leading-none">
+                    {overdueCount}
+                  </span>
+                )}
+              </NavLink>
+            )
+          })}
         </nav>
 
         {/* Bottom */}
@@ -108,24 +135,40 @@ export default function Layout() {
               className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-gray-900 bg-gray-100 px-3 py-1.5 rounded-lg"
             >
               <Building2 className="w-4 h-4 text-gray-400" />
-              <span>{selectedClient?.name ?? 'Selecionar empresa'}</span>
-              <ChevronDown className="w-4 h-4 text-gray-400" />
+              <span className="max-w-[180px] truncate">{selectedClient?.name ?? 'Selecionar empresa'}</span>
+              <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />
             </button>
             {clientDropdown && (
-              <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[220px]">
-                {clients.map((c) => (
+              <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[240px]">
+                <div className="py-1">
+                  {clients.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => { setSelectedClientId(c.id); setClientDropdown(false) }}
+                      className={`w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2 ${c.id === selectedClientId ? 'text-primary-600 font-medium' : 'text-gray-700'}`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate">{c.name}</div>
+                        <div className="text-xs text-gray-400">NIF {c.nif}</div>
+                      </div>
+                      {c.id === selectedClientId && <span className="w-1.5 h-1.5 rounded-full bg-primary-500 flex-shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-gray-100 py-1">
                   <button
-                    key={c.id}
-                    onClick={() => { setSelectedClientId(c.id); setClientDropdown(false) }}
-                    className={`w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 ${c.id === selectedClientId ? 'text-primary-600 font-medium' : 'text-gray-700'}`}
+                    onClick={() => { setClientDropdown(false); setShowManager(true) }}
+                    className="w-full text-left px-4 py-2.5 text-sm text-gray-600 hover:bg-gray-50 flex items-center gap-2"
                   >
-                    <div>{c.name}</div>
-                    <div className="text-xs text-gray-400">NIF {c.nif}</div>
+                    <SlidersHorizontal className="w-4 h-4 text-gray-400" />
+                    Gerir empresas...
                   </button>
-                ))}
+                </div>
               </div>
             )}
           </div>
+
+          <CompanyManagerModal open={showManager} onClose={() => setShowManager(false)} />
 
           <div className="ml-auto flex items-center gap-3">
             {tocConfig?.status === 'ERROR' && (
