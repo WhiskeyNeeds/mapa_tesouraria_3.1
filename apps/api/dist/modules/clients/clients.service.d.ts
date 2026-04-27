@@ -15,8 +15,8 @@ export declare class ClientsService {
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         nif: string;
         companyType: import(".prisma/client").$Enums.BalancoTipoEmpresa;
@@ -34,8 +34,8 @@ export declare class ClientsService {
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         nif: string;
         companyType: import(".prisma/client").$Enums.BalancoTipoEmpresa;
@@ -53,8 +53,8 @@ export declare class ClientsService {
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         nif: string;
         companyType: import(".prisma/client").$Enums.BalancoTipoEmpresa;
@@ -67,8 +67,8 @@ export declare class ClientsService {
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         nif: string;
         companyType: import(".prisma/client").$Enums.BalancoTipoEmpresa;
@@ -80,8 +80,8 @@ export declare class ClientsService {
     getUsers(clientId: string): Promise<({
         user: {
             name: string;
-            email: string;
             id: string;
+            email: string;
             isActive: boolean;
             userRoles: ({
                 role: {

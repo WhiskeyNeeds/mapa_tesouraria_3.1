@@ -4,11 +4,20 @@ export class TreasuryCategoriesService {
     constructor(prisma) {
         this.prisma = prisma;
     }
-    async list(clientId, type) {
-        return this.prisma.treasuryCategory.findMany({
-            where: { clientId, deletedAt: null, isArchived: false, ...(type ? { type } : {}) },
-            orderBy: { name: 'asc' },
-        });
+    async list(clientId, type, includeArchived = false) {
+        const [categories, movementCounts] = await Promise.all([
+            this.prisma.treasuryCategory.findMany({
+                where: { clientId, deletedAt: null, ...(includeArchived ? {} : { isArchived: false }), ...(type ? { type } : {}) },
+                orderBy: [{ isArchived: 'asc' }, { name: 'asc' }],
+            }),
+            this.prisma.treasuryBankMovement.groupBy({
+                by: ['categoryId'],
+                where: { clientId, deletedAt: null, categoryId: { not: null } },
+                _count: { id: true },
+            }),
+        ]);
+        const countMap = new Map(movementCounts.map((c) => [c.categoryId, c._count.id]));
+        return categories.map((cat) => ({ ...cat, usageCount: countMap.get(cat.id) ?? 0 }));
     }
     async getById(clientId, id) {
         const cat = await this.prisma.treasuryCategory.findFirst({ where: { id, clientId, deletedAt: null } });

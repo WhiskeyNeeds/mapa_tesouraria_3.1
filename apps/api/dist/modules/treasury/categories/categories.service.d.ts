@@ -2,7 +2,8 @@ import type { PrismaClient, TreasuryCategoryType } from '@prisma/client';
 export declare class TreasuryCategoriesService {
     private prisma;
     constructor(prisma: PrismaClient);
-    list(clientId: string, type?: TreasuryCategoryType): Promise<{
+    list(clientId: string, type?: TreasuryCategoryType, includeArchived?: boolean): Promise<{
+        usageCount: number;
         type: import(".prisma/client").$Enums.TreasuryCategoryType;
         clientId: string;
         createdAt: Date;

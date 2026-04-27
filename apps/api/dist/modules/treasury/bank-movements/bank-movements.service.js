@@ -9,30 +9,37 @@ export class TreasuryBankMovementsService {
         this.prisma = prisma;
         this.bankSvc = new TreasuryBankAccountsService(prisma);
     }
-    async recalcManualBalances(bankAccountId) {
-        const account = await this.prisma.treasuryBankAccount.findUnique({
-            where: { id: bankAccountId },
-            select: { openingBalance: true },
-        });
-        const movs = await this.prisma.treasuryBankMovement.findMany({
-            where: { bankAccountId, deletedAt: null },
-            select: { id: true, amount: true, balanceAfter: true },
-            orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
-        });
-        let running = Number(account?.openingBalance ?? 0);
-        const updates = [];
-        for (const mov of movs) {
-            if (mov.balanceAfter !== null) {
-                running = Number(mov.balanceAfter);
+    findMatchingRule(rules, amount, normalizedDesc, counterpartName, counterpartIban) {
+        for (const rule of rules) {
+            if (rule.direction && ((rule.direction === 'REVENUE') !== (amount > 0)))
+                continue;
+            if (rule.amountMin && Math.abs(amount) < Number(rule.amountMin))
+                continue;
+            if (rule.amountMax && Math.abs(amount) > Number(rule.amountMax))
+                continue;
+            const field = rule.matchField === 'description' ? normalizedDesc
+                : rule.matchField === 'counterpart' ? this.normalize(counterpartName ?? '')
+                    : this.normalize(counterpartIban ?? '');
+            const value = this.normalize(rule.matchValue);
+            let matches = false;
+            if (rule.matchOp === 'contains')
+                matches = field.includes(value);
+            else if (rule.matchOp === 'equals')
+                matches = field === value;
+            else if (rule.matchOp === 'startsWith')
+                matches = field.startsWith(value);
+            else if (rule.matchOp === 'regex') {
+                try {
+                    matches = new RegExp(rule.matchValue, 'i').test(field);
+                }
+                catch {
+                    matches = false;
+                }
             }
-            else {
-                running = running + Number(mov.amount);
-                updates.push({ id: mov.id, balanceAfter: running });
-            }
+            if (matches)
+                return { categoryId: rule.categoryId, ruleId: rule.id };
         }
-        if (updates.length > 0) {
-            await Promise.all(updates.map(({ id, balanceAfter }) => this.prisma.treasuryBankMovement.update({ where: { id }, data: { balanceAfter } })));
-        }
+        return { categoryId: undefined, ruleId: undefined };
     }
     buildDedupeHash(clientId, bankAccountId, date, amount, desc, balanceAfter) {
         const balance = balanceAfter != null ? String(balanceAfter) : '';
@@ -55,13 +62,14 @@ export class TreasuryBankMovementsService {
         return `${bankAccountId}|${this.toDateKey(date)}|${this.toAmountKey(amount)}|${normalizedDesc}|${this.toBalanceKey(balanceAfter)}`;
     }
     async list(clientId, filters) {
-        const { page = 1, limit = 50, bankAccountId, status, dateFrom, dateTo, search, direction, sortBy = 'date', sortDir = 'desc' } = filters;
+        const { page = 1, limit = 50, bankAccountId, status, categoryId, dateFrom, dateTo, search, direction, sortBy = 'date', sortDir = 'desc' } = filters;
         const where = {
             clientId,
             deletedAt: null,
             bankAccount: { deletedAt: null, isActive: true },
             ...(bankAccountId ? { bankAccountId } : {}),
             ...(status ? { status } : {}),
+            ...(categoryId ? { categoryId } : {}),
             ...(direction === 'income' ? { amount: { gt: 0 } } : direction === 'expense' ? { amount: { lt: 0 } } : {}),
             ...(search ? { normalizedDesc: { contains: this.normalize(search) } } : {}),
             ...(dateFrom || dateTo ? {
@@ -75,7 +83,7 @@ export class TreasuryBankMovementsService {
         const orderBy = (sortBy === 'amount' ? [{ amount: dir }, { date: 'desc' }] :
             sortBy === 'description' ? [{ description: dir }, { date: 'desc' }] :
                 sortBy === 'balanceAfter' ? [{ balanceAfter: dir }, { date: 'desc' }] :
-                    [{ date: dir }, { source: 'asc' }, { createdAt: 'asc' }]);
+                    [{ date: dir }, { source: 'desc' }, { createdAt: 'asc' }]);
         const [total, items] = await Promise.all([
             this.prisma.treasuryBankMovement.count({ where }),
             this.prisma.treasuryBankMovement.findMany({
@@ -89,6 +97,18 @@ export class TreasuryBankMovementsService {
                 take: limit,
             }),
         ]);
+        // Guarantee MANUAL movements appear last within each calendar day
+        if (sortBy === 'date' || !sortBy) {
+            items.sort((a, b) => {
+                const dayA = a.date.toISOString().slice(0, 10);
+                const dayB = b.date.toISOString().slice(0, 10);
+                if (dayA !== dayB)
+                    return dir === 'desc' ? dayB.localeCompare(dayA) : dayA.localeCompare(dayB);
+                const aM = a.source === 'MANUAL' ? 1 : 0;
+                const bM = b.source === 'MANUAL' ? 1 : 0;
+                return bM - aM;
+            });
+        }
         return { total, page, limit, items };
     }
     async importMovements(clientId, bankAccountId, movements, source, userId, importId) {
@@ -143,35 +163,12 @@ export class TreasuryBankMovementsService {
             orderBy: { priority: 'asc' },
         });
         for (const { mov, dedupeHash, normalizedDesc } of toInsert) {
-            // Find matching rule
-            let categoryId;
-            for (const rule of rules) {
-                if (rule.direction && ((rule.direction === 'REVENUE') !== (mov.amount > 0)))
-                    continue;
-                if (rule.amountMin && Math.abs(mov.amount) < Number(rule.amountMin))
-                    continue;
-                if (rule.amountMax && Math.abs(mov.amount) > Number(rule.amountMax))
-                    continue;
-                const field = rule.matchField === 'description' ? normalizedDesc
-                    : rule.matchField === 'counterpart' ? (mov.counterpartName ?? '')
-                        : (mov.counterpartIban ?? '');
-                let matches = false;
-                if (rule.matchOp === 'contains')
-                    matches = field.includes(this.normalize(rule.matchValue));
-                else if (rule.matchOp === 'equals')
-                    matches = field === this.normalize(rule.matchValue);
-                else if (rule.matchOp === 'startsWith')
-                    matches = field.startsWith(this.normalize(rule.matchValue));
-                else if (rule.matchOp === 'regex')
-                    matches = new RegExp(rule.matchValue, 'i').test(field);
-                if (matches) {
-                    categoryId = rule.categoryId;
-                    await this.prisma.treasuryClassificationRule.update({
-                        where: { id: rule.id },
-                        data: { hits: { increment: 1 }, lastHitAt: new Date() },
-                    });
-                    break;
-                }
+            const { categoryId, ruleId } = this.findMatchingRule(rules, mov.amount, normalizedDesc, mov.counterpartName, mov.counterpartIban);
+            if (ruleId) {
+                await this.prisma.treasuryClassificationRule.update({
+                    where: { id: ruleId },
+                    data: { hits: { increment: 1 }, lastHitAt: new Date() },
+                });
             }
             try {
                 await this.prisma.treasuryBankMovement.create({
@@ -209,12 +206,24 @@ export class TreasuryBankMovementsService {
         await this.bankSvc.recalcBalance(bankAccountId);
         return { imported, duplicated, failed: failed.length };
     }
-    async createManual(clientId, data) {
+    async createManual(clientId, data, userId) {
         const account = await this.prisma.treasuryBankAccount.findFirst({
             where: { id: data.bankAccountId, clientId, deletedAt: null, isActive: true },
         });
         if (!account)
             throw httpError(404, 'Bank account not found');
+        const normalizedDesc = this.normalize(data.description);
+        const rules = await this.prisma.treasuryClassificationRule.findMany({
+            where: { clientId, isActive: true },
+            orderBy: { priority: 'asc' },
+        });
+        const { categoryId, ruleId } = this.findMatchingRule(rules, data.amount, normalizedDesc);
+        if (ruleId) {
+            await this.prisma.treasuryClassificationRule.update({
+                where: { id: ruleId },
+                data: { hits: { increment: 1 }, lastHitAt: new Date() },
+            });
+        }
         const movement = await this.prisma.treasuryBankMovement.create({
             data: {
                 clientId,
@@ -222,13 +231,21 @@ export class TreasuryBankMovementsService {
                 date: new Date(data.date),
                 amount: data.amount,
                 description: data.description.trim(),
-                normalizedDesc: this.normalize(data.description),
+                normalizedDesc,
                 source: 'MANUAL',
                 dedupeHash: randomUUID(),
-                status: 'UNCLASSIFIED',
+                status: categoryId ? 'CLASSIFIED' : 'UNCLASSIFIED',
+                categoryId: categoryId ?? null,
             },
         });
-        await this.recalcManualBalances(data.bankAccountId);
+        if (userId) {
+            await this.prisma.treasuryAuditLog.create({
+                data: {
+                    clientId, userId, action: 'movement.create', entityType: 'BankMovement', entityId: movement.id,
+                    payload: { bankAccountId: data.bankAccountId, date: data.date, amount: data.amount }
+                },
+            });
+        }
         await this.bankSvc.recalcBalance(data.bankAccountId);
         return movement;
     }
@@ -266,6 +283,14 @@ export class TreasuryBankMovementsService {
         }
         return { removed: toRemove.length };
     }
+    async updateDescription(clientId, id, description) {
+        const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId, deletedAt: null } });
+        if (!mov)
+            throw httpError(404, 'Movement not found');
+        if (!description.trim())
+            throw httpError(400, 'Description cannot be empty');
+        return this.prisma.treasuryBankMovement.update({ where: { id }, data: { description: description.trim() } });
+    }
     async classify(clientId, id, categoryId) {
         const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId, deletedAt: null } });
         if (!mov)
@@ -273,18 +298,127 @@ export class TreasuryBankMovementsService {
         const newStatus = mov.status === 'UNCLASSIFIED' ? 'CLASSIFIED' : mov.status;
         return this.prisma.treasuryBankMovement.update({ where: { id }, data: { categoryId, status: newStatus } });
     }
-    async delete(clientId, id) {
+    async delete(clientId, id, userId) {
         const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId } });
         if (!mov)
             throw httpError(404, 'Movement not found');
         if (mov.status === 'RECONCILED')
             throw httpError(409, 'Cannot delete a reconciled movement');
         await this.prisma.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } });
-        await this.recalcManualBalances(mov.bankAccountId);
+        if (userId) {
+            await this.prisma.treasuryAuditLog.create({
+                data: {
+                    clientId, userId, action: 'movement.delete', entityType: 'BankMovement', entityId: id,
+                    payload: { bankAccountId: mov.bankAccountId, amount: Number(mov.amount), source: mov.source }
+                },
+            });
+        }
         await this.bankSvc.recalcBalance(mov.bankAccountId);
     }
-    async getSummary(clientId, bankAccountId) {
-        const where = { clientId, deletedAt: null, bankAccount: { deletedAt: null, isActive: true }, ...(bankAccountId ? { bankAccountId } : {}) };
+    async applyRulesToExisting(clientId) {
+        const [rules, unclassified] = await Promise.all([
+            this.prisma.treasuryClassificationRule.findMany({
+                where: { clientId, isActive: true },
+                orderBy: { priority: 'asc' },
+            }),
+            this.prisma.treasuryBankMovement.findMany({
+                where: { clientId, deletedAt: null, status: 'UNCLASSIFIED' },
+                select: { id: true, amount: true, normalizedDesc: true, counterpartName: true, counterpartIban: true },
+            }),
+        ]);
+        if (rules.length === 0 || unclassified.length === 0)
+            return { classified: 0, skipped: unclassified.length };
+        let classified = 0;
+        const ruleHits = new Map();
+        for (const mov of unclassified) {
+            const { categoryId, ruleId } = this.findMatchingRule(rules, Number(mov.amount), mov.normalizedDesc ?? '', mov.counterpartName, mov.counterpartIban);
+            if (categoryId && ruleId) {
+                await this.prisma.treasuryBankMovement.update({
+                    where: { id: mov.id },
+                    data: { categoryId, status: 'CLASSIFIED' },
+                });
+                ruleHits.set(ruleId, (ruleHits.get(ruleId) ?? 0) + 1);
+                classified++;
+            }
+        }
+        // Batch update rule hit counts
+        await Promise.all(Array.from(ruleHits.entries()).map(([id, count]) => this.prisma.treasuryClassificationRule.update({
+            where: { id },
+            data: { hits: { increment: count }, lastHitAt: new Date() },
+        })));
+        return { classified, skipped: unclassified.length - classified };
+    }
+    async checkBalanceConsistency(clientId, bankAccountId) {
+        const accounts = bankAccountId
+            ? await this.prisma.treasuryBankAccount.findMany({ where: { id: bankAccountId, clientId, deletedAt: null }, select: { id: true, name: true } })
+            : await this.prisma.treasuryBankAccount.findMany({ where: { clientId, deletedAt: null, isActive: true }, select: { id: true, name: true } });
+        const results = [];
+        for (const account of accounts) {
+            const movements = await this.prisma.treasuryBankMovement.findMany({
+                where: { bankAccountId: account.id, deletedAt: null, balanceAfter: { not: null } },
+                select: { id: true, date: true, amount: true, balanceAfter: true, description: true, source: true, createdAt: true },
+                orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+            });
+            // Build consistency chain in business order:
+            // imported movements first (oldest -> newest), then MANUAL movements at end of day.
+            movements.sort((a, b) => {
+                const dayA = a.date.toISOString().slice(0, 10);
+                const dayB = b.date.toISOString().slice(0, 10);
+                if (dayA !== dayB)
+                    return dayA.localeCompare(dayB);
+                const aManual = a.source === 'MANUAL';
+                const bManual = b.source === 'MANUAL';
+                if (aManual !== bManual)
+                    return aManual ? 1 : -1;
+                if (!aManual && !bManual) {
+                    return b.createdAt.getTime() - a.createdAt.getTime();
+                }
+                return a.createdAt.getTime() - b.createdAt.getTime();
+            });
+            const gaps = [];
+            for (let i = 1; i < movements.length; i++) {
+                const prev = movements[i - 1];
+                const curr = movements[i];
+                const calculated = Math.round((Number(prev.balanceAfter) + Number(curr.amount)) * 100) / 100;
+                const actual = Math.round(Number(curr.balanceAfter) * 100) / 100;
+                const gap = Math.round((calculated - actual) * 100) / 100;
+                if (Math.abs(gap) > 0.01) {
+                    gaps.push({
+                        afterMovementId: prev.id,
+                        afterDate: prev.date.toISOString().slice(0, 10),
+                        afterDescription: prev.description ?? '',
+                        afterBalance: Number(prev.balanceAfter),
+                        beforeMovementId: curr.id,
+                        beforeDate: curr.date.toISOString().slice(0, 10),
+                        beforeDescription: curr.description ?? '',
+                        expectedBalance: calculated,
+                        actualBalance: actual,
+                        gap,
+                    });
+                }
+            }
+            results.push({ accountId: account.id, accountName: account.name, gaps });
+        }
+        return results;
+    }
+    async getSummary(clientId, filters = {}) {
+        const { bankAccountId, dateFrom, dateTo, search, direction, status, categoryId } = filters;
+        const where = {
+            clientId,
+            deletedAt: null,
+            bankAccount: { deletedAt: null, isActive: true },
+            ...(bankAccountId ? { bankAccountId } : {}),
+            ...(status ? { status } : {}),
+            ...(categoryId ? { categoryId } : {}),
+            ...(direction === 'income' ? { amount: { gt: 0 } } : direction === 'expense' ? { amount: { lt: 0 } } : {}),
+            ...(search ? { normalizedDesc: { contains: this.normalize(search) } } : {}),
+            ...(dateFrom || dateTo ? {
+                date: {
+                    ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+                    ...(dateTo ? { lte: new Date(dateTo + 'T23:59:59.999Z') } : {}),
+                },
+            } : {}),
+        };
         const [incomeAgg, expenseAgg, byStatus] = await Promise.all([
             this.prisma.treasuryBankMovement.aggregate({ where: { ...where, amount: { gt: 0 } }, _sum: { amount: true }, _count: true }),
             this.prisma.treasuryBankMovement.aggregate({ where: { ...where, amount: { lt: 0 } }, _sum: { amount: true }, _count: true }),

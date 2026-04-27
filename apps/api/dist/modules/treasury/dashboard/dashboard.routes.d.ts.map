@@ -1,1 +1,1 @@
-{"version":3,"file":"dashboard.routes.d.ts","sourceRoot":"","sources":["../../../../src/modules/treasury/dashboard/dashboard.routes.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,SAAS,CAAA;AAG9C,wBAAsB,eAAe,CAAC,OAAO,EAAE,eAAe,iBAqB7D"}
+{"version":3,"file":"dashboard.routes.d.ts","sourceRoot":"","sources":["../../../../src/modules/treasury/dashboard/dashboard.routes.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,SAAS,CAAA;AAG9C,wBAAsB,eAAe,CAAC,OAAO,EAAE,eAAe,iBA2B7D"}

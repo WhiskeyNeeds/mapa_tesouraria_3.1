@@ -1,7 +1,9 @@
 import type { PrismaClient } from '@prisma/client';
 export declare class TreasuryDashboardService {
     private prisma;
+    private recurrencesSvc;
     constructor(prisma: PrismaClient);
+    private fetchAccountBalances;
     getOverview(clientId: string, days?: number): Promise<{
         kpis: {
             totalBalance: number;
@@ -14,13 +16,14 @@ export declare class TreasuryDashboardService {
             overduePayables: number;
         };
         bankAccounts: {
+            currentBalance: number;
+            lowBalanceWarning: boolean;
             name: string;
             id: string;
-            updatedAt: Date;
             currency: string;
             bankName: string | null;
             ibanLast4: string | null;
-            currentBalance: import("@prisma/client/runtime/library").Decimal;
+            minBalance: import("@prisma/client/runtime/library").Decimal | null;
         }[];
         chartData: {
             income: number;
@@ -28,38 +31,21 @@ export declare class TreasuryDashboardService {
             balance: number;
             date: string;
         }[];
-        recentMovements: ({
+        recentMovements: {
+            id: string;
+            date: string;
+            amount: number;
+            description: string;
+            counterpartName: string | null;
+            status: import(".prisma/client").$Enums.TreasuryMovementStatus;
             bankAccount: {
                 name: string;
-            };
+            } | null;
             category: {
                 name: string;
                 color: string | null;
             } | null;
-        } & {
-            date: Date;
-            clientId: string;
-            createdAt: Date;
-            id: string;
-            updatedAt: Date;
-            deletedAt: Date | null;
-            status: import(".prisma/client").$Enums.TreasuryMovementStatus;
-            bankAccountId: string;
-            bookingDate: Date | null;
-            amount: import("@prisma/client/runtime/library").Decimal;
-            currency: string;
-            balanceAfter: import("@prisma/client/runtime/library").Decimal | null;
-            description: string;
-            normalizedDesc: string | null;
-            counterpartName: string | null;
-            counterpartIban: string | null;
-            categoryId: string | null;
-            source: import(".prisma/client").$Enums.TreasuryMovementSource;
-            importId: string | null;
-            dedupeHash: string;
-            reconciledAmount: import("@prisma/client/runtime/library").Decimal;
-            externalRef: string | null;
-        })[];
+        }[];
         topClients: {
             name: string;
             amount: number;
@@ -68,6 +54,20 @@ export declare class TreasuryDashboardService {
             name: string;
             amount: number;
         }[];
+        upcomingDues: {
+            receivables: {
+                entityName: string;
+                reference: string;
+                dueDate: string;
+                pendingAmount: number;
+            }[];
+            payables: {
+                entityName: string;
+                reference: string;
+                dueDate: string;
+                pendingAmount: number;
+            }[];
+        };
     }>;
     getCashFlowMonthly(clientId: string, year: number): Promise<{
         year: number;
@@ -76,6 +76,18 @@ export declare class TreasuryDashboardService {
             income: number;
             expense: number;
             net: number;
+        }[];
+    }>;
+    getCategoryBreakdown(clientId: string, days?: number): Promise<{
+        revenue: {
+            name: string;
+            color: string;
+            amount: number;
+        }[];
+        expense: {
+            name: string;
+            color: string;
+            amount: number;
         }[];
     }>;
     getForecast(clientId: string, days?: number): Promise<{

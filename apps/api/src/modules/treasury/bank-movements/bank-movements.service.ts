@@ -36,7 +36,7 @@ export class TreasuryBankMovementsService {
 
       const field = rule.matchField === 'description' ? normalizedDesc
         : rule.matchField === 'counterpart' ? this.normalize(counterpartName ?? '')
-        : this.normalize(counterpartIban ?? '')
+          : this.normalize(counterpartIban ?? '')
 
       const value = this.normalize(rule.matchValue)
       let matches = false
@@ -109,10 +109,10 @@ export class TreasuryBankMovementsService {
 
     const dir = sortDir as 'asc' | 'desc'
     const orderBy = (
-      sortBy === 'amount'      ? [{ amount: dir },      { date: 'desc' as const }] :
-      sortBy === 'description' ? [{ description: dir }, { date: 'desc' as const }] :
-      sortBy === 'balanceAfter'? [{ balanceAfter: dir }, { date: 'desc' as const }] :
-      [{ date: dir }, { source: 'desc' as const }, { createdAt: 'asc' as const }]
+      sortBy === 'amount' ? [{ amount: dir }, { date: 'desc' as const }] :
+        sortBy === 'description' ? [{ description: dir }, { date: 'desc' as const }] :
+          sortBy === 'balanceAfter' ? [{ balanceAfter: dir }, { date: 'desc' as const }] :
+            [{ date: dir }, { source: 'desc' as const }, { createdAt: 'asc' as const }]
     ) as Prisma.TreasuryBankMovementOrderByWithRelationInput[]
 
     const [total, items] = await Promise.all([
@@ -139,44 +139,6 @@ export class TreasuryBankMovementsService {
         const bM = b.source === 'MANUAL' ? 1 : 0
         return bM - aM
       })
-    }
-
-    // Adjust displayed balanceAfter for imported movements: add cumulative manual offset
-    // so that bank-verified balances remain visually continuous after manual insertions
-    const affectedAccountIds = bankAccountId
-      ? [bankAccountId]
-      : [...new Set(items.map((i) => i.bankAccountId))]
-
-    if (affectedAccountIds.length > 0) {
-      const manualMovements = await this.prisma.treasuryBankMovement.findMany({
-        where: {
-          bankAccountId: { in: affectedAccountIds },
-          deletedAt: null,
-          source: 'MANUAL',
-        },
-        select: { bankAccountId: true, date: true, amount: true },
-        orderBy: { date: 'asc' },
-      })
-
-      // Build per-account sorted list of manual offsets
-      const manualsByAccount = new Map<string, { dateMs: number; amount: number }[]>()
-      for (const m of manualMovements) {
-        if (!manualsByAccount.has(m.bankAccountId)) manualsByAccount.set(m.bankAccountId, [])
-        manualsByAccount.get(m.bankAccountId)!.push({ dateMs: m.date.getTime(), amount: Number(m.amount) })
-      }
-
-      const adjustedItems = items.map((item) => {
-        if (item.source === 'MANUAL' || item.balanceAfter == null) return item
-        const manuals = manualsByAccount.get(item.bankAccountId) ?? []
-        const itemDateMs = item.date.getTime()
-        const offset = manuals
-          .filter((m) => m.dateMs < itemDateMs)
-          .reduce((sum, m) => sum + m.amount, 0)
-        if (offset === 0) return item
-        return { ...item, balanceAfter: Number(item.balanceAfter) + offset }
-      })
-
-      return { total, page, limit, items: adjustedItems }
     }
 
     return { total, page, limit, items }
@@ -211,15 +173,15 @@ export class TreasuryBankMovementsService {
     const candidateAmounts = [...new Set(hashFiltered.map(({ mov }) => Number(mov.amount)))]
     const existingLogicalCandidates = (candidateDates.length && candidateAmounts.length)
       ? await this.prisma.treasuryBankMovement.findMany({
-          where: {
-            clientId,
-            bankAccountId,
-            deletedAt: null,
-            date: { in: candidateDates.map((d) => new Date(d)) },
-            amount: { in: candidateAmounts },
-          },
-          select: { date: true, amount: true, normalizedDesc: true, balanceAfter: true },
-        })
+        where: {
+          clientId,
+          bankAccountId,
+          deletedAt: null,
+          date: { in: candidateDates.map((d) => new Date(d)) },
+          amount: { in: candidateAmounts },
+        },
+        select: { date: true, amount: true, normalizedDesc: true, balanceAfter: true },
+      })
       : []
 
     const existingLogicalKeys = new Set(
@@ -337,8 +299,10 @@ export class TreasuryBankMovementsService {
 
     if (userId) {
       await this.prisma.treasuryAuditLog.create({
-        data: { clientId, userId, action: 'movement.create', entityType: 'BankMovement', entityId: movement.id,
-          payload: { bankAccountId: data.bankAccountId, date: data.date, amount: data.amount } },
+        data: {
+          clientId, userId, action: 'movement.create', entityType: 'BankMovement', entityId: movement.id,
+          payload: { bankAccountId: data.bankAccountId, date: data.date, amount: data.amount }
+        },
       })
     }
 
@@ -407,8 +371,10 @@ export class TreasuryBankMovementsService {
     await this.prisma.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } })
     if (userId) {
       await this.prisma.treasuryAuditLog.create({
-        data: { clientId, userId, action: 'movement.delete', entityType: 'BankMovement', entityId: id,
-          payload: { bankAccountId: mov.bankAccountId, amount: Number(mov.amount), source: mov.source } },
+        data: {
+          clientId, userId, action: 'movement.delete', entityType: 'BankMovement', entityId: id,
+          payload: { bankAccountId: mov.bankAccountId, amount: Number(mov.amount), source: mov.source }
+        },
       })
     }
     await this.bankSvc.recalcBalance(mov.bankAccountId)
@@ -456,6 +422,82 @@ export class TreasuryBankMovementsService {
     )
 
     return { classified, skipped: unclassified.length - classified }
+  }
+
+  async checkBalanceConsistency(clientId: string, bankAccountId?: string): Promise<{
+    accountId: string
+    accountName: string
+    gaps: {
+      afterMovementId: string
+      afterDate: string
+      afterDescription: string
+      afterBalance: number
+      beforeMovementId: string
+      beforeDate: string
+      beforeDescription: string
+      expectedBalance: number
+      actualBalance: number
+      gap: number
+    }[]
+  }[]> {
+    const accounts = bankAccountId
+      ? await this.prisma.treasuryBankAccount.findMany({ where: { id: bankAccountId, clientId, deletedAt: null }, select: { id: true, name: true } })
+      : await this.prisma.treasuryBankAccount.findMany({ where: { clientId, deletedAt: null, isActive: true }, select: { id: true, name: true } })
+
+    const results: Awaited<ReturnType<typeof this.checkBalanceConsistency>> = []
+
+    for (const account of accounts) {
+      const movements = await this.prisma.treasuryBankMovement.findMany({
+        where: { bankAccountId: account.id, deletedAt: null, balanceAfter: { not: null } },
+        select: { id: true, date: true, amount: true, balanceAfter: true, description: true, source: true, createdAt: true },
+        orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+      })
+
+      // Build consistency chain in business order:
+      // imported movements first (oldest -> newest), then MANUAL movements at end of day.
+      movements.sort((a, b) => {
+        const dayA = a.date.toISOString().slice(0, 10)
+        const dayB = b.date.toISOString().slice(0, 10)
+        if (dayA !== dayB) return dayA.localeCompare(dayB)
+
+        const aManual = a.source === 'MANUAL'
+        const bManual = b.source === 'MANUAL'
+        if (aManual !== bManual) return aManual ? 1 : -1
+
+        if (!aManual && !bManual) {
+          return b.createdAt.getTime() - a.createdAt.getTime()
+        }
+
+        return a.createdAt.getTime() - b.createdAt.getTime()
+      })
+
+      const gaps: (typeof results)[0]['gaps'] = []
+      for (let i = 1; i < movements.length; i++) {
+        const prev = movements[i - 1]
+        const curr = movements[i]
+        const calculated = Math.round((Number(prev.balanceAfter) + Number(curr.amount)) * 100) / 100
+        const actual = Math.round(Number(curr.balanceAfter) * 100) / 100
+        const gap = Math.round((calculated - actual) * 100) / 100
+        if (Math.abs(gap) > 0.01) {
+          gaps.push({
+            afterMovementId: prev.id,
+            afterDate: prev.date.toISOString().slice(0, 10),
+            afterDescription: prev.description ?? '',
+            afterBalance: Number(prev.balanceAfter),
+            beforeMovementId: curr.id,
+            beforeDate: curr.date.toISOString().slice(0, 10),
+            beforeDescription: curr.description ?? '',
+            expectedBalance: calculated,
+            actualBalance: actual,
+            gap,
+          })
+        }
+      }
+
+      results.push({ accountId: account.id, accountName: account.name, gaps })
+    }
+
+    return results
   }
 
   async getSummary(clientId: string, filters: {

@@ -223,6 +223,12 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     return reply.send(result)
   })
 
+  fastify.get(`${prefix}/balance-check`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { bankAccountId } = request.query as { bankAccountId?: string }
+    return reply.send(await svc.checkBalanceConsistency(clientId, bankAccountId))
+  })
+
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const { description } = request.body as { description?: string }

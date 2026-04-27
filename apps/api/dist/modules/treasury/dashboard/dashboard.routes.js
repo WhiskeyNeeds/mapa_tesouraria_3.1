@@ -17,5 +17,10 @@ export async function dashboardRoutes(fastify) {
         const { days } = request.query;
         return reply.send(await svc.getForecast(clientId, days ? parseInt(days) : 90));
     });
+    fastify.get('/treasury/:clientId/dashboard/category-breakdown', { onRequest: auth }, async (request, reply) => {
+        const { clientId } = request.params;
+        const { days } = request.query;
+        return reply.send(await svc.getCategoryBreakdown(clientId, days ? parseInt(days) : 30));
+    });
 }
 //# sourceMappingURL=dashboard.routes.js.map

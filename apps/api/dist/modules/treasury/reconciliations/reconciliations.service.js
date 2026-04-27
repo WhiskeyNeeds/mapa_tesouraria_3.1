@@ -48,6 +48,10 @@ export class TreasuryReconciliationsService {
         });
         if (movements.length !== data.movementIds.length)
             throw httpError(404, 'One or more movements not found');
+        const hasPositive = movements.some((m) => Number(m.amount) > 0);
+        const hasNegative = movements.some((m) => Number(m.amount) < 0);
+        if (hasPositive && hasNegative)
+            throw httpError(400, 'Não é possível misturar movimentos de entrada e saída na mesma reconciliação');
         const totalMovements = movements.reduce((sum, m) => sum + Number(m.amount), 0);
         const direction = totalMovements >= 0 ? 'REVENUE' : 'EXPENSE';
         // Validate allocations
@@ -76,15 +80,22 @@ export class TreasuryReconciliationsService {
         }));
         return { direction, totalMovements: Math.abs(totalMovements), totalAllocated, tocActions, isDryRun: data.isDryRun ?? true };
     }
+    async isDryRunForClient(clientId, explicitValue) {
+        if (explicitValue !== undefined)
+            return explicitValue;
+        const settings = await this.prisma.treasurySettings.findUnique({ where: { clientId } });
+        return settings?.reconciliationDryRun ?? true;
+    }
     async confirm(clientId, userId, data) {
-        const preview = await this.preview(clientId, data);
+        const isDryRun = await this.isDryRunForClient(clientId, data.isDryRun);
+        const preview = await this.preview(clientId, { ...data, isDryRun });
         return this.prisma.$transaction(async (tx) => {
             const recon = await tx.treasuryReconciliation.create({
                 data: {
                     clientId,
                     createdById: userId,
                     direction: preview.direction,
-                    isDryRun: data.isDryRun ?? true,
+                    isDryRun,
                     status: 'CONFIRMED',
                     totalMovements: preview.totalMovements,
                     totalAllocated: preview.totalAllocated,
@@ -117,7 +128,7 @@ export class TreasuryReconciliationsService {
                 if (alloc.type === 'receivable') {
                     let tocReceiptId;
                     let tocError;
-                    if (launchToc && !data.isDryRun) {
+                    if (launchToc && !isDryRun) {
                         try {
                             const result = await this.tocSvc.createSalesReceipt(clientId, {
                                 sales_document_id: (await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } }))?.tocSalesDocId,
@@ -152,7 +163,7 @@ export class TreasuryReconciliationsService {
                 else {
                     let tocPaymentId;
                     let tocError;
-                    if (launchToc && !data.isDryRun) {
+                    if (launchToc && !isDryRun) {
                         try {
                             const result = await this.tocSvc.createPurchasePayment(clientId, {
                                 purchases_document_id: (await tx.treasuryPayable.findUnique({ where: { id: alloc.id } }))?.tocPurchasesDocId,
@@ -197,7 +208,7 @@ export class TreasuryReconciliationsService {
                     action: 'reconciliation.confirm',
                     entityType: 'Reconciliation',
                     entityId: recon.id,
-                    payload: { isDryRun: data.isDryRun, movementsCount: data.movementIds.length, allocationsCount: data.allocations.length },
+                    payload: { isDryRun, movementsCount: data.movementIds.length, allocationsCount: data.allocations.length },
                 },
             });
             return tx.treasuryReconciliation.findUnique({ where: { id: recon.id } });

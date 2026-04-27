@@ -17,8 +17,31 @@ export async function bankMovementsRoutes(fastify) {
     });
     fastify.get(`${prefix}/summary`, { onRequest: auth }, async (request, reply) => {
         const { clientId } = request.params;
-        const { bankAccountId } = request.query;
-        return reply.send(await svc.getSummary(clientId, bankAccountId));
+        const q = request.query;
+        return reply.send(await svc.getSummary(clientId, q));
+    });
+    fastify.get(`${prefix}/export.csv`, { onRequest: auth }, async (request, reply) => {
+        const { clientId } = request.params;
+        const q = request.query;
+        const { items } = await svc.list(clientId, { ...q, limit: 10000, page: 1 });
+        const header = 'Data;Conta;Descrição;Categoria;Valor;Saldo\n';
+        const rows = items.map((m) => {
+            const dateStr = m.date instanceof Date ? m.date.toISOString().slice(0, 10) : String(m.date);
+            const ba = m.bankAccount;
+            const cat = m.category;
+            return [
+                dateStr,
+                ba?.name ?? '',
+                `"${(m.description ?? '').replace(/"/g, '""')}"`,
+                cat?.name ?? '',
+                Number(m.amount).toFixed(2).replace('.', ','),
+                m.balanceAfter != null ? Number(m.balanceAfter).toFixed(2).replace('.', ',') : '',
+            ].join(';');
+        }).join('\n');
+        reply
+            .header('Content-Type', 'text/csv; charset=utf-8')
+            .header('Content-Disposition', 'attachment; filename="movimentos.csv"');
+        return reply.send('﻿' + header + rows);
     });
     // Manual movement creation
     fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
@@ -37,7 +60,7 @@ export async function bankMovementsRoutes(fastify) {
             date: body.date,
             amount: body.amount,
             description: body.description,
-        });
+        }, request.user.sub);
         return reply.status(201).send(result);
     });
     // JSON import (pre-parsed movements)
@@ -145,13 +168,36 @@ export async function bankMovementsRoutes(fastify) {
                 completedAt: new Date(),
             },
         });
+        await fastify.prisma.treasuryAuditLog.create({
+            data: {
+                clientId, userId: request.user.sub,
+                action: 'import.complete', entityType: 'BankImport', entityId: importRecord.id,
+                payload: { bank, bankAccountId, parsed: movements.length, imported: result.imported, duplicated: result.duplicated, failed: result.failed },
+            },
+        });
         return reply.status(201).send({ ...result, parsed: movements.length, bank });
+    });
+    fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
+        const { clientId } = request.params;
+        return reply.send(await svc.applyRulesToExisting(clientId));
     });
     fastify.post(`${prefix}/deduplicate`, { onRequest: auth }, async (request, reply) => {
         const { clientId } = request.params;
         const { bankAccountId } = request.body;
         const result = await svc.deduplicateMovements(clientId, bankAccountId);
         return reply.send(result);
+    });
+    fastify.get(`${prefix}/balance-check`, { onRequest: auth }, async (request, reply) => {
+        const { clientId } = request.params;
+        const { bankAccountId } = request.query;
+        return reply.send(await svc.checkBalanceConsistency(clientId, bankAccountId));
+    });
+    fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
+        const { clientId, id } = request.params;
+        const { description } = request.body;
+        if (description === undefined)
+            throw httpError(400, 'description is required');
+        return reply.send(await svc.updateDescription(clientId, id, description));
     });
     fastify.patch(`${prefix}/:id/classify`, { onRequest: auth }, async (request, reply) => {
         const { clientId, id } = request.params;
@@ -160,7 +206,7 @@ export async function bankMovementsRoutes(fastify) {
     });
     fastify.delete(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
         const { clientId, id } = request.params;
-        await svc.delete(clientId, id);
+        await svc.delete(clientId, id, request.user.sub);
         return reply.status(204).send();
     });
 }

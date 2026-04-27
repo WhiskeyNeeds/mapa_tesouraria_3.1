@@ -7,16 +7,16 @@ export declare class ToconlineService {
         clientId: string;
         createdAt: Date;
         id: string;
-        updatedAt: Date;
-        accessToken: string | null;
-        refreshToken: string | null;
         oauthUrl: string;
         baseUrl: string;
         tocClientId: string;
         tocClientSecret: string;
+        accessToken: string | null;
+        refreshToken: string | null;
         tokenExpiresAt: Date | null;
         status: import(".prisma/client").$Enums.ToconlineStatus;
         lastError: string | null;
+        updatedAt: Date;
     } | null>;
     getPublicConfig(clientId: string): Promise<{
         callbackUri: string;
@@ -25,13 +25,13 @@ export declare class ToconlineService {
         clientId: string;
         createdAt: Date;
         id: string;
-        updatedAt: Date;
         oauthUrl: string;
         baseUrl: string;
         tocClientId: string;
         tokenExpiresAt: Date | null;
         status: import(".prisma/client").$Enums.ToconlineStatus;
         lastError: string | null;
+        updatedAt: Date;
     }>;
     saveCredentials(clientId: string, data: {
         oauthUrl: string;
@@ -42,16 +42,16 @@ export declare class ToconlineService {
         clientId: string;
         createdAt: Date;
         id: string;
-        updatedAt: Date;
-        accessToken: string | null;
-        refreshToken: string | null;
         oauthUrl: string;
         baseUrl: string;
         tocClientId: string;
         tocClientSecret: string;
+        accessToken: string | null;
+        refreshToken: string | null;
         tokenExpiresAt: Date | null;
         status: import(".prisma/client").$Enums.ToconlineStatus;
         lastError: string | null;
+        updatedAt: Date;
     }>;
     getAuthUrl(clientId: string, redis: RedisClient): Promise<string>;
     handleCallback(code: string, state: string, redis: RedisClient): Promise<void>;
@@ -63,16 +63,16 @@ export declare class ToconlineService {
         clientId: string;
         createdAt: Date;
         id: string;
-        updatedAt: Date;
-        accessToken: string | null;
-        refreshToken: string | null;
         oauthUrl: string;
         baseUrl: string;
         tocClientId: string;
         tocClientSecret: string;
+        accessToken: string | null;
+        refreshToken: string | null;
         tokenExpiresAt: Date | null;
         status: import(".prisma/client").$Enums.ToconlineStatus;
         lastError: string | null;
+        updatedAt: Date;
     }>;
     revokeConfig(clientId: string): Promise<void>;
     private apiGet;
@@ -91,9 +91,9 @@ export declare class ToconlineService {
     getBankAccounts(clientId: string): Promise<unknown[]>;
     getExpenseCategories(clientId: string): Promise<unknown[]>;
     getTaxDescriptors(clientId: string): Promise<unknown[]>;
+    refreshAllExpiring(thresholdMs?: number): Promise<void>;
     private requireConfig;
     private requireActiveConfig;
     private getRedirectUri;
-    private getOauthBase;
 }
 //# sourceMappingURL=toconline.service.d.ts.map

@@ -5,8 +5,8 @@ export async function categoriesRoutes(fastify) {
     const auth = [fastify.authenticate, fastify.requireClientAccess];
     fastify.get(prefix, { onRequest: auth }, async (request, reply) => {
         const { clientId } = request.params;
-        const { type } = request.query;
-        return reply.send(await svc.list(clientId, type));
+        const { type, includeArchived } = request.query;
+        return reply.send(await svc.list(clientId, type, includeArchived === 'true'));
     });
     fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
         const { clientId } = request.params;

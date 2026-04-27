@@ -11,10 +11,10 @@ export declare class TreasuryClassificationRulesService {
     } & {
         clientId: string;
         createdAt: Date;
-        priority: number;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        priority: number;
+        isActive: boolean;
         categoryId: string;
         direction: import(".prisma/client").$Enums.TreasuryCategoryType | null;
         matchField: string;
@@ -37,10 +37,10 @@ export declare class TreasuryClassificationRulesService {
     }): Promise<{
         clientId: string;
         createdAt: Date;
-        priority: number;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        priority: number;
+        isActive: boolean;
         categoryId: string;
         direction: import(".prisma/client").$Enums.TreasuryCategoryType | null;
         matchField: string;
@@ -56,10 +56,10 @@ export declare class TreasuryClassificationRulesService {
     }>): Promise<{
         clientId: string;
         createdAt: Date;
-        priority: number;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        priority: number;
+        isActive: boolean;
         categoryId: string;
         direction: import(".prisma/client").$Enums.TreasuryCategoryType | null;
         matchField: string;
@@ -73,10 +73,10 @@ export declare class TreasuryClassificationRulesService {
     delete(clientId: string, id: string): Promise<{
         clientId: string;
         createdAt: Date;
-        priority: number;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        priority: number;
+        isActive: boolean;
         categoryId: string;
         direction: import(".prisma/client").$Enums.TreasuryCategoryType | null;
         matchField: string;

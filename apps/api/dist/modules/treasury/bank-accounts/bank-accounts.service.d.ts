@@ -5,12 +5,13 @@ export declare class TreasuryBankAccountsService {
     private resolveFinalBalance;
     list(clientId: string): Promise<{
         currentBalance: number;
+        lowBalanceWarning: boolean;
         clientId: string;
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         currency: string;
         bankName: string | null;
@@ -21,18 +22,18 @@ export declare class TreasuryBankAccountsService {
         tocSyncedAt: Date | null;
     }[]>;
     getById(clientId: string, id: string): Promise<{
+        currentBalance: number;
         clientId: string;
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         currency: string;
         bankName: string | null;
         ibanLast4: string | null;
         openingBalance: import("@prisma/client/runtime/library").Decimal;
-        currentBalance: import("@prisma/client/runtime/library").Decimal;
         minBalance: import("@prisma/client/runtime/library").Decimal | null;
         tocBankAccountId: string | null;
         tocSyncedAt: Date | null;
@@ -50,8 +51,8 @@ export declare class TreasuryBankAccountsService {
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         currency: string;
         bankName: string | null;
@@ -65,15 +66,15 @@ export declare class TreasuryBankAccountsService {
     update(clientId: string, id: string, data: Partial<{
         name: string;
         bankName: string;
-        minBalance: number;
+        minBalance: number | null;
         isActive: boolean;
     }>): Promise<{
         clientId: string;
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         currency: string;
         bankName: string | null;
@@ -89,8 +90,8 @@ export declare class TreasuryBankAccountsService {
         createdAt: Date;
         name: string;
         id: string;
-        isActive: boolean;
         updatedAt: Date;
+        isActive: boolean;
         deletedAt: Date | null;
         currency: string;
         bankName: string | null;
@@ -102,6 +103,7 @@ export declare class TreasuryBankAccountsService {
         tocBankAccountId: string | null;
         tocSyncedAt: Date | null;
     }>;
+    private recalcManualBalances;
     recalcBalance(bankAccountId: string): Promise<void>;
     decryptIban(ibanEnc: string): string;
 }

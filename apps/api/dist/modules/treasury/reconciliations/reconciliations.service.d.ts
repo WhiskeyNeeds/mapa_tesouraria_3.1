@@ -24,9 +24,9 @@ export declare class TreasuryReconciliationsService {
             receivables: ({
                 receivable: {
                     id: string;
+                    pendingAmount: import("@prisma/client/runtime/library").Decimal;
                     entityName: string;
                     reference: string;
-                    pendingAmount: import("@prisma/client/runtime/library").Decimal;
                 };
             } & {
                 id: string;
@@ -40,9 +40,9 @@ export declare class TreasuryReconciliationsService {
             payables: ({
                 payable: {
                     id: string;
+                    pendingAmount: import("@prisma/client/runtime/library").Decimal;
                     entityName: string;
                     reference: string;
-                    pendingAmount: import("@prisma/client/runtime/library").Decimal;
                 };
             } & {
                 id: string;
@@ -74,8 +74,8 @@ export declare class TreasuryReconciliationsService {
             clientId: string;
             createdAt: Date;
             id: string;
-            updatedAt: Date;
             status: import(".prisma/client").$Enums.TreasuryReconciliationStatus;
+            updatedAt: Date;
             direction: import(".prisma/client").$Enums.TreasuryCategoryType;
             createdById: string;
             isDryRun: boolean;
@@ -112,24 +112,24 @@ export declare class TreasuryReconciliationsService {
                 clientId: string;
                 createdAt: Date;
                 id: string;
+                status: import(".prisma/client").$Enums.TreasuryDocStatus;
                 updatedAt: Date;
                 deletedAt: Date | null;
-                status: import(".prisma/client").$Enums.TreasuryDocStatus;
                 currency: string;
                 description: string | null;
                 categoryId: string;
                 tocSyncedAt: Date | null;
                 createdById: string;
-                entityName: string;
                 dueDate: Date;
+                totalAmount: import("@prisma/client/runtime/library").Decimal;
+                pendingAmount: import("@prisma/client/runtime/library").Decimal;
+                entityName: string;
+                reference: string;
                 recurrenceId: string | null;
                 entityNif: string | null;
                 tocCustomerId: string | null;
-                reference: string;
                 documentDate: Date;
-                totalAmount: import("@prisma/client/runtime/library").Decimal;
                 receivedAmount: import("@prisma/client/runtime/library").Decimal;
-                pendingAmount: import("@prisma/client/runtime/library").Decimal;
                 tocSalesDocId: string | null;
                 tocSyncError: string | null;
                 parentId: string | null;
@@ -165,22 +165,22 @@ export declare class TreasuryReconciliationsService {
                 clientId: string;
                 createdAt: Date;
                 id: string;
+                status: import(".prisma/client").$Enums.TreasuryDocStatus;
                 updatedAt: Date;
                 deletedAt: Date | null;
-                status: import(".prisma/client").$Enums.TreasuryDocStatus;
                 currency: string;
                 description: string | null;
                 categoryId: string;
                 tocSyncedAt: Date | null;
                 createdById: string;
-                entityName: string;
                 dueDate: Date;
-                recurrenceId: string | null;
-                entityNif: string | null;
-                reference: string;
-                documentDate: Date;
                 totalAmount: import("@prisma/client/runtime/library").Decimal;
                 pendingAmount: import("@prisma/client/runtime/library").Decimal;
+                entityName: string;
+                reference: string;
+                recurrenceId: string | null;
+                entityNif: string | null;
+                documentDate: Date;
                 tocSyncError: string | null;
                 parentId: string | null;
                 tocSupplierId: string | null;
@@ -202,9 +202,9 @@ export declare class TreasuryReconciliationsService {
                 clientId: string;
                 createdAt: Date;
                 id: string;
+                status: import(".prisma/client").$Enums.TreasuryMovementStatus;
                 updatedAt: Date;
                 deletedAt: Date | null;
-                status: import(".prisma/client").$Enums.TreasuryMovementStatus;
                 bankAccountId: string;
                 bookingDate: Date | null;
                 amount: import("@prisma/client/runtime/library").Decimal;
@@ -239,8 +239,8 @@ export declare class TreasuryReconciliationsService {
         clientId: string;
         createdAt: Date;
         id: string;
-        updatedAt: Date;
         status: import(".prisma/client").$Enums.TreasuryReconciliationStatus;
+        updatedAt: Date;
         direction: import(".prisma/client").$Enums.TreasuryCategoryType;
         createdById: string;
         isDryRun: boolean;
@@ -264,12 +264,13 @@ export declare class TreasuryReconciliationsService {
         }[];
         isDryRun: boolean;
     }>;
+    private isDryRunForClient;
     confirm(clientId: string, userId: string, data: ReconciliationItem): Promise<{
         clientId: string;
         createdAt: Date;
         id: string;
-        updatedAt: Date;
         status: import(".prisma/client").$Enums.TreasuryReconciliationStatus;
+        updatedAt: Date;
         direction: import(".prisma/client").$Enums.TreasuryCategoryType;
         createdById: string;
         isDryRun: boolean;

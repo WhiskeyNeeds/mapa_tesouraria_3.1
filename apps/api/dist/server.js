@@ -5,6 +5,7 @@ import multipart from '@fastify/multipart';
 import prismaPlugin from './plugins/prisma.js';
 import redisPlugin from './plugins/redis.js';
 import authPlugin from './plugins/auth.js';
+import tokenRefreshPlugin from './plugins/token-refresh.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { clientsRoutes } from './modules/clients/clients.routes.js';
 import { toconlineRoutes } from './modules/toconline/toconline.routes.js';
@@ -17,6 +18,7 @@ import { reconciliationsRoutes } from './modules/treasury/reconciliations/reconc
 import { settingsRoutes } from './modules/treasury/settings/settings.routes.js';
 import { classificationRulesRoutes } from './modules/treasury/classification-rules/classification-rules.routes.js';
 import { dashboardRoutes } from './modules/treasury/dashboard/dashboard.routes.js';
+import { recurrencesRoutes } from './modules/treasury/recurrences/recurrences.routes.js';
 import { HttpError } from './lib/errors.js';
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
 // ── Plugins ────────────────────────────────────────────────────────────────
@@ -28,6 +30,7 @@ await fastify.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 await fastify.register(prismaPlugin);
 await fastify.register(redisPlugin);
 await fastify.register(authPlugin);
+await fastify.register(tokenRefreshPlugin);
 // ── Global error handler ───────────────────────────────────────────────────
 fastify.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) {
@@ -54,6 +57,7 @@ await fastify.register(reconciliationsRoutes, { prefix: V1 });
 await fastify.register(settingsRoutes, { prefix: V1 });
 await fastify.register(classificationRulesRoutes, { prefix: V1 });
 await fastify.register(dashboardRoutes, { prefix: V1 });
+await fastify.register(recurrencesRoutes, { prefix: V1 });
 fastify.get('/health', () => ({ status: 'ok', ts: new Date().toISOString() }));
 // ── Start ──────────────────────────────────────────────────────────────────
 try {

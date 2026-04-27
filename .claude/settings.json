@@ -26,7 +26,9 @@
       "Bash(node --import tsx/esm -e ' *)",
       "WebFetch(domain:api-docs.toconline.pt)",
       "Bash(grep -o '..\\\\{60\\\\}Erro ao atualizar redirect URI.\\\\{60\\\\}' \"c:/Projetos/Estagio/mapa_tesouraria_3.1/apps/web/dist/assets/index-C8P2KByc.js\")",
-      "Bash(npx vitest *)"
+      "Bash(npx vitest *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

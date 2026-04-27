@@ -13,7 +13,7 @@ export declare class TreasuryBankMovementsService {
     private prisma;
     private bankSvc;
     constructor(prisma: PrismaClient);
-    private recalcManualBalances;
+    private findMatchingRule;
     private buildDedupeHash;
     private normalize;
     private toDateKey;
@@ -23,6 +23,7 @@ export declare class TreasuryBankMovementsService {
     list(clientId: string, filters: {
         bankAccountId?: string;
         status?: TreasuryMovementStatus;
+        categoryId?: string;
         dateFrom?: string;
         dateTo?: string;
         search?: string;
@@ -52,9 +53,9 @@ export declare class TreasuryBankMovementsService {
             clientId: string;
             createdAt: Date;
             id: string;
+            status: import(".prisma/client").$Enums.TreasuryMovementStatus;
             updatedAt: Date;
             deletedAt: Date | null;
-            status: import(".prisma/client").$Enums.TreasuryMovementStatus;
             bankAccountId: string;
             bookingDate: Date | null;
             amount: Prisma.Decimal;
@@ -82,14 +83,14 @@ export declare class TreasuryBankMovementsService {
         date: string;
         amount: number;
         description: string;
-    }): Promise<{
+    }, userId?: string): Promise<{
         date: Date;
         clientId: string;
         createdAt: Date;
         id: string;
+        status: import(".prisma/client").$Enums.TreasuryMovementStatus;
         updatedAt: Date;
         deletedAt: Date | null;
-        status: import(".prisma/client").$Enums.TreasuryMovementStatus;
         bankAccountId: string;
         bookingDate: Date | null;
         amount: Prisma.Decimal;
@@ -109,14 +110,14 @@ export declare class TreasuryBankMovementsService {
     deduplicateMovements(clientId: string, bankAccountId?: string): Promise<{
         removed: number;
     }>;
-    classify(clientId: string, id: string, categoryId: string): Promise<{
+    updateDescription(clientId: string, id: string, description: string): Promise<{
         date: Date;
         clientId: string;
         createdAt: Date;
         id: string;
+        status: import(".prisma/client").$Enums.TreasuryMovementStatus;
         updatedAt: Date;
         deletedAt: Date | null;
-        status: import(".prisma/client").$Enums.TreasuryMovementStatus;
         bankAccountId: string;
         bookingDate: Date | null;
         amount: Prisma.Decimal;
@@ -133,8 +134,60 @@ export declare class TreasuryBankMovementsService {
         reconciledAmount: Prisma.Decimal;
         externalRef: string | null;
     }>;
-    delete(clientId: string, id: string): Promise<void>;
-    getSummary(clientId: string, bankAccountId?: string): Promise<{
+    classify(clientId: string, id: string, categoryId: string): Promise<{
+        date: Date;
+        clientId: string;
+        createdAt: Date;
+        id: string;
+        status: import(".prisma/client").$Enums.TreasuryMovementStatus;
+        updatedAt: Date;
+        deletedAt: Date | null;
+        bankAccountId: string;
+        bookingDate: Date | null;
+        amount: Prisma.Decimal;
+        currency: string;
+        balanceAfter: Prisma.Decimal | null;
+        description: string;
+        normalizedDesc: string | null;
+        counterpartName: string | null;
+        counterpartIban: string | null;
+        categoryId: string | null;
+        source: import(".prisma/client").$Enums.TreasuryMovementSource;
+        importId: string | null;
+        dedupeHash: string;
+        reconciledAmount: Prisma.Decimal;
+        externalRef: string | null;
+    }>;
+    delete(clientId: string, id: string, userId?: string): Promise<void>;
+    applyRulesToExisting(clientId: string): Promise<{
+        classified: number;
+        skipped: number;
+    }>;
+    checkBalanceConsistency(clientId: string, bankAccountId?: string): Promise<{
+        accountId: string;
+        accountName: string;
+        gaps: {
+            afterMovementId: string;
+            afterDate: string;
+            afterDescription: string;
+            afterBalance: number;
+            beforeMovementId: string;
+            beforeDate: string;
+            beforeDescription: string;
+            expectedBalance: number;
+            actualBalance: number;
+            gap: number;
+        }[];
+    }[]>;
+    getSummary(clientId: string, filters?: {
+        bankAccountId?: string;
+        dateFrom?: string;
+        dateTo?: string;
+        search?: string;
+        direction?: 'income' | 'expense';
+        status?: TreasuryMovementStatus;
+        categoryId?: string;
+    }): Promise<{
         totalIncome: number;
         totalExpense: number;
         countIncome: number;

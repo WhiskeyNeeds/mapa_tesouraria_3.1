@@ -4,12 +4,16 @@ import { parseBCP } from './bcp.js';
 import { parseBPI } from './bpi.js';
 import { parseBankinter } from './bankinter.js';
 import { parseSantander } from './santander.js';
+import { parseNovoBanco } from './novobanco.js';
 export function detectBank(buffer) {
     // CGD: CSV in latin1, first line contains "Consultar saldos"
     try {
-        const preview = buffer.toString('latin1').slice(0, 300);
+        const preview = buffer.toString('latin1').slice(0, 500);
         if (preview.includes('Consultar saldos'))
             return 'CGD';
+        const previewLower = preview.toLowerCase();
+        if (previewLower.includes('novo banco') || previewLower.includes('novobanco'))
+            return 'NovoBanco';
     }
     catch { }
     // Excel-based banks
@@ -45,6 +49,7 @@ export function parseStatementFile(buffer, bank) {
             BPI: 'Banco BPI',
             Bankinter: 'Bankinter',
             Santander: 'Santander',
+            NovoBanco: 'Novo Banco',
         };
         throw new Error(`O ficheiro parece ser do ${names[detected] ?? detected}, mas selecionou ${names[bank] ?? bank}.`);
     }
@@ -54,7 +59,7 @@ export function parseStatementFile(buffer, bank) {
         case 'BPI': return parseBPI(buffer);
         case 'Bankinter': return parseBankinter(buffer);
         case 'Santander': return parseSantander(buffer);
-        case 'NovoBanco': throw new Error('Novo Banco format not supported yet');
+        case 'NovoBanco': return parseNovoBanco(buffer);
         default: throw new Error(`Unknown bank: ${bank}`);
     }
 }

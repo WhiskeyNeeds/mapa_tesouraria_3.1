@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -72,6 +72,8 @@ interface Movement { id: string; date: string; amount: number; description: stri
 interface MovementsResponse { total: number; page: number; limit: number; items: Movement[] }
 interface Summary { totalIncome: number; totalExpense: number; countIncome: number; countExpense: number; byStatus: Record<string, number> }
 interface Category { id: string; name: string; type: string; color: string; isArchived: boolean }
+interface BalanceGap { afterMovementId: string; afterDate: string; afterDescription: string; afterBalance: number; beforeMovementId: string; beforeDate: string; beforeDescription: string; expectedBalance: number; actualBalance: number; gap: number }
+interface BalanceCheckResult { accountId: string; accountName: string; gaps: BalanceGap[] }
 
 export default function BanksPage() {
   const { selectedClientId } = useAuth()
@@ -190,6 +192,20 @@ export default function BanksPage() {
     enabled: !!selectedClientId,
   })
 
+  const { data: balanceCheck = [] } = useQuery<BalanceCheckResult[]>({
+    queryKey: ['balance-check', selectedClientId, selectedAccount],
+    queryFn: () => {
+      const p = new URLSearchParams()
+      if (selectedAccount) p.set('bankAccountId', selectedAccount)
+      const qs = p.toString()
+      return api.get(`/treasury/${selectedClientId}/movements/balance-check${qs ? `?${qs}` : ''}`)
+    },
+    enabled: !!selectedClientId && !!selectedAccount,
+  })
+
+  const currentAccountGaps = balanceCheck.find((r) => r.accountId === selectedAccount)?.gaps ?? []
+  const gapMap = new Map(currentAccountGaps.map((g) => [g.beforeMovementId, g]))
+
   const createAccount = useMutation({
     mutationFn: (data: typeof newAccount) => api.post(`/treasury/${selectedClientId}/bank-accounts`, {
       ...data,
@@ -216,6 +232,7 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['movements'] })
       qc.invalidateQueries({ queryKey: ['movements-summary'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      qc.invalidateQueries({ queryKey: ['balance-check'] })
       setConfirmDeleteMovementId(null)
     },
   })
@@ -259,6 +276,7 @@ export default function BanksPage() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['movements'] })
       qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      qc.invalidateQueries({ queryKey: ['balance-check'] })
       if (data.removed > 0) toast.success(`${data.removed} movimento(s) duplicado(s) removido(s).`)
       else toast.info('Nenhum duplicado encontrado.')
     },
@@ -272,6 +290,7 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['movements'] })
       qc.invalidateQueries({ queryKey: ['movements-summary'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      qc.invalidateQueries({ queryKey: ['balance-check'] })
       setShowNewMovement(false)
       setNewMovement({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' })
       toast.success('Movimento criado.')
@@ -300,6 +319,7 @@ export default function BanksPage() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['movements'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      qc.invalidateQueries({ queryKey: ['balance-check'] })
       setImportResult(data)
       toast.success(`${data.imported} movimento(s) importado(s).`)
     },
@@ -479,6 +499,19 @@ export default function BanksPage() {
         </div>
       ) : (
         <div className="card">
+          {currentAccountGaps.length > 0 && (
+            <div className="px-5 py-3 bg-amber-50 border-b border-amber-200 rounded-t-xl">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800">
+                    {currentAccountGaps.length} inconsistência{currentAccountGaps.length !== 1 ? 's' : ''} de saldo detetada{currentAccountGaps.length !== 1 ? 's' : ''}
+                  </p>
+                  <p className="text-xs text-amber-700 mt-0.5">Existem provavelmente movimentos em falta neste extrato. As linhas assinaladas indicam onde os valores divergem.</p>
+                </div>
+              </div>
+            </div>
+          )}
           {/* Filter toolbar */}
           <div className="px-5 py-3 border-b border-gray-100 flex flex-wrap items-center gap-2">
             <div className="relative">
@@ -617,101 +650,120 @@ export default function BanksPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {movements?.items.map((m) => (
-                  <tr key={m.id} className="hover:bg-gray-50 group">
-                    <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(m.date)}</td>
-                    {!selectedAccount && (
-                      <td className="px-5 py-3 whitespace-nowrap">
-                        {m.bankAccount && (
-                          <div className="flex items-center gap-2">
-                            <BankAvatar bankName={m.bankAccount.bankName} />
-                            <span className="text-xs text-gray-500 truncate max-w-[8rem]">{m.bankAccount.name}</span>
-                          </div>
-                        )}
-                      </td>
-                    )}
-                    <td className="px-5 py-3 text-gray-900 max-w-xs">
-                      <span className="truncate block">{m.description}</span>
-                      {m.source === 'MANUAL' && <span className="text-xs text-gray-400">manual</span>}
-                    </td>
-                    <td className="px-3 py-3 relative">
-                      {m.status === 'RECONCILED' ? (
-                        <span className="text-xs text-gray-400 flex items-center gap-1">
-                          {m.category && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: m.category.color }} />}
-                          {m.category?.name ?? '—'}
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setClassifyMovementId(classifyMovementId === m.id ? null : m.id)}
-                          className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border transition-colors ${
-                            m.category
-                              ? 'border-transparent hover:border-gray-200 hover:bg-gray-50'
-                              : 'border-dashed border-gray-300 text-gray-400 hover:border-primary-400 hover:text-primary-600 hover:bg-primary-50'
-                          }`}
-                          title={m.category ? 'Alterar categoria' : 'Classificar movimento'}
-                        >
-                          {m.category
-                            ? <><span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: m.category.color }} />{m.category.name}</>
-                            : <><Tag className="w-3 h-3" />N/C</>
-                          }
-                        </button>
+                {movements?.items.map((m) => {
+                  const gap = gapMap.get(m.id)
+                  return (
+                    <Fragment key={m.id}>
+                      {gap && (
+                        <tr className="bg-amber-50 border-y border-amber-200">
+                          <td colSpan={selectedAccount ? 6 : 7} className="px-5 py-2">
+                            <div className="flex items-center gap-2 text-xs text-amber-700">
+                              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span>
+                                Saldo real: <strong>{formatCurrency(gap.actualBalance)}</strong>
+                                {' '}· Saldo calculado: <strong>{formatCurrency(gap.expectedBalance)}</strong>
+                                {' '}· Diferença: <strong className={gap.gap > 0 ? 'text-green-700' : 'text-red-700'}>{gap.gap > 0 ? '+' : ''}{formatCurrency(gap.gap)}</strong>
+                                {' '}— possível(is) movimento(s) em falta antes desta linha
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
                       )}
-                      {classifyMovementId === m.id && (
-                        <div onMouseDown={(e) => e.stopPropagation()} className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg py-1 w-52 max-h-64 overflow-y-auto">
-                          {['REVENUE', 'EXPENSE'].map((type) => {
-                            const cats = categories.filter((c) => c.type === type && !c.isArchived)
-                            if (!cats.length) return null
-                            return (
-                              <div key={type}>
-                                <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase">{type === 'REVENUE' ? 'Receita' : 'Despesa'}</div>
-                                {cats.map((c) => (
-                                  <button
-                                    key={c.id}
-                                    type="button"
-                                    onClick={() => classify.mutate({ id: m.id, categoryId: c.id })}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
-                                  >
-                                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
-                                    {c.name}
-                                  </button>
-                                ))}
+                      <tr className={`hover:bg-gray-50 group ${gap ? 'bg-amber-50/40' : ''}`}>
+                        <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(m.date)}</td>
+                        {!selectedAccount && (
+                          <td className="px-5 py-3 whitespace-nowrap">
+                            {m.bankAccount && (
+                              <div className="flex items-center gap-2">
+                                <BankAvatar bankName={m.bankAccount.bankName} />
+                                <span className="text-xs text-gray-500 truncate max-w-[8rem]">{m.bankAccount.name}</span>
                               </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </td>
-                    <td className={`px-1 py-3 text-right font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Number(m.amount))}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-500 whitespace-nowrap">
-                      {m.balanceAfter != null ? formatCurrency(Number(m.balanceAfter)) : '—'}
-                    </td>
-                    <td className="px-2 py-3">
-                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          type="button"
-                          onClick={() => { setEditDescId(m.id); setEditDesc(m.description) }}
-                          className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-all"
-                          title="Editar descrição"
-                        >
-                          <PenLine className="w-3.5 h-3.5" />
-                        </button>
-                        {m.source === 'MANUAL' && (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteMovementId(m.id)}
-                            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-all"
-                            title="Remover movimento"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                            )}
+                          </td>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        <td className="px-5 py-3 text-gray-900 max-w-xs">
+                          <span className="truncate block">{m.description}</span>
+                          {m.source === 'MANUAL' && <span className="text-xs text-gray-400">manual</span>}
+                        </td>
+                        <td className="px-3 py-3 relative">
+                          {m.status === 'RECONCILED' ? (
+                            <span className="text-xs text-gray-400 flex items-center gap-1">
+                              {m.category && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: m.category.color }} />}
+                              {m.category?.name ?? '—'}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setClassifyMovementId(classifyMovementId === m.id ? null : m.id)}
+                              className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border transition-colors ${m.category
+                                  ? 'border-transparent hover:border-gray-200 hover:bg-gray-50'
+                                  : 'border-dashed border-gray-300 text-gray-400 hover:border-primary-400 hover:text-primary-600 hover:bg-primary-50'
+                                }`}
+                              title={m.category ? 'Alterar categoria' : 'Classificar movimento'}
+                            >
+                              {m.category
+                                ? <><span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: m.category.color }} />{m.category.name}</>
+                                : <><Tag className="w-3 h-3" />N/C</>
+                              }
+                            </button>
+                          )}
+                          {classifyMovementId === m.id && (
+                            <div onMouseDown={(e) => e.stopPropagation()} className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg py-1 w-52 max-h-64 overflow-y-auto">
+                              {['REVENUE', 'EXPENSE'].map((type) => {
+                                const cats = categories.filter((c) => c.type === type && !c.isArchived)
+                                if (!cats.length) return null
+                                return (
+                                  <div key={type}>
+                                    <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase">{type === 'REVENUE' ? 'Receita' : 'Despesa'}</div>
+                                    {cats.map((c) => (
+                                      <button
+                                        key={c.id}
+                                        type="button"
+                                        onClick={() => classify.mutate({ id: m.id, categoryId: c.id })}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                                      >
+                                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
+                                        {c.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </td>
+                        <td className={`px-1 py-3 text-right font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                          {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Number(m.amount))}
+                        </td>
+                        <td className="px-5 py-3 text-right text-gray-500 whitespace-nowrap">
+                          {m.balanceAfter != null ? formatCurrency(Number(m.balanceAfter)) : '—'}
+                        </td>
+                        <td className="px-2 py-3">
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={() => { setEditDescId(m.id); setEditDesc(m.description) }}
+                              className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-all"
+                              title="Editar descrição"
+                            >
+                              <PenLine className="w-3.5 h-3.5" />
+                            </button>
+                            {m.source === 'MANUAL' && (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteMovementId(m.id)}
+                                className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                                title="Remover movimento"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    </Fragment>
+                  )
+                })}
                 {movements?.items.length === 0 && (
                   <tr>
                     <td colSpan={selectedAccount ? 6 : 7} className="px-5 py-10 text-center text-sm text-gray-400">
