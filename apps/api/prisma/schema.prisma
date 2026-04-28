@@ -171,6 +171,7 @@ model Client {
   treasuryClassificationRules TreasuryClassificationRule[]
   treasurySettings            TreasurySettings?
   treasuryAuditLogs           TreasuryAuditLog[]
+  productAnalytics            ProductAnalytic[]
 
   @@index([isActive])
   @@index([nif])
@@ -209,6 +210,22 @@ model ToconlineConfig {
   updatedAt DateTime @updatedAt
 
   @@map("toconline_configs")
+}
+
+model ProductAnalytic {
+  id       String @id @default(cuid())
+  clientId String
+  itemId   String
+  itemType String @db.VarChar(20) // 'product' | 'service'
+  entries  Json   @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, itemId, itemType])
+  @@map("product_analytics")
 }
 
 // ─── Modelos novos (tesouraria) ─────────────────────────────────────────────

@@ -145,6 +145,27 @@ export class ToconlineService {
     return res.json() as Promise<T>
   }
 
+  // Fetches a TOConline master-data endpoint and normalises the JSON:API envelope
+  // ({ data: [{ id, attributes }] }) into a flat array of plain objects.
+  private async apiGetFlat(clientId: string, path: string): Promise<Record<string, unknown>[]> {
+    const res = await this.apiGet<unknown>(clientId, path)
+
+    if (Array.isArray(res)) return res as Record<string, unknown>[]
+
+    if (res != null && typeof res === 'object') {
+      const obj = res as Record<string, unknown>
+      if (Array.isArray(obj.data)) {
+        type JsonApiItem = { id?: unknown; attributes?: Record<string, unknown> }
+        return (obj.data as JsonApiItem[]).map((item) => ({ id: item.id, ...(item.attributes ?? {}) }))
+      }
+      for (const k of ['items', 'results', 'records', 'list']) {
+        if (Array.isArray(obj[k])) return obj[k] as Record<string, unknown>[]
+      }
+    }
+
+    return []
+  }
+
   private async apiPost<T>(clientId: string, path: string, body: unknown): Promise<T> {
     const cfg = await this.requireActiveConfig(clientId)
     const token = decrypt(cfg.accessToken!)
@@ -246,7 +267,7 @@ export class ToconlineService {
   }
 
   async getCustomers(clientId: string) {
-    return this.apiGet<unknown[]>(clientId, '/api/customers')
+    return this.apiGetFlat(clientId, '/api/customers')
   }
 
   async createCustomer(clientId: string, payload: unknown) {
@@ -254,7 +275,7 @@ export class ToconlineService {
   }
 
   async getSuppliers(clientId: string) {
-    return this.apiGet<unknown[]>(clientId, '/api/suppliers')
+    return this.apiGetFlat(clientId, '/api/suppliers')
   }
 
   async createSupplier(clientId: string, payload: unknown) {
@@ -271,6 +292,43 @@ export class ToconlineService {
 
   async getTaxDescriptors(clientId: string) {
     return this.apiGet<unknown[]>(clientId, '/api/tax_descriptors')
+  }
+
+  async getItems(clientId: string) {
+    return this.apiGetFlat(clientId, '/api/products')
+  }
+
+  async getServices(clientId: string) {
+    return this.apiGetFlat(clientId, '/api/services')
+  }
+
+  // ── Analítica (local persistence) ────────────────────────────────────────────
+
+  async getAnalytics(clientId: string, itemType?: string) {
+    return this.prisma.productAnalytic.findMany({
+      where: { clientId, ...(itemType ? { itemType } : {}) },
+      orderBy: { updatedAt: 'desc' },
+    })
+  }
+
+  async getItemAnalytic(clientId: string, itemId: string, itemType: string) {
+    return this.prisma.productAnalytic.findUnique({
+      where: { clientId_itemId_itemType: { clientId, itemId, itemType } },
+    })
+  }
+
+  async saveItemAnalytic(clientId: string, itemId: string, itemType: string, entries: unknown[]) {
+    return this.prisma.productAnalytic.upsert({
+      where: { clientId_itemId_itemType: { clientId, itemId, itemType } },
+      update: { entries: entries as object[] },
+      create: { clientId, itemId, itemType, entries: entries as object[] },
+    })
+  }
+
+  async deleteItemAnalytic(clientId: string, itemId: string, itemType: string) {
+    await this.prisma.productAnalytic.deleteMany({
+      where: { clientId, itemId, itemType },
+    })
   }
 
   // ── Background token refresh ───────────────────────────────────────────────

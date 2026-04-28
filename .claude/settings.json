@@ -28,7 +28,14 @@
       "Bash(grep -o '..\\\\{60\\\\}Erro ao atualizar redirect URI.\\\\{60\\\\}' \"c:/Projetos/Estagio/mapa_tesouraria_3.1/apps/web/dist/assets/index-C8P2KByc.js\")",
       "Bash(npx vitest *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(curl -s http://localhost:3000/api/v1/toconline/config/cmo6xfa4e00068gofmysh2lec)",
+      "Bash(curl -s -X POST http://localhost:3000/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@mapa-tesouraria.pt\",\"password\":\"admin123\"}')",
+      "PowerShell(Start-Process -FilePath \"cmd\" -ArgumentList \"/c cd C:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\apps\\\\api && npm run dev > C:\\\\temp\\\\api-log.txt 2>&1\" -WindowStyle Hidden)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:3000/api/v1/auth/login\" -Method POST -ContentType \"application/json\" -Body '{\"email\":\"admin@mapa-tesouraria.pt\",\"password\":\"admin123\"}' -ErrorAction SilentlyContinue)",
+      "PowerShell(head -10)",
+      "Read(//c/Users/ruise/AppData/Local/Temp/**)"
     ]
   }
 }

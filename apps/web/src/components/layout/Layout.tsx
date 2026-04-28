@@ -2,7 +2,7 @@ import { Outlet, NavLink } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   LayoutDashboard, Building2, RefreshCw, ArrowDownToLine,
-  ArrowUpFromLine, TrendingUp, Settings, LogOut, Menu, X, ChevronDown, AlertTriangle, SlidersHorizontal,
+  ArrowUpFromLine, TrendingUp, Settings, LogOut, Menu, X, ChevronDown, AlertTriangle, SlidersHorizontal, Briefcase,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -16,6 +16,7 @@ const nav = [
   { to: '/contas-a-receber', label: 'Contas a Receber', icon: ArrowDownToLine },
   { to: '/contas-a-pagar', label: 'Contas a Pagar', icon: ArrowUpFromLine },
   { to: '/previsao', label: 'Previsão', icon: TrendingUp },
+  { to: '/empresa', label: 'Empresa', icon: Briefcase },
   { to: '/definicoes', label: 'Definições', icon: Settings },
 ]
 

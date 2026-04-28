@@ -74,4 +74,41 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     const { clientId } = request.params as { clientId: string }
     return reply.send(await svc.getExpenseCategories(clientId))
   })
+
+  fastify.get('/toconline/:clientId/items', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    return reply.send(await svc.getItems(clientId))
+  })
+
+  fastify.get('/toconline/:clientId/services', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    return reply.send(await svc.getServices(clientId))
+  })
+
+  // ── Analítica (product cost-center distribution, stored locally) ──────────
+
+  fastify.get('/toconline/:clientId/analytics', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { itemType } = request.query as { itemType?: string }
+    return reply.send(await svc.getAnalytics(clientId, itemType))
+  })
+
+  fastify.get('/toconline/:clientId/analytics/:itemId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, itemId } = request.params as { clientId: string; itemId: string }
+    const { itemType } = request.query as { itemType?: string }
+    return reply.send(await svc.getItemAnalytic(clientId, itemId, itemType ?? 'product'))
+  })
+
+  fastify.put('/toconline/:clientId/analytics/:itemId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, itemId } = request.params as { clientId: string; itemId: string }
+    const body = request.body as { itemType: string; entries: unknown[] }
+    return reply.send(await svc.saveItemAnalytic(clientId, itemId, body.itemType, body.entries))
+  })
+
+  fastify.delete('/toconline/:clientId/analytics/:itemId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, itemId } = request.params as { clientId: string; itemId: string }
+    const { itemType } = request.query as { itemType?: string }
+    await svc.deleteItemAnalytic(clientId, itemId, itemType ?? 'product')
+    return reply.status(204).send()
+  })
 }
