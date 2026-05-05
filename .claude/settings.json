@@ -35,7 +35,15 @@
       "PowerShell(Start-Process -FilePath \"cmd\" -ArgumentList \"/c cd C:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\apps\\\\api && npm run dev > C:\\\\temp\\\\api-log.txt 2>&1\" -WindowStyle Hidden)",
       "PowerShell(Invoke-RestMethod -Uri \"http://localhost:3000/api/v1/auth/login\" -Method POST -ContentType \"application/json\" -Body '{\"email\":\"admin@mapa-tesouraria.pt\",\"password\":\"admin123\"}' -ErrorAction SilentlyContinue)",
       "PowerShell(head -10)",
-      "Read(//c/Users/ruise/AppData/Local/Temp/**)"
+      "Read(//c/Users/ruise/AppData/Local/Temp/**)",
+      "WebSearch",
+      "WebFetch(domain:api.swaggerhub.com)",
+      "PowerShell(powershell -ExecutionPolicy Bypass -File \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\fix_encoding.ps1\")",
+      "PowerShell(node --version)",
+      "PowerShell(node \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\fix_encoding.js\")",
+      "PowerShell(node \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\check_encoding.js\")",
+      "PowerShell(node \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\fix_emdash.js\")",
+      "WebFetch(domain:app.swaggerhub.com)"
     ]
   }
 }

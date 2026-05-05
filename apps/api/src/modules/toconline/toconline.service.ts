@@ -114,6 +114,14 @@ export class ToconlineService {
     })
   }
 
+  async getCredentialsForTesting(clientId: string) {
+    const cfg = await this.requireActiveConfig(clientId)
+    return {
+      baseUrl:     cfg.baseUrl,
+      accessToken: decrypt(cfg.accessToken!),
+    }
+  }
+
   async revokeConfig(clientId: string): Promise<void> {
     await this.prisma.toconlineConfig.update({
       where: { clientId },
@@ -169,10 +177,11 @@ export class ToconlineService {
   private async apiPost<T>(clientId: string, path: string, body: unknown): Promise<T> {
     const cfg = await this.requireActiveConfig(clientId)
     const token = decrypt(cfg.accessToken!)
+    console.info(`[TOConline] POST ${path} payload: ${JSON.stringify(body)}`)
 
     let res = await fetch(`${cfg.baseUrl}${path}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/vnd.api+json', Accept: 'application/json' },
       body: JSON.stringify(body),
     })
 
@@ -182,12 +191,17 @@ export class ToconlineService {
       const token2 = decrypt(cfg2.accessToken!)
       res = await fetch(`${cfg.baseUrl}${path}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/vnd.api+json', Accept: 'application/json' },
         body: JSON.stringify(body),
       })
     }
 
-    if (!res.ok) throw httpError(res.status, `TOConline POST ${path} failed: ${res.statusText}`)
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = JSON.stringify(await res.clone().json()) } catch { detail = await res.text().catch(() => res.statusText) }
+      console.error(`[TOConline] POST ${path} failed for ${clientId} (${res.status}): ${detail}`)
+      throw httpError(res.status, `TOConline POST ${path} failed: ${detail}`)
+    }
     return res.json() as Promise<T>
   }
 
@@ -243,11 +257,26 @@ export class ToconlineService {
   // ── TOConline endpoints ────────────────────────────────────────────────────
 
   async getPurchaseDocuments(clientId: string, filters?: Record<string, string>) {
-    return this.apiGet<unknown[]>(clientId, '/api/v1/commercial_purchases_documents', filters)
+    const raw = await this.apiGet<unknown>(clientId, '/api/v1/commercial_purchases_documents', filters)
+    return this.unwrapArray(raw)
   }
 
   async getSalesDocuments(clientId: string, filters?: Record<string, string>) {
-    return this.apiGet<unknown[]>(clientId, '/api/v1/commercial_sales_documents', filters)
+    const raw = await this.apiGet<unknown>(clientId, '/api/v1/commercial_sales_documents', filters)
+    return this.unwrapArray(raw)
+  }
+
+  // Unwraps common API response envelopes ({ data: [...] }, { items: [...] }, etc.)
+  // without touching individual item structure (unlike apiGetFlat which flattens JSON:API attributes).
+  private unwrapArray(raw: unknown): Record<string, unknown>[] {
+    if (Array.isArray(raw)) return raw as Record<string, unknown>[]
+    if (raw != null && typeof raw === 'object') {
+      const obj = raw as Record<string, unknown>
+      for (const k of ['data', 'items', 'results', 'records', 'list']) {
+        if (Array.isArray(obj[k])) return obj[k] as Record<string, unknown>[]
+      }
+    }
+    return []
   }
 
   async createSalesDocument(clientId: string, payload: unknown) {
@@ -266,20 +295,34 @@ export class ToconlineService {
     return this.apiPost(clientId, '/api/v1/commercial_purchases_payments', payload)
   }
 
+  async getCountries(clientId: string) {
+    return this.apiGetFlat(clientId, '/api/countries')
+  }
+
   async getCustomers(clientId: string) {
     return this.apiGetFlat(clientId, '/api/customers')
   }
 
-  async createCustomer(clientId: string, payload: unknown) {
-    return this.apiPost(clientId, '/api/customers', payload)
+  async createCustomer(clientId: string, attrs: Record<string, unknown>) {
+    return this.apiPost(clientId, '/api/customers', { data: { type: 'customers', attributes: attrs } })
+  }
+
+  async createAddress(clientId: string, attrs: Record<string, unknown>) {
+    return this.apiPost(clientId, '/api/addresses', { data: { type: 'addresses', attributes: attrs } })
   }
 
   async getSuppliers(clientId: string) {
     return this.apiGetFlat(clientId, '/api/suppliers')
   }
 
-  async createSupplier(clientId: string, payload: unknown) {
-    return this.apiPost(clientId, '/api/suppliers', payload)
+  async createSupplier(clientId: string, attrsOrEnvelope: Record<string, unknown>) {
+    // Accept either a JSON:API envelope ({ data: { type, attributes } })
+    // or a plain attributes object. If the caller already sent a data
+    // envelope, forward it as-is to avoid double-wrapping.
+    if (attrsOrEnvelope && typeof attrsOrEnvelope === 'object' && 'data' in attrsOrEnvelope) {
+      return this.apiPost(clientId, '/api/suppliers', attrsOrEnvelope)
+    }
+    return this.apiPost(clientId, '/api/suppliers', { data: { type: 'suppliers', attributes: attrsOrEnvelope } })
   }
 
   async getBankAccounts(clientId: string) {
@@ -298,8 +341,16 @@ export class ToconlineService {
     return this.apiGetFlat(clientId, '/api/products')
   }
 
+  async createItem(clientId: string, attrs: Record<string, unknown>) {
+    return this.apiPost(clientId, '/api/products', { data: { type: 'products', attributes: { ...attrs, type: 'Product' } } })
+  }
+
   async getServices(clientId: string) {
     return this.apiGetFlat(clientId, '/api/services')
+  }
+
+  async createService(clientId: string, attrs: Record<string, unknown>) {
+    return this.apiPost(clientId, '/api/services', { data: { type: 'services', attributes: { ...attrs, type: 'Service' } } })
   }
 
   // ── Analítica (local persistence) ────────────────────────────────────────────

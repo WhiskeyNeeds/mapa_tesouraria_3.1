@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
-import type { ComponentType } from 'react'
+import type { ComponentType, CSSProperties } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   Search, Users, Truck, Package, Wrench, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check,
+  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2,
 } from 'lucide-react'
 
 type Tab = 'clientes' | 'fornecedores' | 'produtos' | 'servicos'
@@ -13,7 +13,7 @@ type TocRow = Record<string, unknown>
 type Icon = ComponentType<{ className?: string }>
 type SortDir = 'asc' | 'desc'
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// â"€â"€ helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function toRows(val: unknown): TocRow[] {
   if (Array.isArray(val)) return val as TocRow[]
@@ -64,7 +64,7 @@ function fmtBool(v: unknown): string {
   return '—'
 }
 
-// ── tabs ─────────────────────────────────────────────────────────────────────
+// â"€â"€ tabs â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 const TABS: { id: Tab; label: string; icon: Icon }[] = [
   { id: 'clientes',     label: 'Clientes',     icon: Users   },
@@ -73,7 +73,7 @@ const TABS: { id: Tab; label: string; icon: Icon }[] = [
   { id: 'servicos',     label: 'Serviços',     icon: Wrench  },
 ]
 
-// ── column definitions ────────────────────────────────────────────────────────
+// â"€â"€ column definitions â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 interface ColDef {
   header: string
@@ -83,7 +83,7 @@ interface ColDef {
   className?: string
   format?: (val: unknown) => string
   /** special render handled by caller */
-  special?: 'analitica'
+  special?: 'analitica' | 'nova-conta'
 }
 
 const COLUMNS: Record<Tab, ColDef[]> = {
@@ -97,6 +97,7 @@ const COLUMNS: Record<Tab, ColDef[]> = {
     // cashed_vat = Regime de IVA de Caixa
     { header: 'RIC',                  keys: ['cashed_vat'],               sortKey: 'cashed_vat',              format: fmtBool, className: 'text-xs text-center text-gray-500' },
     { header: 'Inactivo?',            keys: ['active'],                   sortKey: 'active',                  format: fmtInativo, className: 'text-xs text-center' },
+    { header: '',                     keys: [],                           special: 'nova-conta' as const },
   ],
   fornecedores: [
     { header: 'NIF',       keys: ['tax_registration_number'],  sortKey: 'tax_registration_number', className: 'font-mono text-xs' },
@@ -109,6 +110,7 @@ const COLUMNS: Record<Tab, ColDef[]> = {
     // is_independent_worker = sujeito a Modelo 10
     { header: 'Modelo 10', keys: ['is_independent_worker'],    sortKey: 'is_independent_worker',   format: fmtBool, className: 'text-xs text-center text-gray-500' },
     { header: 'Inactivo?', keys: ['active'],                   sortKey: 'active',                  format: fmtInativo, className: 'text-xs text-center' },
+    { header: '',          keys: [],                           special: 'nova-conta' as const },
   ],
   produtos: [
     { header: 'Código',               keys: ['item_code'],                sortKey: 'item_code',            className: 'font-mono text-xs text-gray-500' },
@@ -137,7 +139,7 @@ const COLUMNS: Record<Tab, ColDef[]> = {
   ],
 }
 
-// ── sort icon ─────────────────────────────────────────────────────────────────
+// â"€â"€ sort icon â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function SortIcon({ field, sortField, sortDir }: { field: string; sortField: string; sortDir: SortDir }) {
   if (sortField !== field) return <ArrowUpDown className="inline w-3 h-3 ml-1 text-gray-300" />
@@ -146,7 +148,7 @@ function SortIcon({ field, sortField, sortDir }: { field: string; sortField: str
     : <ArrowDown className="inline w-3 h-3 ml-1 text-primary-500" />
 }
 
-// ── Analítica modal ──────────────────────────────────────────────────────────
+// â"€â"€ Analítica modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 interface CostLine {
   centro_custo: string
@@ -166,19 +168,19 @@ interface SavedAnalytic { entries: AnalyticConfig[] }
 
 // Lista completa de dimensões analíticas TOConline — 68 rubricas (cost_dimensions/search)
 const RUBRICAS_ANALITICAS: Rubrica[] = [
-  // 01 – Rendimentos
+  // 01 — Rendimentos
   { id: 4566673, code: '010101', name: 'Vendas A' },
   { id: 4566674, code: '010102', name: 'Vendas B' },
   { id: 4566675, code: '010201', name: 'Serviço A' },
   { id: 4566676, code: '010202', name: 'Serviço B' },
-  // 02 – Gastos directos
+  // 02 — Gastos directos
   { id: 4566677, code: '020101', name: 'Apuramento cmv' },
   { id: 4566678, code: '020102', name: 'Outros custos das vendas' },
   { id: 4566679, code: '020201', name: 'Outros custos dos serviços' },
-  // 03 – Gastos indirectos
+  // 03 — Gastos indirectos
   { id: 4566680, code: '030101', name: 'Outros Custos do Produto' },
   { id: 4566681, code: '030201', name: 'Electricidade' },
-  { id: 4566682, code: '030202', name: 'Água' },
+  { id: 4566682, code: '030202', name: 'Ãgua' },
   { id: 4566683, code: '030203', name: 'Outros fluidos' },
   { id: 4566684, code: '030204', name: 'Ferramentas & Livros e documentação técnica' },
   { id: 4566685, code: '030205', name: 'Alojamentos Sites / Servidores / Licenças' },
@@ -228,17 +230,17 @@ const RUBRICAS_ANALITICAS: Rubrica[] = [
   { id: 4566729, code: '030801', name: 'Custos e comissões bancárias' },
   { id: 4566730, code: '030802', name: 'Diferenças cambiais' },
   { id: 4566731, code: '030803', name: 'Outros Custos' },
-  // 04 – Imparidades / Depreciações
+  // 04 — Imparidades / Depreciações
   { id: 4566732, code: '040101', name: 'De Clientes' },
   { id: 4566733, code: '040102', name: 'De Stocks' },
   { id: 4566734, code: '040103', name: 'Outros' },
   { id: 4566735, code: '040201', name: 'AFTangíveis' },
   { id: 4566736, code: '040202', name: 'AFIntangíveis' },
-  // 05 – Gastos financeiros
+  // 05 — Gastos financeiros
   { id: 4566737, code: '050101', name: 'Juros financiamentos' },
   { id: 4566738, code: '050102', name: 'Outros Custos financeiros' },
   { id: 4566739, code: '050201', name: 'Juros leasings' },
-  // 06 – Imposto
+  // 06 — Imposto
   { id: 4566740, code: '060101', name: 'Estimativa do Imposto' },
 ]
 
@@ -281,17 +283,17 @@ function AnaliticaModal({
     },
   })
 
-  // ── rubrica state (top-level, one per config) ─────────────────────────────
+  // â"€â"€ rubrica state (top-level, one per config) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [rubricaId,   setRubricaId]   = useState('')
   const [rubricaName, setRubricaName] = useState('')
   const [rubricaTocId, setRubricaTocId] = useState<number | undefined>(undefined)
   const [rubricaSearch, setRubricaSearch] = useState('')
   const [rubricaOpen,   setRubricaOpen]   = useState(false)
 
-  // ── por omissão (top-level, disables all lines when checked) ─────────────
+  // â"€â"€ por omissão (top-level, disables all lines when checked) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [useDefault, setUseDefault] = useState(false)
 
-  // ── cost center lines ─────────────────────────────────────────────────────
+  // â"€â"€ cost center lines â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [lines, setLines] = useState<CostLine[]>([{ centro_custo: '', percentagem: '' }])
 
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -304,7 +306,7 @@ function AnaliticaModal({
     setRubricaId(cfg.rubrica_id ?? '')
     setRubricaName(cfg.rubrica_name ?? '')
     setRubricaTocId(cfg.rubrica_toc_id)
-    setRubricaSearch(cfg.rubrica_id ? `${cfg.rubrica_id} – ${cfg.rubrica_name}` : '')
+    setRubricaSearch(cfg.rubrica_id ? `${cfg.rubrica_id} — ${cfg.rubrica_name}` : '')
     setUseDefault(cfg.use_default ?? false)
     setLines(cfg.lines?.length ? cfg.lines : [{ centro_custo: '', percentagem: '' }])
   }, [saved])
@@ -417,7 +419,7 @@ function AnaliticaModal({
                       setRubricaTocId(c.id)
                       setRubricaId(c.code)
                       setRubricaName(c.name)
-                      setRubricaSearch(`${c.code} – ${c.name}`)
+                      setRubricaSearch(`${c.code} — ${c.name}`)
                       setRubricaOpen(false)
                     }}
                     className={`w-full text-left px-3 py-2 text-xs text-gray-700 flex items-baseline gap-2 ${
@@ -549,6 +551,1289 @@ function AnaliticaModal({
   )
 }
 
+// â"€â"€ Nova Conta modal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+interface DocLine {
+  descricao: string
+  quantidade: string
+  preco_unit: string
+  iva: string
+}
+
+const TAX_RATES = [0, 6, 13, 23]
+
+function NovaContaModal({
+  type, entity, clientId, onClose,
+}: {
+  type: 'receber' | 'pagar'
+  entity: TocRow
+  clientId: string
+  onClose: () => void
+}) {
+  const isReceber  = type === 'receber'
+  const entityName = String(getVal(entity, ['business_name', 'name']) ?? entity.id)
+
+  const today  = new Date().toISOString().slice(0, 10)
+  const plus30 = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10)
+
+  const [docType,    setDocType]    = useState(isReceber ? 'FT' : 'FC')
+  const [referencia, setReferencia] = useState('')
+  const [data,       setData]       = useState(today)
+  const [vencimento, setVencimento] = useState(plus30)
+  const [lines, setLines] = useState<DocLine[]>([
+    { descricao: '', quantidade: '1', preco_unit: '', iva: '23' },
+  ])
+
+  const mutation = useMutation({
+    mutationFn: (payload: unknown) =>
+      isReceber
+        ? api.post(`/toconline/${clientId}/sales`, payload)
+        : api.post(`/toconline/${clientId}/purchases`, payload),
+    onSuccess: onClose,
+  })
+
+  function updateLine(i: number, patch: Partial<DocLine>) {
+    setLines(prev => prev.map((l, idx) => idx === i ? { ...l, ...patch } : l))
+  }
+  function removeLine(i: number) {
+    if (lines.length > 1) setLines(prev => prev.filter((_, idx) => idx !== i))
+  }
+  function addLine() {
+    setLines(prev => [...prev, { descricao: '', quantidade: '1', preco_unit: '', iva: '23' }])
+  }
+
+  const subtotal = lines.reduce((s, l) => s + (parseFloat(l.quantidade) || 0) * (parseFloat(l.preco_unit) || 0), 0)
+  const ivaTotal = lines.reduce((s, l) => s + (parseFloat(l.quantidade) || 0) * (parseFloat(l.preco_unit) || 0) * ((parseFloat(l.iva) || 0) / 100), 0)
+
+  function handleSubmit() {
+    const mappedLines = lines
+      .filter(l => l.descricao || l.preco_unit)
+      .map(l => ({
+        description:     l.descricao,
+        quantity:        parseFloat(l.quantidade) || 1,
+        unit_price:      parseFloat(l.preco_unit) || 0,
+        tax_percentage:  parseFloat(l.iva) || 0,
+      }))
+
+    const payload = isReceber
+      ? {
+          document_type:          docType,
+          date:                   data,
+          due_date:               vencimento,
+          customer_id:            entity.id,
+          customer_business_name: entityName,
+          lines:                  mappedLines,
+        }
+      : {
+          document_type:           docType,
+          date:                    data,
+          due_date:                vencimento,
+          supplier_id:             entity.id,
+          supplier_business_name:  entityName,
+          external_reference:      referencia || undefined,
+          lines:                   mappedLines,
+        }
+
+    mutation.mutate(payload)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl flex flex-col" style={{ maxHeight: '90vh' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <FilePlus2 className="w-4 h-4 text-primary-600" />
+            <span className="font-semibold text-gray-900 text-sm">
+              {isReceber ? 'Nova Conta a Receber' : 'Nova Conta a Pagar'}
+            </span>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+
+          {/* Entity + tipo de documento */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                {isReceber ? 'Cliente' : 'Fornecedor'}
+              </label>
+              <div className="bg-gray-50 text-gray-700 text-sm py-2 px-3 rounded-lg border border-gray-200 truncate">
+                {entityName}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Tipo de documento</label>
+              <select
+                className="input text-sm w-full"
+                value={docType}
+                onChange={e => setDocType(e.target.value)}
+              >
+                {isReceber ? (
+                  <>
+                    <option value="FT">FT — Fatura</option>
+                    <option value="FS">FS — Fatura Simplificada</option>
+                    <option value="FR">FR — Fatura-Recibo</option>
+                  </>
+                ) : (
+                  <option value="FC">FC — Fatura de Compra</option>
+                )}
+              </select>
+            </div>
+          </div>
+
+          {/* Referência (pagar) */}
+          {!isReceber && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Referência externa <span className="text-gray-400">(nº da fatura do fornecedor)</span>
+              </label>
+              <input
+                className="input text-sm w-full"
+                placeholder="Ex: FT 2024/123"
+                value={referencia}
+                onChange={e => setReferencia(e.target.value)}
+              />
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Data do documento</label>
+              <input type="date" className="input text-sm w-full" value={data} onChange={e => setData(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Data de vencimento</label>
+              <input type="date" className="input text-sm w-full" value={vencimento} onChange={e => setVencimento(e.target.value)} />
+            </div>
+          </div>
+
+          {/* Lines */}
+          <div>
+            <div className="grid grid-cols-[1fr_4.5rem_6.5rem_5rem_1.5rem] gap-2 px-1 mb-1">
+              <span className="text-xs font-medium text-gray-500">Descrição</span>
+              <span className="text-xs font-medium text-gray-500 text-center">Qtd</span>
+              <span className="text-xs font-medium text-gray-500 text-right">Preço unit.</span>
+              <span className="text-xs font-medium text-gray-500 text-center">IVA</span>
+              <span />
+            </div>
+            <div className="space-y-2">
+              {lines.map((line, i) => (
+                <div key={i} className="grid grid-cols-[1fr_4.5rem_6.5rem_5rem_1.5rem] gap-2 items-center">
+                  <input
+                    className="input text-sm w-full"
+                    placeholder="Descrição do item"
+                    value={line.descricao}
+                    onChange={e => updateLine(i, { descricao: e.target.value })}
+                  />
+                  <input
+                    type="number" min="0" step="0.001"
+                    className="input text-sm w-full text-center"
+                    placeholder="1"
+                    value={line.quantidade}
+                    onChange={e => updateLine(i, { quantidade: e.target.value })}
+                  />
+                  <div className="relative">
+                    <input
+                      type="number" min="0" step="0.01"
+                      className="input text-sm w-full pr-5"
+                      placeholder="0.00"
+                      value={line.preco_unit}
+                      onChange={e => updateLine(i, { preco_unit: e.target.value })}
+                    />
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+                  </div>
+                  <select
+                    className="input text-sm w-full text-center"
+                    value={line.iva}
+                    onChange={e => updateLine(i, { iva: e.target.value })}
+                  >
+                    {TAX_RATES.map(r => <option key={r} value={r}>{r}%</option>)}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => removeLine(i)}
+                    disabled={lines.length === 1}
+                    className="text-gray-300 hover:text-red-500 disabled:opacity-0 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addLine}
+              className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-primary-600 hover:text-primary-700 transition-colors py-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              ADICIONAR LINHA
+            </button>
+          </div>
+
+          {/* Totals */}
+          <div className="border-t border-gray-100 pt-3 space-y-1">
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>Subtotal (s/ IVA)</span>
+              <span className="font-mono">{subtotal.toFixed(2)} €</span>
+            </div>
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>IVA</span>
+              <span className="font-mono">{ivaTotal.toFixed(2)} €</span>
+            </div>
+            <div className="flex justify-between text-sm font-semibold text-gray-900">
+              <span>Total</span>
+              <span className="font-mono">{(subtotal + ivaTotal).toFixed(2)} €</span>
+            </div>
+          </div>
+
+          {mutation.isError && (
+            <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              {(mutation.error as Error).message}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} className="btn-secondary text-sm px-4">CANCELAR</button>
+          <button
+            onClick={handleSubmit}
+            disabled={mutation.isPending}
+            className="btn-primary text-sm px-4"
+          >
+            {mutation.isPending ? 'A criar…' : 'CRIAR DOCUMENTO'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── NIF validation (módulo 11) ────────────────────────────────────────────────
+
+function validarNIF(nif: string): boolean {
+  if (!/^\d{9}$/.test(nif)) return false
+  if (![1, 2, 3, 5, 6, 7, 8, 9].includes(parseInt(nif[0]))) return false
+  let soma = 0
+  for (let i = 0; i < 8; i++) soma += parseInt(nif[i]) * (9 - i)
+  const resto = soma % 11
+  const digito = resto < 2 ? 0 : 11 - resto
+  return digito === parseInt(nif[8])
+}
+
+// ── Novo registo modal ────────────────────────────────────────────────────────
+
+const TAX_CODES = [
+  { code: 'NOR', label: 'NOR — Normal (23%)' },
+  { code: 'INT', label: 'INT — Intermédio (13%)' },
+  { code: 'RED', label: 'RED — Reduzido (6%)' },
+  { code: 'ISE', label: 'ISE — Isento (0%)' },
+]
+
+function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: string; onClose: () => void }) {
+  const qc = useQueryClient()
+
+  // ── cliente — geral ──
+  const [cli_nif,          setCli_nif]          = useState('')
+  const [cli_nome,         setCli_nome]         = useState('')
+  const [cli_subconta,     setCli_subconta]     = useState('')
+  const [cli_contacto,     setCli_contacto]     = useState('')
+  const [cli_email,        setCli_email]        = useState('')
+  const [cli_tel,          setCli_tel]          = useState('')
+  const [cli_telem,        setCli_telem]        = useState('')
+  const [cli_website,      setCli_website]      = useState('')
+  const [cli_sp,           setCli_sp]           = useState(false)
+  const [cli_ivaC,         setCli_ivaC]         = useState(false)
+  const [cli_isentoIva,    setCli_isentoIva]    = useState(false)
+  const [cli_ativo,        setCli_ativo]        = useState(true)
+  // ── cliente — morada ──
+  const [cli_moradaDesig,  setCli_moradaDesig]  = useState('Sede')
+  const [cli_morada,       setCli_morada]       = useState('')
+  const [cli_codPostal,    setCli_codPostal]    = useState('')
+  const [cli_localidade,   setCli_localidade]   = useState('')
+  const [cli_localidadeLoading, setCli_localidadeLoading] = useState(false)
+  const [cli_pais,         setCli_pais]         = useState('1')
+  const [cli_moradaDesc,   setCli_moradaDesc]   = useState(false)
+  // ── cliente — observações ──
+  const [cli_obsDoc,       setCli_obsDoc]       = useState('')
+  const [cli_obsInt,       setCli_obsInt]       = useState('')
+  // ── cliente — informações adicionais ──
+  const [cli_prazoVenc,    setCli_prazoVenc]    = useState('')
+  const [cli_retencao,     setCli_retencao]     = useState('')
+  const [cli_percRet,      setCli_percRet]      = useState('')
+  const [cli_moeda,        setCli_moeda]        = useState('EUR')
+  const [cli_precoVenda,   setCli_precoVenda]   = useState('1')
+  const [cli_modeloImp,    setCli_modeloImp]    = useState('')
+  const [cli_metodoPag,    setCli_metodoPag]    = useState('')
+  const [cli_debitoDireto, setCli_debitoDireto] = useState(false)
+  const [cli_ibanCred,     setCli_ibanCred]     = useState('')
+  const [cli_emails,       setCli_emails]       = useState<string[]>([])
+  // ── flip state ──
+  const [flipped,          setFlipped]          = useState(false)
+
+  // ── fornecedor ──
+  const [forn_nif,          setForn_nif]          = useState('')
+  const [forn_nome,         setForn_nome]         = useState('')
+  const [forn_subconta,     setForn_subconta]     = useState('')
+  const [forn_contacto,     setForn_contacto]     = useState('')
+  const [forn_cargo,        setForn_cargo]        = useState('')
+  const [forn_email,        setForn_email]        = useState('')
+  const [forn_telefone,     setForn_telefone]     = useState('')
+  const [forn_telem,        setForn_telem]        = useState('')
+  const [forn_website,      setForn_website]      = useState('')
+  const [forn_tipoContacto, setForn_tipoContacto] = useState<string[]>(['others'])
+  const [forn_tipoOpen,     setForn_tipoOpen]     = useState(false)
+  const [forn_ativoIva,       setForn_ativoIva]       = useState(false)
+  const [forn_isentoIvaRazao, setForn_isentoIvaRazao] = useState('')
+  const [forn_sp,           setForn_sp]           = useState(false)
+  const [forn_af,           setForn_af]           = useState(false)
+  const [forn_m10,          setForn_m10]          = useState(false)
+  const [forn_aceitarAd,    setForn_aceitarAd]    = useState(false)
+  const [forn_ativo,        setForn_ativo]        = useState(true)
+  // ── morada ──
+  const [forn_moradaDesig,  setForn_moradaDesig]  = useState('Sede')
+  const [forn_morada,       setForn_morada]       = useState('')
+  const [forn_codPostal,    setForn_codPostal]    = useState('')
+  const [forn_localidade,   setForn_localidade]   = useState('')
+  const [forn_localidadeLoading, setForn_localidadeLoading] = useState(false)
+  const [forn_pais,         setForn_pais]         = useState('1')
+  const [forn_moradaCarga,  setForn_moradaCarga]  = useState(false)
+  // ── observações ──
+  const [forn_obs,          setForn_obs]          = useState('')
+  // ── informações adicionais ──
+  const [forn_prazoVenc,    setForn_prazoVenc]    = useState('')
+  const [forn_moeda,        setForn_moeda]        = useState('EUR')
+  const [forn_modeloImp,    setForn_modeloImp]    = useState('')
+  const [forn_metodoPag,    setForn_metodoPag]    = useState('')
+  const [forn_banco,        setForn_banco]        = useState('')
+  const [forn_iban,         setForn_iban]         = useState('')
+  const [forn_swift,        setForn_swift]        = useState('')
+  // ── flip state ──
+  const [forn_flipped,      setForn_flipped]      = useState(false)
+
+  // ── produto / serviço ──
+  const [item_codigo,      setItem_codigo]      = useState('')
+  const [item_desc,        setItem_desc]        = useState('')
+  const [item_preco,       setItem_preco]       = useState('')
+  const [item_precoCompra, setItem_precoCompra] = useState('')
+  const [item_ivaInc,      setItem_ivaInc]      = useState(false)
+  const [item_taxa,        setItem_taxa]        = useState('NOR')
+  const [item_ativo,       setItem_ativo]       = useState(true)
+  const [item_barcode,     setItem_barcode]     = useState('')
+  const [item_notas,       setItem_notas]       = useState('')
+
+  const { data: countries = [] } = useQuery<TocRow[]>({
+    queryKey: ['toc-countries', clientId],
+    queryFn: () => api.get(`/toconline/${clientId}/countries`),
+    staleTime: 24 * 60 * 60 * 1000,
+    enabled: tab === 'clientes' || tab === 'fornecedores',
+  })
+
+  useEffect(() => {
+    if (cli_codPostal.length === 0) { setCli_localidade(''); return }
+    if (cli_codPostal.length !== 8) return
+    setCli_localidadeLoading(true)
+    fetch(`https://api.zippopotam.us/pt/${encodeURIComponent(cli_codPostal)}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then((data: { places?: Array<{ 'place name': string }> }) => {
+        const place = data.places?.[0]?.['place name']
+        if (place) setCli_localidade(place)
+      })
+      .catch(() => {})
+      .finally(() => setCli_localidadeLoading(false))
+  }, [cli_codPostal])
+
+  useEffect(() => {
+    if (forn_codPostal.length === 0) { setForn_localidade(''); return }
+    if (forn_codPostal.length !== 8) return
+    setForn_localidadeLoading(true)
+    fetch(`https://api.zippopotam.us/pt/${encodeURIComponent(forn_codPostal)}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then((data: { places?: Array<{ 'place name': string }> }) => {
+        const place = data.places?.[0]?.['place name']
+        if (place) setForn_localidade(place)
+      })
+      .catch(() => {})
+      .finally(() => setForn_localidadeLoading(false))
+  }, [forn_codPostal])
+
+  const queryKeyMap: Record<Tab, string[]> = {
+    clientes:     ['toc-customers', clientId],
+    fornecedores: ['toc-suppliers', clientId],
+    produtos:     ['toc-items',     clientId],
+    servicos:     ['toc-services',  clientId],
+  }
+
+  const endpointMap: Record<Tab, string> = {
+    clientes:     `/toconline/${clientId}/customers`,
+    fornecedores: `/toconline/${clientId}/suppliers`,
+    produtos:     `/toconline/${clientId}/items`,
+    servicos:     `/toconline/${clientId}/services`,
+  }
+
+  const mutation = useMutation({
+    mutationFn: async ({ attrs, address }: { attrs: Record<string, unknown>; address?: Record<string, unknown> }) => {
+      const result = await api.post(endpointMap[tab], attrs) as Record<string, unknown>
+      if (address) {
+        const id = (result.data as Record<string, unknown> | undefined)?.id ?? result.id
+        if (id) {
+          await api.post(`/toconline/${clientId}/addresses`, {
+            ...address,
+            addressable_id:   typeof id === 'string' ? parseInt(id, 10) : Number(id),
+            addressable_type: tab === 'clientes' ? 'Customer' : 'Supplier',
+          }).catch(() => {})
+        }
+      }
+      return result
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeyMap[tab] })
+      onClose()
+    },
+  })
+
+  function buildAttrs(): Record<string, unknown> {
+    if (tab === 'clientes') {
+      const attrs: Record<string, unknown> = {
+        tax_registration_number: cli_nif ? parseInt(cli_nif, 10) : undefined,
+        business_name:           cli_nome,
+        active:                  cli_ativo,
+      }
+
+      if (cli_subconta)  attrs.sub_account          = cli_subconta
+      if (cli_contacto)  attrs.contact_name         = cli_contacto
+      if (cli_email)     attrs.email                = cli_email
+      if (cli_tel)       attrs.phone_number         = parseInt(cli_tel, 10)
+      if (cli_telem)     attrs.mobile_number        = parseInt(cli_telem, 10)
+      if (cli_website)   attrs.website              = cli_website
+      if (cli_sp)        attrs.not_final_customer   = true
+      if (cli_ivaC)      attrs.cashed_vat           = true
+      if (cli_isentoIva) attrs.is_tax_exempt        = true
+      if (cli_obsDoc)    attrs.observations          = cli_obsDoc
+      if (cli_obsInt)    attrs.internal_observations = cli_obsInt
+
+      const validEmails = cli_emails.filter(e => e.trim())
+      if (validEmails.length > 0) attrs.additional_emails = validEmails
+
+      return attrs
+    }
+
+    if (tab === 'fornecedores') {
+      const attrs: Record<string, unknown> = {
+        tax_registration_number: forn_nif ? parseInt(forn_nif, 10) : undefined,
+        business_name:           forn_nome,
+        active:                  forn_ativo,
+      }
+      if (forn_website)    attrs.website               = forn_website
+      if (forn_ativoIva) {
+        attrs.is_tax_exempt = true
+        if (forn_isentoIvaRazao) attrs.tax_exemption_reason_id = parseInt(forn_isentoIvaRazao, 10)
+      }
+      if (forn_sp)         attrs.is_taxable            = true
+      if (forn_af)         attrs.self_billing          = true
+      if (forn_m10)        attrs.is_independent_worker = true
+      if (forn_aceitarAd)  attrs.trusted_email_source  = true
+      if (forn_obs)        attrs.internal_observations = forn_obs
+      return attrs
+    }
+
+    const itemAttrs: Record<string, unknown> = {
+      item_code:                item_codigo,
+      item_description:         item_desc,
+      tax_code:                 item_taxa,
+      sales_price_includes_vat: item_ivaInc,
+      is_active:                item_ativo,
+      ...(item_preco       ? { sales_price:    parseFloat(item_preco) }       : {}),
+      ...(item_precoCompra ? { purchase_price: parseFloat(item_precoCompra) } : {}),
+      ...(item_barcode     ? { ean_barcode:    item_barcode }                 : {}),
+      ...(item_notas       ? { notes:          item_notas }                   : {}),
+    }
+    return itemAttrs
+  }
+
+  const nifInvalido = (nif: string) => nif.length > 0 && !validarNIF(nif)
+
+  function canSubmit() {
+    if (tab === 'clientes')     return !!cli_nif.trim()  && validarNIF(cli_nif)  && !!cli_nome.trim()
+    if (tab === 'fornecedores') return !!forn_nif.trim() && validarNIF(forn_nif) && !!forn_nome.trim()
+    return !!item_codigo.trim() && !!item_desc.trim()
+  }
+
+  const titles: Record<Tab, string> = {
+    clientes:     'Novo Cliente',
+    fornecedores: 'Novo Fornecedor',
+    produtos:     'Novo Produto',
+    servicos:     'Novo Serviço',
+  }
+
+  const sHdr = (label: string) => (
+    <div className="px-6 py-1.5 bg-teal-600 text-white text-xs font-semibold uppercase tracking-wide">
+      {label}
+    </div>
+  )
+
+  const faceStyle = (back = false): CSSProperties => ({
+    position: 'absolute',
+    inset: 0,
+    overflowY: 'auto',
+    backfaceVisibility: 'hidden',
+    transition: 'transform 0.55s cubic-bezier(0.4,0,0.2,1)',
+    transform: back
+      ? (flipped ? 'rotateY(0deg)'    : 'rotateY(180deg)')
+      : (flipped ? 'rotateY(-180deg)' : 'rotateY(0deg)'),
+    pointerEvents: back
+      ? (flipped ? 'auto' : 'none')
+      : (flipped ? 'none' : 'auto'),
+  })
+
+  const forn_faceStyle = (back = false): CSSProperties => ({
+    position: 'absolute',
+    inset: 0,
+    overflowY: 'auto',
+    backfaceVisibility: 'hidden',
+    transition: 'transform 0.55s cubic-bezier(0.4,0,0.2,1)',
+    transform: back
+      ? (forn_flipped ? 'rotateY(0deg)'    : 'rotateY(180deg)')
+      : (forn_flipped ? 'rotateY(-180deg)' : 'rotateY(0deg)'),
+    pointerEvents: back
+      ? (forn_flipped ? 'auto' : 'none')
+      : (forn_flipped ? 'none' : 'auto'),
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div
+        className={`bg-white rounded-xl shadow-2xl w-full flex flex-col ${(tab === 'clientes' || tab === 'fornecedores') ? 'max-w-xl' : 'max-w-lg'}`}
+        style={(tab === 'clientes' || tab === 'fornecedores') ? { height: 'min(90vh, 700px)' } : { maxHeight: '90vh' }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Plus className="w-4 h-4 text-primary-600" />
+            <span className="font-semibold text-gray-900 text-sm">
+              {titles[tab]}
+              {tab === 'clientes' && flipped ? ' — Informações Adicionais' : ''}
+              {tab === 'fornecedores' && forn_flipped ? ' — Informações Adicionais' : ''}
+            </span>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* ── Flip card (clientes) ── */}
+        {tab === 'clientes' ? (
+          <div className="flex-1 min-h-0 relative overflow-hidden" style={{ perspective: '1200px' }}>
+
+            {/* FRENTE — Geral / Morada / Observações */}
+            <div style={faceStyle()}>
+
+              {sHdr('Geral')}
+              <div className="px-6 py-3 space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">NIF <span className="text-red-400">*</span></label>
+                    <input
+                      className={`input text-sm w-full ${nifInvalido(cli_nif) ? 'border-red-400 focus:ring-red-400' : ''}`}
+                      placeholder="123456789"
+                      value={cli_nif}
+                      onChange={e => setCli_nif(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                    />
+                    {nifInvalido(cli_nif) && <p className="text-xs text-red-500 mt-1">NIF inválido</p>}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Nome <span className="text-red-400">*</span></label>
+                    <input className="input text-sm w-full" placeholder="Nome ou empresa" value={cli_nome} onChange={e => setCli_nome(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Sub-conta</label>
+                    <input className="input text-sm w-full" placeholder="Sub-conta" value={cli_subconta} onChange={e => setCli_subconta(e.target.value)} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Nome de contacto</label>
+                    <input className="input text-sm w-full" placeholder="João Silva" value={cli_contacto} onChange={e => setCli_contacto(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">E-mail</label>
+                    <input type="email" className="input text-sm w-full" placeholder="email@exemplo.pt" value={cli_email} onChange={e => setCli_email(e.target.value)} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Telefone</label>
+                    <input className="input text-sm w-full" placeholder="210000000" maxLength={9} value={cli_tel} onChange={e => setCli_tel(e.target.value.replace(/\D/g, '').slice(0, 9))} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Telemóvel</label>
+                    <input className="input text-sm w-full" placeholder="910000000" maxLength={9} value={cli_telem} onChange={e => setCli_telem(e.target.value.replace(/\D/g, '').slice(0, 9))} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Site web</label>
+                    <input className="input text-sm w-full" placeholder="https://..." value={cli_website} onChange={e => setCli_website(e.target.value)} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+                  {([
+                    { label: 'Sujeito passivo?',       val: cli_sp,        set: setCli_sp        },
+                    { label: 'Regime de IVA de Caixa', val: cli_ivaC,      set: setCli_ivaC      },
+                    { label: 'Está isento de IVA?',    val: cli_isentoIva, set: setCli_isentoIva },
+                    { label: 'Ativo?',                 val: cli_ativo,     set: setCli_ativo     },
+                  ] as { label: string; val: boolean; set: (v: boolean) => void }[]).map(({ label, val, set }) => (
+                    <label key={label} className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={val} onChange={e => set(e.target.checked)}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                      <span className="text-xs text-gray-700">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {sHdr('Morada')}
+              <div className="px-6 py-3 space-y-2">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Designação</label>
+                  <input className="input text-sm w-full" value={cli_moradaDesig} onChange={e => setCli_moradaDesig(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Morada</label>
+                  <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Rua, nº, andar..." value={cli_morada} onChange={e => setCli_morada(e.target.value)} />
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Código postal</label>
+                    <input className="input text-sm w-full" placeholder="0000-000" value={cli_codPostal} maxLength={8}
+                      onChange={e => {
+                        const digits = e.target.value.replace(/\D/g, '').slice(0, 7)
+                        setCli_codPostal(digits.length > 4 ? `${digits.slice(0, 4)}-${digits.slice(4)}` : digits)
+                      }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Localidade</label>
+                    <input
+                      className="input text-sm w-full bg-gray-50 cursor-not-allowed"
+                      placeholder={cli_localidadeLoading ? 'A pesquisar…' : 'Automático'}
+                      value={cli_localidade}
+                      readOnly
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">País/Região</label>
+                    <select className="input text-sm w-full" value={cli_pais} onChange={e => setCli_pais(e.target.value)}>
+                      {countries.length === 0
+                        ? <option value="1">Portugal - Continente</option>
+                        : countries.map(c => (
+                            <option key={String(c.id)} value={String(c.id)}>
+                              {(c.default_name as string) || String(c.id)}
+                            </option>
+                          ))
+                      }
+                    </select>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={cli_moradaDesc} onChange={e => setCli_moradaDesc(e.target.checked)}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                  <span className="text-xs text-gray-700">Morada de Descarga?</span>
+                </label>
+              </div>
+
+              {sHdr('Observações')}
+              <div className="px-6 py-3 space-y-3 pb-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Observações para documento</label>
+                  <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Observações para documento..." value={cli_obsDoc} onChange={e => setCli_obsDoc(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Observações internas</label>
+                  <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Observações internas..." value={cli_obsInt} onChange={e => setCli_obsInt(e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            {/* VERSO — Informações Adicionais */}
+            <div style={faceStyle(true)}>
+
+              {sHdr('Valores por omissão para documentos')}
+              <div className="px-6 py-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Prazo de vencimento</label>
+                    <select className="input text-sm w-full" value={cli_prazoVenc} onChange={e => setCli_prazoVenc(e.target.value)}>
+                      <option value="">—</option>
+                      {[['Pronto pagamento','0'],['8 dias','8'],['15 dias','15'],['21 dias','21'],['30 dias','30'],['45 dias','45'],['60 dias','60'],['75 dias','75'],['90 dias','90'],['120 dias','120'],['150 dias','150'],['180 dias','180']].map(([l,v]) => (
+                        <option key={v} value={v}>{l}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Retenção na fonte</label>
+                    <select className="input text-sm w-full" value={cli_retencao} onChange={e => setCli_retencao(e.target.value)}>
+                      <option value="">Não aplicável</option>
+                      <option value="IRS_D">IRS — Trab. Dependente</option>
+                      <option value="IRS_I">IRS — Trab. Independente</option>
+                      <option value="IRC">IRC</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">% retenção</label>
+                    <input type="number" min="0" max="100" step="0.01" className="input text-sm w-full" placeholder="%" value={cli_percRet} onChange={e => setCli_percRet(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Moeda</label>
+                    <select className="input text-sm w-full" value={cli_moeda} onChange={e => setCli_moeda(e.target.value)}>
+                      {([
+                        ['EUR','Euro'],['USD','Dólar americano'],['GBP','Libra esterlina'],
+                        ['CHF','Franco suíço'],['JPY','Iene japonês'],['CAD','Dólar canadiano'],
+                        ['AUD','Dólar australiano'],['NZD','Dólar neozelandês'],
+                        ['DKK','Coroa dinamarquesa'],['NOK','Coroa norueguesa'],['SEK','Coroa sueca'],
+                        ['PLN','Złoty polaco'],['CZK','Coroa checa'],['HUF','Forinto húngaro'],
+                        ['RON','Leu romeno'],['BGN','Lev búlgaro'],['HRK','Kuna croata'],
+                        ['TRY','Lira turca'],['RUB','Rublo russo'],
+                        ['BRL','Real brasileiro'],['MXN','Peso mexicano'],['ARS','Peso argentino'],
+                        ['CLP','Peso chileno'],['COP','Peso colombiano'],['PEN','Sol peruano'],
+                        ['UYU','Peso uruguaio'],
+                        ['AOA','Kwanza angolano'],['MZN','Metical moçambicano'],
+                        ['CVE','Escudo caboverdiano'],['STN','Dobra são-tomense'],
+                        ['ZAR','Rand sul-africano'],['MAD','Dirham marroquino'],
+                        ['EGP','Libra egípcia'],['NGN','Naira nigeriana'],['KES','Xelim queniano'],
+                        ['CNY','Yuan chinês (Renminbi)'],['HKD','Dólar de Hong Kong'],
+                        ['SGD','Dólar de Singapura'],['INR','Rupia indiana'],
+                        ['KRW','Won sul-coreano'],['THB','Baht tailandês'],['MYR','Ringgit malaio'],
+                        ['AED','Dirham dos EAU'],['SAR','Riyal saudita'],['KWD','Dinar kuwaitiano'],
+                        ['QAR','Riyal do Qatar'],['ILS','Shekel israelita'],
+                      ] as [string,string][]).map(([code,name]) => (
+                        <option key={code} value={code}>{code} — {name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Preço de venda</label>
+                    <select className="input text-sm w-full" value={cli_precoVenda} onChange={e => setCli_precoVenda(e.target.value)}>
+                      {[['PVP1','1'],['PVP2','2'],['PVP3','3'],['PVP4','4'],['PVP5','5']].map(([l,v]) => (
+                        <option key={v} value={v}>{l}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Modelo de impressão</label>
+                  <select className="input text-sm w-full" value={cli_modeloImp} onChange={e => setCli_modeloImp(e.target.value)}>
+                    <option value="">—</option>
+                    {[['Clássico','1'],['Profissional','2'],['Internacional','3'],['A5','4'],['Talões 80mm','5'],['Talões 75mm','6'],['Talões 60mm','7'],['Empresarial','8'],['A4 (A5 + A5)','9']].map(([l,v]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {sHdr('Valores por omissão para recibos')}
+              <div className="px-6 py-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Método de pagamento</label>
+                <select className="input text-sm w-full" value={cli_metodoPag} onChange={e => setCli_metodoPag(e.target.value)}>
+                  <option value="">—</option>
+                  {([
+                    ['Numerário','NU'],['Cheque','CH'],['Cartão de débito','CD'],
+                    ['Cartão de crédito','CC'],['Transferência bancária','TB'],
+                    ['Débito direto autorizado','DD'],['Referências Multibanco','MB'],
+                    ['Ticket restaurante','TR'],['Cheque ou cartão oferta','CO'],
+                    ['Colaborador','CL'],['Outra entidade','OE'],['Cliente','CI'],
+                    ['Fornecedor','FO'],['Outros meios','OU'],['Dinheiro eletrónico','DE'],
+                    ['Letra comercial','LC'],
+                  ] as [string,string][]).map(([l,v]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
+
+              {sHdr('Débito Direto SEPA')}
+              <div className="px-6 py-3 space-y-3 pb-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={cli_debitoDireto} onChange={e => setCli_debitoDireto(e.target.checked)}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                  <span className="text-xs text-gray-700">Débito direto?</span>
+                </label>
+                {cli_debitoDireto && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Conta a creditar (IBAN da empresa)</label>
+                    <input className="input text-sm w-full font-mono" placeholder="Conta bancária da empresa" value={cli_ibanCred} onChange={e => setCli_ibanCred(e.target.value)} />
+                  </div>
+                )}
+              </div>
+
+              {sHdr('Outros endereços de e-mail')}
+              <div className="px-6 py-3 space-y-2 pb-4">
+                {cli_emails.map((em, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input type="email" className="input text-sm flex-1" placeholder="email@exemplo.pt"
+                      value={em} onChange={e => { const a = [...cli_emails]; a[i] = e.target.value; setCli_emails(a) }} />
+                    <button onClick={() => setCli_emails(cli_emails.filter((_, j) => j !== i))}
+                      className="text-gray-400 hover:text-red-500 transition-colors">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                <button onClick={() => setCli_emails([...cli_emails, ''])}
+                  className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-800 font-medium">
+                  <Plus className="w-3.5 h-3.5" /> ADICIONAR E-MAIL
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : tab === 'fornecedores' ? (
+          <div className="flex-1 min-h-0 relative overflow-hidden" style={{ perspective: '1200px' }}>
+                {/* FRENTE — Geral / Morada / Observações */}
+            <div style={forn_faceStyle()}>
+                  {sHdr('Geral')}
+                  <div className="px-6 py-3 space-y-3">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">NIF <span className="text-red-400">*</span></label>
+                        <input
+                          className={`input text-sm w-full ${nifInvalido(forn_nif) ? 'border-red-400 focus:ring-red-400' : ''}`}
+                          placeholder="123456789"
+                          value={forn_nif}
+                          onChange={e => setForn_nif(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                        />
+                        {nifInvalido(forn_nif) && <p className="text-xs text-red-500 mt-1">NIF inválido</p>}
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Nome <span className="text-red-400">*</span></label>
+                        <input className="input text-sm w-full" placeholder="Nome ou empresa" value={forn_nome} onChange={e => setForn_nome(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Sub-conta</label>
+                        <input className="input text-sm w-full bg-gray-50 cursor-not-allowed" placeholder="Gerado automaticamente" value={forn_subconta} readOnly />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Nome de contacto</label>
+                        <input className="input text-sm w-full" placeholder="João Silva" value={forn_contacto} onChange={e => setForn_contacto(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Cargo</label>
+                        <input className="input text-sm w-full" placeholder="Gerente" value={forn_cargo} onChange={e => setForn_cargo(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">E-mail</label>
+                        <input type="email" className="input text-sm w-full" placeholder="email@exemplo.pt" value={forn_email} onChange={e => setForn_email(e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Telefone</label>
+                        <input className="input text-sm w-full" placeholder="210000000" maxLength={9} value={forn_telefone} onChange={e => setForn_telefone(e.target.value.replace(/\D/g, '').slice(0, 9))} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Telemóvel</label>
+                        <input className="input text-sm w-full" placeholder="910000000" maxLength={9} value={forn_telem} onChange={e => setForn_telem(e.target.value.replace(/\D/g, '').slice(0, 9))} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Site web</label>
+                        <input className="input text-sm w-full" placeholder="https://..." value={forn_website} onChange={e => setForn_website(e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Tipo de contacto</label>
+                      <div className="relative">
+                        <div
+                          className="input text-sm min-h-[38px] flex flex-wrap gap-1 items-center cursor-text"
+                          onClick={() => setForn_tipoOpen(true)}
+                        >
+                          {forn_tipoContacto.map(v => {
+                            const opt = [
+                              { label: 'Direção',                          value: 'management' },
+                              { label: 'Financeiro (Troca de documentos)', value: 'finance'    },
+                              { label: 'Comercial',                        value: 'comercial'  },
+                              { label: 'Geral',                            value: 'general'    },
+                              { label: 'Outros',                           value: 'others'     },
+                            ].find(o => o.value === v)
+                            return (
+                              <span key={v} className="flex items-center gap-1 bg-primary-100 text-primary-700 text-xs px-2 py-0.5 rounded">
+                                <X className="w-3 h-3 cursor-pointer flex-shrink-0"
+                                  onMouseDown={e => e.preventDefault()}
+                                  onClick={e => { e.stopPropagation(); setForn_tipoContacto(p => p.filter(t => t !== v)) }}
+                                />
+                                {opt?.label ?? v}
+                              </span>
+                            )
+                          })}
+                          <input
+                            className="flex-1 min-w-[2rem] outline-none bg-transparent text-sm cursor-pointer"
+                            readOnly
+                            onFocus={() => setForn_tipoOpen(true)}
+                            onBlur={() => setTimeout(() => setForn_tipoOpen(false), 150)}
+                          />
+                        </div>
+                        {forn_tipoOpen && (() => {
+                          const remaining = [
+                            { label: 'Direção',                          value: 'management' },
+                            { label: 'Financeiro (Troca de documentos)', value: 'financial'  },
+                            { label: 'Comercial',                        value: 'commercial' },
+                            { label: 'Geral',                            value: 'general'    },
+                            { label: 'Outros',                           value: 'others'     },
+                          ].filter(o => !forn_tipoContacto.includes(o.value))
+                          if (!remaining.length) return null
+                          return (
+                            <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                              {remaining.map(o => (
+                                <button
+                                  key={o.value}
+                                  type="button"
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-primary-600 hover:text-white transition-colors"
+                                  onMouseDown={e => e.preventDefault()}
+                                  onClick={() => { setForn_tipoContacto(p => [...p, o.value]); setForn_tipoOpen(false) }}
+                                >
+                                  {o.label}
+                                </button>
+                              ))}
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+                      {([
+                        { label: 'Está isento de IVA?',     val: forn_ativoIva,  set: setForn_ativoIva  },
+                        { label: 'Sujeito Passivo (S.P.)',  val: forn_sp,        set: setForn_sp       },
+                        { label: 'Auto-faturação (A.F.)',   val: forn_af,        set: setForn_af       },
+                        { label: 'Modelo 10',               val: forn_m10,       set: setForn_m10      },
+                        { label: 'Aceitar e-mails AD',      val: forn_aceitarAd, set: setForn_aceitarAd },
+                        { label: 'Ativo?',                  val: forn_ativo,     set: setForn_ativo    },
+                      ] as { label: string; val: boolean; set: (v: boolean) => void }[]).map(({ label, val, set }) => (
+                        <label key={label} className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={val} onChange={e => set(e.target.checked)}
+                            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                          <span className="text-xs text-gray-700">{label}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    {forn_ativoIva && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Razão de isenção de IVA</label>
+                        <select className="input text-sm w-full" value={forn_isentoIvaRazao} onChange={e => setForn_isentoIvaRazao(e.target.value)}>
+                          <option value="">—</option>
+                          {([
+                            [1,  'M01 — Artigo 16.º, n.º 6, Código do IVA'],
+                            [2,  'M02 — Artigo 6.º, Decreto-Lei n.º 198/90, de 19 de junho'],
+                            [6,  'M04 — Isento artigo 13.º, Código do IVA'],
+                            [7,  'M05 — Isento artigo 14.º, Código do IVA'],
+                            [8,  'M06 — Isento artigo 15.º, Código do IVA'],
+                            [66, 'M06 — Lei n.º 82-D/2014 de 31 de dezembro'],
+                            [9,  'M07 — Isento artigo 9.º, Código do IVA'],
+                            [17, 'M09 — IVA — Regime de caixa (artigo 35.º-A, Código do IVA)'],
+                            [18, 'M10 — IVA — Regime de caixa (Decreto-Lei n.º 71/2013)'],
+                            [19, 'M11 — Regime especial do tabaco (Decreto-Lei n.º 346/85)'],
+                            [20, 'M12 — Regime de margem de lucro — Agências de viagens'],
+                            [21, 'M13 — Regime de margem de lucro — Bens em segunda mão'],
+                            [22, 'M14 — Regime de margem de lucro — Objetos de arte'],
+                            [23, 'M15 — Regime de margem de lucro — Objetos de coleção e antiguidades'],
+                            [26, 'M16 — Isento artigo 14.º, Regime do IVA nas transações intracomunitárias'],
+                            [119,'M19 — Outras isenções'],
+                            [63, 'M20 — IVA — Regime forfetário'],
+                            [121,'M21 — IVA não dedutível (artigo 21.º, Código do IVA)'],
+                            [125,'M25 — Mercadorias à consignação (artigo 38.º, Código do IVA)'],
+                            [151,'M26 — Cabaz alimentar (Lei n.º 17/2023 de 14 de abril)'],
+                            [130,'M30 — IVA — Autoliquidação (artigo 2.º, n.º 1, alínea i), Código do IVA)'],
+                            [131,'M31 — IVA — Autoliquidação (artigo 2.º, n.º 1, alínea j), Código do IVA)'],
+                            [132,'M32 — IVA — Autoliquidação (artigo 2.º, n.º 1, alínea l), Código do IVA)'],
+                            [133,'M33 — IVA — Autoliquidação (artigo 2.º, n.º 1, alínea m), Código do IVA)'],
+                            [152,'M34 — IVA — Autoliquidação (artigo 2.º, n.º 1, alínea n), Código do IVA)'],
+                            [140,'M40 — IVA — Autoliquidação (artigo 6.º, n.º 6, alínea a), Código do IVA)'],
+                            [141,'M41 — IVA — Autoliquidação (Decreto-Lei n.º 21/2007 de 29 de janeiro)'],
+                            [142,'M42 — IVA — Autoliquidação (Decreto-Lei n.º 362/99 de 16 de setembro)'],
+                            [143,'M43 — IVA — Autoliquidação (outras situações)'],
+                            [160,'M44 — IVA — Autoliquidação (artigo 3.º, Decreto-Lei n.º 362/99)'],
+                            [161,'M45 — IVA — Autoliquidação (artigo 4.º, Decreto-Lei n.º 362/99)'],
+                            [162,'M46 — IVA — Autoliquidação (artigo 5.º, Decreto-Lei n.º 362/99)'],
+                            [28, 'M99 — Não sujeito / não tributado'],
+                          ] as [number, string][]).map(([id, label]) => (
+                            <option key={id} value={String(id)}>{label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {sHdr('Morada')}
+                  <div className="px-6 py-3 space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Designação</label>
+                      <input className="input text-sm w-full" value={forn_moradaDesig} onChange={e => setForn_moradaDesig(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Morada</label>
+                      <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Rua, nº, andar..." value={forn_morada} onChange={e => setForn_morada(e.target.value)} />
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Código postal</label>
+                        <input className="input text-sm w-full" placeholder="0000-000" value={forn_codPostal} maxLength={8}
+                          onChange={e => {
+                            const digits = e.target.value.replace(/\D/g, '').slice(0, 7)
+                            setForn_codPostal(digits.length > 4 ? `${digits.slice(0, 4)}-${digits.slice(4)}` : digits)
+                          }} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Localidade</label>
+                        <input
+                          className="input text-sm w-full bg-gray-50 cursor-not-allowed"
+                          placeholder={forn_localidadeLoading ? 'A pesquisar…' : 'Automático'}
+                          value={forn_localidade}
+                          readOnly
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">País/Região</label>
+                        <select className="input text-sm w-full" value={forn_pais} onChange={e => setForn_pais(e.target.value)}>
+                          {countries.length === 0
+                            ? <option value="1">Portugal - Continente</option>
+                            : countries.map(c => (
+                                <option key={String(c.id)} value={String(c.id)}>
+                                  {(c.default_name as string) || String(c.id)}
+                                </option>
+                              ))
+                          }
+                        </select>
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={forn_moradaCarga} onChange={e => setForn_moradaCarga(e.target.checked)}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                      <span className="text-xs text-gray-700">Morada de Carga?</span>
+                    </label>
+                  </div>
+
+                  {sHdr('Observações')}
+                  <div className="px-6 py-3 space-y-3 pb-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Observações internas</label>
+                      <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Notas internas..." value={forn_obs} onChange={e => setForn_obs(e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* VERSO — Informações Adicionais */}
+            <div style={forn_faceStyle(true)}>
+                  {sHdr('Valores por omissão para documentos')}
+                  <div className="px-6 py-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Prazo de pagamento</label>
+                        <select className="input text-sm w-full" value={forn_prazoVenc} onChange={e => setForn_prazoVenc(e.target.value)}>
+                          <option value="">—</option>
+                          {[0,8,15,21,30,45,60,75,90,120,150,180].map(d => (
+                            <option key={d} value={String(d)}>{d} dias</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Moeda</label>
+                        <select className="input text-sm w-full" value={forn_moeda} onChange={e => setForn_moeda(e.target.value)}>
+                          <option value="EUR">EUR — Euro</option>
+                          <option value="GBP">GBP — Libra</option>
+                          <option value="USD">USD — Dólar</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Modelo de impressão</label>
+                      <select className="input text-sm w-full" value={forn_modeloImp} onChange={e => setForn_modeloImp(e.target.value)}>
+                        <option value="">—</option>
+                        {[['Clássico','1'],['Profissional','2'],['Internacional','3'],['A5','4'],['Talões 80mm','5'],['Talões 75mm','6'],['Talões 60mm','7'],['Empresarial','8'],['A4 (A5 + A5)','9']].map(([l,v]) => (
+                          <option key={v} value={v}>{l}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {sHdr('Valores por omissão para recibos')}
+                  <div className="px-6 py-3">
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Método de pagamento</label>
+                    <select className="input text-sm w-full" value={forn_metodoPag} onChange={e => setForn_metodoPag(e.target.value)}>
+                      <option value="">—</option>
+                      {([
+                        ['Numerário','MO'],
+                        ['Cartão de débito','DC'],
+                        ['Transferência bancária','TR'],
+                        ['Débito direto autorizado','DDA'],
+                        ['Ticket restaurante','RT'],
+                        ['Colaborador','PCO'],
+                        ['Outra entidade','POE'],
+                        ['Cliente','PCL'],
+                        ['Fornecedor','PF'],
+                      ] as [string,string][]).map(([l,v]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  </div>
+
+                  {sHdr('Conta bancária do fornecedor')}
+                  <div className="px-6 py-3 space-y-3 pb-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Banco</label>
+                      <input className="input text-sm w-full" placeholder="BANCO DE PORTUGAL, EP" value={forn_banco} onChange={e => setForn_banco(e.target.value)} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">IBAN</label>
+                        <input className="input text-sm w-full font-mono" placeholder="PT50..." value={forn_iban} onChange={e => setForn_iban(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">SWIFT</label>
+                        <input className="input text-sm w-full font-mono" placeholder="BGALPTTG" value={forn_swift} onChange={e => setForn_swift(e.target.value)} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+            {/* PRODUTO / SERVIÇO */}
+            {(tab === 'produtos' || tab === 'servicos') && (<>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Código <span className="text-red-400">*</span></label>
+                  <input className="input text-sm w-full font-mono" placeholder="PROD001" value={item_codigo} onChange={e => setItem_codigo(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Taxa de IVA</label>
+                  <select className="input text-sm w-full" value={item_taxa} onChange={e => setItem_taxa(e.target.value)}>
+                    {TAX_CODES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Descrição <span className="text-red-400">*</span></label>
+                <input className="input text-sm w-full" placeholder="Nome do produto ou serviço" value={item_desc} onChange={e => setItem_desc(e.target.value)} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Preço de venda</label>
+                  <div className="relative">
+                    <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
+                      value={item_preco} onChange={e => setItem_preco(e.target.value)} />
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Preço de compra</label>
+                  <div className="relative">
+                    <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
+                      value={item_precoCompra} onChange={e => setItem_precoCompra(e.target.value)} />
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Código de barras</label>
+                  <input className="input text-sm w-full font-mono" placeholder="EAN13" value={item_barcode} onChange={e => setItem_barcode(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-2 pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer pt-4">
+                    <input type="checkbox" checked={item_ivaInc} onChange={e => setItem_ivaInc(e.target.checked)}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                    <span className="text-xs text-gray-700">Preço inclui IVA</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={item_ativo} onChange={e => setItem_ativo(e.target.checked)}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                    <span className="text-xs text-gray-700">Ativo</span>
+                  </label>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Notas</label>
+                <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Notas internas"
+                  value={item_notas} onChange={e => setItem_notas(e.target.value)} />
+              </div>
+            </>)}
+
+            {mutation.isError && (
+              <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                {(mutation.error as Error).message}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Erro de mutation para clientes/fornecedores (fora do flip) */}
+        {(tab === 'clientes' || tab === 'fornecedores') && mutation.isError && (
+          <div className="mx-6 mb-2 flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex-shrink-0">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+            {(mutation.error as Error).message}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="flex items-center gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+          {(tab === 'clientes' || tab === 'fornecedores') && (
+            <button
+              onClick={() => tab === 'clientes' ? setFlipped(f => !f) : setForn_flipped(f => !f)}
+              className="btn-secondary text-sm px-4 mr-auto"
+            >
+              {(tab === 'clientes' ? flipped : forn_flipped) ? '← VOLTAR' : 'INFORMAÇÕES ADICIONAIS →'}
+            </button>
+          )}
+          <button onClick={onClose} className="btn-secondary text-sm px-4">CANCELAR</button>
+          <button
+            onClick={() => {
+              const address = (tab === 'clientes' && (cli_morada || cli_codPostal || cli_localidade))
+                ? {
+                    name:           cli_moradaDesig || 'Sede',
+                    address_detail: cli_morada     || undefined,
+                    postcode:       cli_codPostal  || undefined,
+                    city:           cli_localidade || undefined,
+                    region:         cli_localidade || undefined,
+                    country_id:     cli_pais ? parseInt(cli_pais, 10) : 1,
+                    is_primary:     true,
+                    for_discharge:  cli_moradaDesc ? 1 : 0,
+                    for_charge:     0,
+                  }
+                : (tab === 'fornecedores' && (forn_morada || forn_codPostal || forn_localidade))
+                ? {
+                    name:           forn_moradaDesig || 'Sede',
+                    address_detail: forn_morada     || undefined,
+                    postcode:       forn_codPostal  || undefined,
+                    city:           forn_localidade || undefined,
+                    region:         forn_localidade || undefined,
+                    country_id:     forn_pais ? parseInt(forn_pais, 10) : 1,
+                    is_primary:     true,
+                    for_discharge:  0,
+                    for_charge:     forn_moradaCarga ? 1 : 0,
+                  }
+                : undefined
+              mutation.mutate({ attrs: buildAttrs(), address })
+            }}
+            disabled={!canSubmit() || mutation.isPending}
+            className="btn-primary text-sm px-4 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {mutation.isPending ? 'A criar…' : 'CRIAR'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── filter types ──────────────────────────────────────────────────────────────
 
 type EstadoFilter  = '' | 'ativo' | 'inativo'
@@ -577,7 +1862,7 @@ function isInativo(row: TocRow): boolean {
   return v === false || v === 0 || v === '0' || v === 'false'
 }
 
-// ── tab table ─────────────────────────────────────────────────────────────────
+// â"€â"€ tab table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function TabTable({
   rows, loading, error, tab, search, clientId,
@@ -600,7 +1885,9 @@ function TabTable({
   const [filterNotice,   setFilterNotice]   = useState<NoticeFilter>('')
   const [filterModelo10, setFilterModelo10] = useState<Modelo10Filter>('')
 
-  const [analiticaItem, setAnaliticaItem] = useState<TocRow | null>(null)
+  const [analiticaItem,  setAnaliticaItem]  = useState<TocRow | null>(null)
+  const [novaContaItem,  setNovaContaItem]  = useState<TocRow | null>(null)
+  const [novoRegisto,    setNovoRegisto]    = useState(false)
 
   // Pre-load all analytics for this tab so the column badge works
   const { data: analytics = [] } = useQuery<{ itemId: string; entries: AnalyticConfig[] }[]>({
@@ -633,7 +1920,7 @@ function TabTable({
         <AlertTriangle className="w-8 h-8 text-amber-400" />
         <p className="text-sm text-gray-500">
           Não foi possível carregar os dados do TOConline.<br />
-          Verifique a ligação em <span className="font-medium">Definições → TOConline</span>.
+          Verifique a ligação em <span className="font-medium">Definições â†' TOConline</span>.
         </p>
       </div>
     )
@@ -704,6 +1991,17 @@ function TabTable({
           onClose={() => setAnaliticaItem(null)}
         />
       )}
+      {novaContaItem && (
+        <NovaContaModal
+          type={tab === 'clientes' ? 'receber' : 'pagar'}
+          entity={novaContaItem}
+          clientId={clientId}
+          onClose={() => setNovaContaItem(null)}
+        />
+      )}
+      {novoRegisto && (
+        <NovoRegistoModal tab={tab} clientId={clientId} onClose={() => setNovoRegisto(false)} />
+      )}
 
       {/* Filter toolbar */}
       <div className="px-5 py-2.5 border-b border-gray-100 flex flex-wrap items-center gap-2">
@@ -765,10 +2063,19 @@ function TabTable({
           </button>
         )}
 
-        <span className="ml-auto text-xs text-gray-400">
-          {sorted.length !== rows.length ? `${sorted.length} de ${rows.length}` : sorted.length}{' '}
-          registo{sorted.length !== 1 ? 's' : ''}
-        </span>
+        <div className="ml-auto flex items-center gap-3">
+          <button
+            onClick={() => setNovoRegisto(true)}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-primary-600 hover:bg-primary-700 rounded-lg px-3 py-1.5 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            {tab === 'clientes' ? 'Novo Cliente' : tab === 'fornecedores' ? 'Novo Fornecedor' : tab === 'produtos' ? 'Novo Produto' : 'Novo Serviço'}
+          </button>
+          <span className="text-xs text-gray-400">
+            {sorted.length !== rows.length ? `${sorted.length} de ${rows.length}` : sorted.length}{' '}
+            registo{sorted.length !== 1 ? 's' : ''}
+          </span>
+        </div>
       </div>
 
       {sorted.length === 0 ? (
@@ -825,6 +2132,20 @@ function TabTable({
                         </td>
                       )
                     }
+                    if (c.special === 'nova-conta') {
+                      const label = tab === 'clientes' ? 'Conta a Receber' : 'Conta a Pagar'
+                      return (
+                        <td key="nova-conta" className="px-3 py-3 text-right">
+                          <button
+                            onClick={() => setNovaContaItem(row)}
+                            className="inline-flex items-center gap-1.5 text-xs font-medium text-primary-600 hover:text-white hover:bg-primary-600 border border-primary-200 hover:border-primary-600 rounded-lg px-2.5 py-1 transition-all"
+                          >
+                            <FilePlus2 className="w-3 h-3" />
+                            {label}
+                          </button>
+                        </td>
+                      )
+                    }
                     const val = getVal(row, c.keys)
                     const display = c.format ? c.format(val) : (val != null ? String(val) : '—')
                     return (
@@ -843,7 +2164,7 @@ function TabTable({
   )
 }
 
-// ── page ──────────────────────────────────────────────────────────────────────
+// â"€â"€ page â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 export default function EmpresaPage() {
   const { selectedClientId } = useAuth()

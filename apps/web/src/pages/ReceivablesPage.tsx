@@ -479,7 +479,7 @@ export default function ReceivablesPage() {
                 const d = row.d
                 const docId = String(d.id)
                 const ref = d.document_no
-                const customer = d.customer_business_name
+                const customer = d.customer_business_name || '—'
                 const date = d.date
                 const dueDate = d.due_date ?? date
                 const total = d.gross_total

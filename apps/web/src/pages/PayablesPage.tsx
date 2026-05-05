@@ -477,7 +477,7 @@ export default function PayablesPage() {
                 const d = row.d
                 const docId = String(d.id)
                 const ref = d.document_no
-                const supplier = d.supplier_business_name
+                const supplier = d.supplier_business_name || '—'
                 const date = d.date
                 const dueDate = d.due_date ?? date
                 const total = d.gross_total
