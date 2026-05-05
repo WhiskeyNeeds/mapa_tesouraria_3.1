@@ -43,7 +43,17 @@
       "PowerShell(node \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\fix_encoding.js\")",
       "PowerShell(node \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\check_encoding.js\")",
       "PowerShell(node \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\fix_emdash.js\")",
-      "WebFetch(domain:app.swaggerhub.com)"
+      "WebFetch(domain:app.swaggerhub.com)",
+      "Bash(claude mcp *)",
+      "Bash(where claude *)",
+      "PowerShell(Get-Command claude -ErrorAction SilentlyContinue)",
+      "PowerShell(if \\(-not $?\\) { \"not found\" })",
+      "Read(//c/Users/ruise/.claude/**)",
+      "mcp__toconline-documenta-o-api__searchDocumentation",
+      "mcp__toconline-documenta-o-api__getPage"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\ruise\\.claude"
     ]
   }
 }

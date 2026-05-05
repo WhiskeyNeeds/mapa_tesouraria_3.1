@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   Search, Users, Truck, Package, Wrench, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2,
+  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2, Eye,
 } from 'lucide-react'
 
 type Tab = 'clientes' | 'fornecedores' | 'produtos' | 'servicos'
@@ -863,6 +863,12 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
   // ── cliente — observações ──
   const [cli_obsDoc,       setCli_obsDoc]       = useState('')
   const [cli_obsInt,       setCli_obsInt]       = useState('')
+  // ── cliente — fiscal e crédito ──
+  const [cli_isentoRazao,  setCli_isentoRazao]  = useState('')
+  const [cli_regiaoFiscal, setCli_regiaoFiscal] = useState('PT')
+  const [cli_contaContab,  setCli_contaContab]  = useState('')
+  const [cli_limCredValor, setCli_limCredValor] = useState('')
+  const [cli_limCredDias,  setCli_limCredDias]  = useState('')
   // ── cliente — informações adicionais ──
   const [cli_prazoVenc,    setCli_prazoVenc]    = useState('')
   const [cli_retencao,     setCli_retencao]     = useState('')
@@ -918,15 +924,27 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
   const [forn_flipped,      setForn_flipped]      = useState(false)
 
   // ── produto / serviço ──
-  const [item_codigo,      setItem_codigo]      = useState('')
-  const [item_desc,        setItem_desc]        = useState('')
-  const [item_preco,       setItem_preco]       = useState('')
-  const [item_precoCompra, setItem_precoCompra] = useState('')
-  const [item_ivaInc,      setItem_ivaInc]      = useState(false)
-  const [item_taxa,        setItem_taxa]        = useState('NOR')
-  const [item_ativo,       setItem_ativo]       = useState(true)
-  const [item_barcode,     setItem_barcode]     = useState('')
-  const [item_notas,       setItem_notas]       = useState('')
+  const [item_codigo,       setItem_codigo]       = useState('')
+  const [item_desc,         setItem_desc]         = useState('')
+  const [item_preco,        setItem_preco]        = useState('')
+  const [item_preco2,       setItem_preco2]       = useState('')
+  const [item_preco3,       setItem_preco3]       = useState('')
+  const [item_precoCompra,  setItem_precoCompra]  = useState('')
+  const [item_ivaInc,       setItem_ivaInc]       = useState(false)
+  const [item_taxa,         setItem_taxa]         = useState('NOR')
+  const [item_ativo,        setItem_ativo]        = useState(true)
+  const [item_barcode,      setItem_barcode]      = useState('')
+  const [item_notas,        setItem_notas]        = useState('')
+  const [item_locArmazem,   setItem_locArmazem]   = useState('')
+  const [item_isMercadoria, setItem_isMercadoria] = useState(false)
+  const [item_tipoInv,      setItem_tipoInv]      = useState('')
+  const [item_grupoServico, setItem_grupoServico] = useState('')
+  const [item_numContab,    setItem_numContab]    = useState('')
+  const [item_custoFin,     setItem_custoFin]     = useState('')
+  const [item_custoTrans,   setItem_custoTrans]   = useState('')
+  const [item_custoOutros,  setItem_custoOutros]  = useState('')
+  const [item_custoAlf,     setItem_custoAlf]     = useState('')
+  const [item_flipped,      setItem_flipped]      = useState(false)
 
   const { data: countries = [] } = useQuery<TocRow[]>({
     queryKey: ['toc-countries', clientId],
@@ -980,16 +998,20 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
   const mutation = useMutation({
     mutationFn: async ({ attrs, address }: { attrs: Record<string, unknown>; address?: Record<string, unknown> }) => {
       const result = await api.post(endpointMap[tab], attrs) as Record<string, unknown>
-      if (address) {
-        const id = (result.data as Record<string, unknown> | undefined)?.id ?? result.id
-        if (id) {
-          await api.post(`/toconline/${clientId}/addresses`, {
-            ...address,
-            addressable_id:   typeof id === 'string' ? parseInt(id, 10) : Number(id),
-            addressable_type: tab === 'clientes' ? 'Customer' : 'Supplier',
-          }).catch(() => {})
+
+      if (address && (tab === 'clientes' || tab === 'fornecedores')) {
+        // TOConline auto-creates a blank address on entity creation.
+        // We must PATCH that blank address — not POST a new one.
+        const data = result.data as Record<string, unknown> | undefined
+        const rels = data?.relationships as Record<string, unknown> | undefined
+        const mainAddr = (rels?.main_address as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined
+        const addressId = mainAddr?.id as string | undefined
+
+        if (addressId) {
+          await api.patch(`/toconline/${clientId}/addresses/${addressId}`, address).catch(() => {})
         }
       }
+
       return result
     },
     onSuccess: () => {
@@ -1014,7 +1036,14 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
       if (cli_website)   attrs.website              = cli_website
       if (cli_sp)        attrs.not_final_customer   = true
       if (cli_ivaC)      attrs.cashed_vat           = true
-      if (cli_isentoIva) attrs.is_tax_exempt        = true
+      if (cli_isentoIva) {
+        attrs.is_tax_exempt = true
+        if (cli_isentoRazao) attrs.tax_exemption_reason_id = parseInt(cli_isentoRazao, 10)
+      }
+      if (cli_regiaoFiscal && cli_regiaoFiscal !== 'PT') attrs.tax_country_region = cli_regiaoFiscal
+      if (cli_contaContab)  attrs.accounting_number  = cli_contaContab
+      if (cli_limCredValor) attrs.credit_limit_value = parseFloat(cli_limCredValor)
+      if (cli_limCredDias)  attrs.credit_limit_days  = parseInt(cli_limCredDias, 10)
       if (cli_obsDoc)    attrs.observations          = cli_obsDoc
       if (cli_obsInt)    attrs.internal_observations = cli_obsInt
 
@@ -1049,10 +1078,21 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
       tax_code:                 item_taxa,
       sales_price_includes_vat: item_ivaInc,
       is_active:                item_ativo,
-      ...(item_preco       ? { sales_price:    parseFloat(item_preco) }       : {}),
-      ...(item_precoCompra ? { purchase_price: parseFloat(item_precoCompra) } : {}),
-      ...(item_barcode     ? { ean_barcode:    item_barcode }                 : {}),
-      ...(item_notas       ? { notes:          item_notas }                   : {}),
+      ...(item_preco        ? { sales_price:             parseFloat(item_preco) }        : {}),
+      ...(item_preco2       ? { sales_price_2:           parseFloat(item_preco2) }       : {}),
+      ...(item_preco3       ? { sales_price_3:           parseFloat(item_preco3) }       : {}),
+      ...(item_precoCompra  ? { purchase_price:          parseFloat(item_precoCompra) }  : {}),
+      ...(item_barcode      ? { ean_barcode:             item_barcode }                  : {}),
+      ...(item_notas        ? { notes:                   item_notas }                    : {}),
+      ...(item_locArmazem   ? { location_in_warehouse:   item_locArmazem }               : {}),
+      ...(item_numContab    ? { accounting_number:       item_numContab }                : {}),
+      ...(item_custoFin     ? { financial_cost:          parseFloat(item_custoFin) }     : {}),
+      ...(item_custoTrans   ? { transport_cost:          parseFloat(item_custoTrans) }   : {}),
+      ...(item_custoOutros  ? { other_cost:              parseFloat(item_custoOutros) }  : {}),
+      ...(item_custoAlf     ? { customs_cost:            parseFloat(item_custoAlf) }     : {}),
+      ...(item_isMercadoria ? { is_merchandise:          true }                          : {}),
+      ...(tab === 'produtos' && item_tipoInv      ? { product_inventory_type: item_tipoInv }      : {}),
+      ...(tab === 'servicos' && item_grupoServico ? { service_group:          item_grupoServico } : {}),
     }
     return itemAttrs
   }
@@ -1106,11 +1146,25 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
       : (forn_flipped ? 'none' : 'auto'),
   })
 
+  const item_faceStyle = (back = false): CSSProperties => ({
+    position: 'absolute',
+    inset: 0,
+    overflowY: 'auto',
+    backfaceVisibility: 'hidden',
+    transition: 'transform 0.55s cubic-bezier(0.4,0,0.2,1)',
+    transform: back
+      ? (item_flipped ? 'rotateY(0deg)'    : 'rotateY(180deg)')
+      : (item_flipped ? 'rotateY(-180deg)' : 'rotateY(0deg)'),
+    pointerEvents: back
+      ? (item_flipped ? 'auto' : 'none')
+      : (item_flipped ? 'none' : 'auto'),
+  })
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div
-        className={`bg-white rounded-xl shadow-2xl w-full flex flex-col ${(tab === 'clientes' || tab === 'fornecedores') ? 'max-w-xl' : 'max-w-lg'}`}
-        style={(tab === 'clientes' || tab === 'fornecedores') ? { height: 'min(90vh, 700px)' } : { maxHeight: '90vh' }}
+        className="bg-white rounded-xl shadow-2xl w-full flex flex-col max-w-xl"
+        style={{ height: 'min(90vh, 700px)' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
@@ -1120,6 +1174,7 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
               {titles[tab]}
               {tab === 'clientes' && flipped ? ' — Informações Adicionais' : ''}
               {tab === 'fornecedores' && forn_flipped ? ' — Informações Adicionais' : ''}
+              {(tab === 'produtos' || tab === 'servicos') && item_flipped ? ' — Informações Adicionais' : ''}
             </span>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-700 transition-colors">
@@ -1197,6 +1252,45 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
                     </label>
                   ))}
                 </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Região fiscal</label>
+                    <select className="input text-sm w-full" value={cli_regiaoFiscal} onChange={e => setCli_regiaoFiscal(e.target.value)}>
+                      <option value="PT">PT — Portugal Continental</option>
+                      <option value="PT_MA">PT_MA — Madeira</option>
+                      <option value="PT_AC">PT_AC — Açores</option>
+                    </select>
+                  </div>
+                  {cli_isentoIva && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Razão de isenção de IVA</label>
+                      <select className="input text-sm w-full" value={cli_isentoRazao} onChange={e => setCli_isentoRazao(e.target.value)}>
+                        <option value="">—</option>
+                        {([
+                          [1,  'M01 — Artigo 16.º, n.º 6, Código do IVA'],
+                          [2,  'M02 — Artigo 6.º, Decreto-Lei n.º 198/90'],
+                          [6,  'M04 — Isento artigo 13.º, Código do IVA'],
+                          [7,  'M05 — Isento artigo 14.º, Código do IVA'],
+                          [8,  'M06 — Isento artigo 15.º, Código do IVA'],
+                          [9,  'M07 — Isento artigo 9.º, Código do IVA'],
+                          [10, 'M09 — IVA — Não confere direito a dedução'],
+                          [11, 'M10 — IVA — Regime de isenção'],
+                          [12, 'M11 — Regime particular — Tabaco'],
+                          [13, 'M12 — Regime da margem de lucro — Agências de viagens'],
+                          [14, 'M13 — Regime da margem de lucro — Bens em 2.ª mão'],
+                          [15, 'M14 — Regime da margem de lucro — Objetos de arte'],
+                          [16, 'M15 — Regime da margem de lucro — Objetos de coleção e antiguidades'],
+                          [17, 'M16 — Isento artigo 14.º, RITI'],
+                          [18, 'M19 — Outras isenções'],
+                          [28, 'M99 — Não sujeito / não tributado'],
+                        ] as [number, string][]).map(([id, label]) => (
+                          <option key={id} value={String(id)}>{label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {sHdr('Morada')}
@@ -1263,6 +1357,30 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
 
             {/* VERSO — Informações Adicionais */}
             <div style={faceStyle(true)}>
+
+              {sHdr('Identificação Fiscal e Crédito')}
+              <div className="px-6 py-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Conta contabilística</label>
+                    <input className="input text-sm w-full font-mono" placeholder="Ex: 21111" value={cli_contaContab} onChange={e => setCli_contaContab(e.target.value)} />
+                  </div>
+                  <div /> {/* spacer */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Limite de crédito (valor)</label>
+                    <div className="relative">
+                      <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
+                        value={cli_limCredValor} onChange={e => setCli_limCredValor(e.target.value)} />
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Limite de crédito (dias)</label>
+                    <input type="number" min="0" step="1" className="input text-sm w-full" placeholder="Ex: 30"
+                      value={cli_limCredDias} onChange={e => setCli_limCredDias(e.target.value)} />
+                  </div>
+                </div>
+              </div>
 
               {sHdr('Valores por omissão para documentos')}
               <div className="px-6 py-3 space-y-3">
@@ -1704,50 +1822,31 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
                 </div>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
-            {/* PRODUTO / SERVIÇO */}
-            {(tab === 'produtos' || tab === 'servicos') && (<>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Código <span className="text-red-400">*</span></label>
-                  <input className="input text-sm w-full font-mono" placeholder="PROD001" value={item_codigo} onChange={e => setItem_codigo(e.target.value)} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Taxa de IVA</label>
-                  <select className="input text-sm w-full" value={item_taxa} onChange={e => setItem_taxa(e.target.value)}>
-                    {TAX_CODES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Descrição <span className="text-red-400">*</span></label>
-                <input className="input text-sm w-full" placeholder="Nome do produto ou serviço" value={item_desc} onChange={e => setItem_desc(e.target.value)} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Preço de venda</label>
-                  <div className="relative">
-                    <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
-                      value={item_preco} onChange={e => setItem_preco(e.target.value)} />
-                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+          /* ── Flip card (produtos / serviços) ── */
+          <div className="flex-1 min-h-0 relative overflow-hidden" style={{ perspective: '1200px' }}>
+
+            {/* FRENTE — Identificação / Preços / Extras */}
+            <div style={item_faceStyle()}>
+              {sHdr('Identificação')}
+              <div className="px-6 py-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Código <span className="text-red-400">*</span></label>
+                    <input className="input text-sm w-full font-mono" placeholder="PROD001" value={item_codigo} onChange={e => setItem_codigo(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Taxa de IVA</label>
+                    <select className="input text-sm w-full" value={item_taxa} onChange={e => setItem_taxa(e.target.value)}>
+                      {TAX_CODES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
+                    </select>
                   </div>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Preço de compra</label>
-                  <div className="relative">
-                    <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
-                      value={item_precoCompra} onChange={e => setItem_precoCompra(e.target.value)} />
-                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
-                  </div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Descrição <span className="text-red-400">*</span></label>
+                  <input className="input text-sm w-full" placeholder="Nome do produto ou serviço" value={item_desc} onChange={e => setItem_desc(e.target.value)} />
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Código de barras</label>
-                  <input className="input text-sm w-full font-mono" placeholder="EAN13" value={item_barcode} onChange={e => setItem_barcode(e.target.value)} />
-                </div>
-                <div className="flex flex-col gap-2 pt-1">
-                  <label className="flex items-center gap-2 cursor-pointer pt-4">
+                <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+                  <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={item_ivaInc} onChange={e => setItem_ivaInc(e.target.checked)}
                       className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
                     <span className="text-xs text-gray-700">Preço inclui IVA</span>
@@ -1759,19 +1858,125 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
                   </label>
                 </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Notas</label>
-                <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Notas internas"
+
+              {sHdr('Preços de Venda')}
+              <div className="px-6 py-3 space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  {([
+                    { label: 'Preço 1', val: item_preco,  set: setItem_preco  },
+                    { label: 'Preço 2', val: item_preco2, set: setItem_preco2 },
+                    { label: 'Preço 3', val: item_preco3, set: setItem_preco3 },
+                  ] as { label: string; val: string; set: (v: string) => void }[]).map(({ label, val, set }) => (
+                    <div key={label}>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+                      <div className="relative">
+                        <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
+                          value={val} onChange={e => set(e.target.value)} />
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {sHdr('Compra')}
+              <div className="px-6 py-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Preço de compra</label>
+                    <div className="relative">
+                      <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
+                        value={item_precoCompra} onChange={e => setItem_precoCompra(e.target.value)} />
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Código de barras (EAN)</label>
+                    <input className="input text-sm w-full font-mono" placeholder="5601234567890" value={item_barcode} onChange={e => setItem_barcode(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              {sHdr('Notas')}
+              <div className="px-6 py-3 pb-4">
+                <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Notas internas visíveis no produto"
                   value={item_notas} onChange={e => setItem_notas(e.target.value)} />
               </div>
-            </>)}
 
-            {mutation.isError && (
-              <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                {(mutation.error as Error).message}
+              {mutation.isError && (
+                <div className="mx-6 mb-3 flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                  {(mutation.error as Error).message}
+                </div>
+              )}
+            </div>
+
+            {/* VERSO — Informações Adicionais */}
+            <div style={item_faceStyle(true)}>
+              {tab === 'produtos' && (<>
+                {sHdr('Armazém')}
+                <div className="px-6 py-3 space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Localização em armazém</label>
+                    <input className="input text-sm w-full" placeholder="Ex: Corredor A, Prateleira 3" value={item_locArmazem} onChange={e => setItem_locArmazem(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Tipo de inventário</label>
+                    <select className="input text-sm w-full" value={item_tipoInv} onChange={e => setItem_tipoInv(e.target.value)}>
+                      <option value="">—</option>
+                      <option value="P">P — Produto</option>
+                      <option value="M">M — Matéria-prima</option>
+                      <option value="A">A — Acabado</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={item_isMercadoria} onChange={e => setItem_isMercadoria(e.target.checked)}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                    <span className="text-xs text-gray-700">É mercadoria?</span>
+                  </label>
+                </div>
+              </>)}
+
+              {tab === 'servicos' && (<>
+                {sHdr('Serviço')}
+                <div className="px-6 py-3 space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Grupo de serviço</label>
+                    <input className="input text-sm w-full" placeholder="Ex: G1" value={item_grupoServico} onChange={e => setItem_grupoServico(e.target.value)} />
+                  </div>
+                </div>
+              </>)}
+
+              {sHdr('Custos')}
+              <div className="px-6 py-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    { label: 'Custo financeiro',   val: item_custoFin,    set: setItem_custoFin    },
+                    { label: 'Custo de transporte', val: item_custoTrans,  set: setItem_custoTrans  },
+                    { label: 'Outros custos',       val: item_custoOutros, set: setItem_custoOutros },
+                    { label: 'Custo alfandegário',  val: item_custoAlf,   set: setItem_custoAlf    },
+                  ] as { label: string; val: string; set: (v: string) => void }[]).map(({ label, val, set }) => (
+                    <div key={label}>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+                      <div className="relative">
+                        <input type="number" min="0" step="0.01" className="input text-sm w-full pr-5" placeholder="0.00"
+                          value={val} onChange={e => set(e.target.value)} />
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">€</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400">O custo total estimado é calculado automaticamente pelo TOConline.</p>
               </div>
-            )}
+
+              {sHdr('Contabilidade')}
+              <div className="px-6 py-3 pb-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Número de conta contabilística</label>
+                  <input className="input text-sm w-full font-mono" placeholder="Ex: 31111" value={item_numContab} onChange={e => setItem_numContab(e.target.value)} />
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1785,12 +1990,16 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
 
         {/* Footer */}
         <div className="flex items-center gap-2 px-6 py-4 border-t border-gray-100 flex-shrink-0">
-          {(tab === 'clientes' || tab === 'fornecedores') && (
+          {(tab === 'clientes' || tab === 'fornecedores' || tab === 'produtos' || tab === 'servicos') && (
             <button
-              onClick={() => tab === 'clientes' ? setFlipped(f => !f) : setForn_flipped(f => !f)}
+              onClick={() => {
+                if (tab === 'clientes')     setFlipped(f => !f)
+                else if (tab === 'fornecedores') setForn_flipped(f => !f)
+                else setItem_flipped(f => !f)
+              }}
               className="btn-secondary text-sm px-4 mr-auto"
             >
-              {(tab === 'clientes' ? flipped : forn_flipped) ? '← VOLTAR' : 'INFORMAÇÕES ADICIONAIS →'}
+              {(tab === 'clientes' ? flipped : tab === 'fornecedores' ? forn_flipped : item_flipped) ? '← VOLTAR' : 'INFORMAÇÕES ADICIONAIS →'}
             </button>
           )}
           <button onClick={onClose} className="btn-secondary text-sm px-4">CANCELAR</button>
@@ -1828,6 +2037,246 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
           >
             {mutation.isPending ? 'A criar…' : 'CRIAR'}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── detalhe modal ─────────────────────────────────────────────────────────────
+
+function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; clientId: string; onClose: () => void }) {
+  const { data: customerDetail, isLoading: loadingDetail } = useQuery<TocRow>({
+    queryKey: ['toc-customer-detail', clientId, row.id],
+    queryFn: () => api.get(`/toconline/${clientId}/customers/${row.id}`),
+    enabled: tab === 'clientes' && !!row.id,
+    staleTime: 60_000,
+  })
+  const dHdr = (label: string) => (
+    <div className="px-6 py-1.5 bg-teal-600 text-white text-xs font-semibold uppercase tracking-wide">
+      {label}
+    </div>
+  )
+
+  const Field = ({
+    label, value, price = false, bool = false, date = false, mono = false, full = false,
+  }: {
+    label: string; value: unknown
+    price?: boolean; bool?: boolean; date?: boolean; mono?: boolean; full?: boolean
+  }) => {
+    let display: string
+    if (price) display = fmtPrice(value)
+    else if (bool) display = fmtBool(value)
+    else if (date) display = fmtDate(value)
+    else display = value != null && value !== '' ? String(value) : '—'
+    return (
+      <div className={full ? 'col-span-2' : ''}>
+        <p className="text-xs font-medium text-gray-400 mb-0.5">{label}</p>
+        <p className={`text-sm text-gray-900 break-all ${mono ? 'font-mono' : ''}`}>{display}</p>
+      </div>
+    )
+  }
+
+  const titles: Record<Tab, string> = {
+    clientes:     'Detalhe de Cliente',
+    fornecedores: 'Detalhe de Fornecedor',
+    produtos:     'Detalhe de Produto',
+    servicos:     'Detalhe de Serviço',
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl flex flex-col" style={{ height: 'min(90vh, 700px)' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Eye className="w-4 h-4 text-primary-600" />
+            <span className="font-semibold text-gray-900 text-sm">{titles[tab]}</span>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto">
+
+          {/* ── CLIENTES ── */}
+          {tab === 'clientes' && (() => {
+            // Prefer fresh individual-GET data; fall back to list row
+            const d = customerDetail ?? row
+            const COUNTRY: Record<string, string> = {
+              '1': 'Portugal Continental', '2': 'Madeira', '3': 'Açores',
+            }
+            const addresses = (customerDetail?._addresses ?? []) as Record<string, unknown>[]
+
+            return (<>
+              {dHdr('Identificação')}
+              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                <Field label="NIF"                   value={d.tax_registration_number} mono />
+                <Field label="Nome"                  value={d.business_name} />
+                <Field label="Sub-conta"             value={d.sub_account} mono />
+                <Field label="Conta contabilística"  value={d.accounting_number} mono />
+                <Field label="Sujeito Passivo"       value={d.not_final_customer} bool />
+                <Field label="Regime IVA de Caixa"   value={d.cashed_vat} bool />
+                <Field label="Isento de IVA"         value={d.is_tax_exempt} bool />
+                <Field label="Ativo"                 value={row.active} bool />
+                <Field label="Região fiscal"         value={d.tax_country_region} />
+                <Field label="País"                  value={d.country_iso_alpha_2} />
+                <Field label="Último aviso enviado"  value={row.last_notice_sent_at} date />
+              </div>
+
+              {dHdr('Crédito')}
+              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                <Field label="Limite de crédito (valor)" value={d.credit_limit_value} price />
+                <Field label="Limite de crédito (dias)"  value={d.credit_limit_days} />
+              </div>
+
+              {dHdr('Contacto')}
+              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                <Field label="Nome de contacto" value={d.contact_name} />
+                <Field label="E-mail"           value={d.email} />
+                <Field label="Telefone"         value={d.phone_number} />
+                <Field label="Telemóvel"        value={d.mobile_number} />
+                <Field label="Website"          value={d.website} full />
+              </div>
+
+              {/* Moradas */}
+              {loadingDetail ? (
+                <div className="px-6 py-3 flex items-center gap-2 text-xs text-gray-400">
+                  <div className="animate-spin rounded-full h-3 w-3 border border-gray-300 border-t-primary-500" />
+                  A carregar moradas…
+                </div>
+              ) : addresses.length === 0 ? (
+                <>
+                  {dHdr('Morada')}
+                  <div className="px-6 py-3 text-xs text-gray-400 italic">Sem morada registada</div>
+                </>
+              ) : addresses.map((addr, i) => {
+                const isMain    = addr._isMain as boolean | undefined
+                const countryId = addr._countryId as string | undefined
+                const heading   = addresses.length > 1
+                  ? `Morada ${i + 1}${isMain ? ' (principal)' : ''}`
+                  : 'Morada'
+                return (
+                  <div key={i}>
+                    {dHdr(heading)}
+                    <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                      <Field label="Designação"       value={addr.name} />
+                      <Field label="Código postal"    value={addr.postcode} mono />
+                      <Field label="Morada"           value={addr.address_detail} full />
+                      <Field label="Localidade"       value={addr.city} />
+                      <Field label="Região"           value={addr.region} />
+                      {countryId && <Field label="País" value={COUNTRY[countryId] ?? `ID ${countryId}`} />}
+                      <Field label="Morada principal" value={isMain}          bool />
+                      <Field label="Descarga"         value={addr.for_discharge} bool />
+                      <Field label="Carga"            value={addr.for_charge}    bool />
+                      {(!!addr.is_saturday_workday || !!addr.is_sunday_workday || !!addr.is_national_holidays_workday) && (<>
+                        <Field label="Trabalha ao sábado"   value={addr.is_saturday_workday}          bool />
+                        <Field label="Trabalha ao domingo"  value={addr.is_sunday_workday}            bool />
+                        <Field label="Trabalha em feriados" value={addr.is_national_holidays_workday} bool />
+                      </>)}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {(!!d.observations || !!d.internal_observations) && (<>
+                {dHdr('Observações')}
+                <div className="px-6 py-3 grid grid-cols-1 gap-3 pb-4">
+                  {!!d.observations          && <Field label="Observações ao documento" value={d.observations} />}
+                  {!!d.internal_observations && <Field label="Observações internas"     value={d.internal_observations} />}
+                </div>
+              </>)}
+            </>)
+          })()}
+
+          {/* ── FORNECEDORES ── */}
+          {tab === 'fornecedores' && (<>
+            {dHdr('Identificação')}
+            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <Field label="NIF" value={row.tax_registration_number} mono />
+              <Field label="Nome" value={row.business_name} />
+              <Field label="Sub-conta" value={row.sub_account} mono />
+              <Field label="Ativo" value={row.active} bool />
+              <Field label="Sujeito Passivo" value={row.is_taxable} bool />
+              <Field label="Auto-faturação" value={row.self_billing} bool />
+              <Field label="Modelo 10 (trabalhador independente)" value={row.is_independent_worker} bool />
+              <Field label="Isento de IVA" value={row.is_tax_exempt} bool />
+              <Field label="Aceitar documentos por e-mail" value={row.trusted_email_source} bool />
+            </div>
+
+            {dHdr('Contacto')}
+            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <Field label="E-mail" value={row.email} />
+              <Field label="Website" value={row.website} />
+            </div>
+
+            {!!row.internal_observations && (<>
+              {dHdr('Observações Internas')}
+              <div className="px-6 py-3">
+                <p className="text-sm text-gray-700 whitespace-pre-wrap">{String(row.internal_observations)}</p>
+              </div>
+            </>)}
+          </>)}
+
+          {/* ── PRODUTOS / SERVIÇOS ── */}
+          {(tab === 'produtos' || tab === 'servicos') && (<>
+            {dHdr('Identificação')}
+            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <Field label="Código" value={row.item_code} mono />
+              <Field label="Taxa de IVA" value={row.tax_code} />
+              <Field label="Descrição" value={row.item_description} full />
+              <Field label="Ativo" value={row.is_active} bool />
+              <Field label="Conta contabilística" value={row.accounting_number} mono />
+              {tab === 'produtos' && <Field label="Tipo de inventário" value={row.product_inventory_type} />}
+              {tab === 'produtos' && <Field label="É mercadoria" value={row.is_merchandise} bool />}
+              {tab === 'produtos' && !!row.location_in_warehouse &&
+                <Field label="Localização em armazém" value={row.location_in_warehouse} full />}
+              {tab === 'servicos' && <Field label="Grupo de serviço" value={row.service_group} />}
+            </div>
+
+            {dHdr('Preços de Venda')}
+            <div className="px-6 py-3 grid grid-cols-3 gap-x-4 gap-y-3">
+              <Field label="Preço 1" value={row.sales_price} price />
+              <Field label="Preço 2" value={row.sales_price_2} price />
+              <Field label="Preço 3" value={row.sales_price_3} price />
+              <Field label="Preço 1 c/ IVA" value={row.sales_price_vat_display} price />
+              <Field label="Preço 2 c/ IVA" value={row.sales_price_2_vat_display} price />
+              <Field label="Preço 3 c/ IVA" value={row.sales_price_3_vat_display} price />
+              <Field label="Preço inclui IVA" value={row.sales_price_includes_vat} bool />
+            </div>
+
+            {dHdr('Compra e Stock')}
+            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <Field label="Preço de compra" value={row.purchase_price} price />
+              <Field label="Código de barras (EAN)" value={row.ean_barcode} mono />
+            </div>
+
+            {dHdr('Custos')}
+            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <Field label="Custo financeiro" value={row.financial_cost} price />
+              <Field label="Custo de transporte" value={row.transport_cost} price />
+              <Field label="Outros custos" value={row.other_cost} price />
+              <Field label="Custo alfandegário" value={row.customs_cost} price />
+              <div className="col-span-2 pt-2 border-t border-gray-100">
+                <Field label="Custo total estimado" value={row.estimated_total_cost} price />
+              </div>
+            </div>
+
+            {!!row.notes && (<>
+              {dHdr('Notas')}
+              <div className="px-6 py-3 pb-4">
+                <p className="text-sm text-gray-700 whitespace-pre-wrap">{String(row.notes)}</p>
+              </div>
+            </>)}
+          </>)}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end px-6 py-4 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} className="btn-secondary text-sm px-4">FECHAR</button>
         </div>
       </div>
     </div>
@@ -1888,6 +2337,7 @@ function TabTable({
   const [analiticaItem,  setAnaliticaItem]  = useState<TocRow | null>(null)
   const [novaContaItem,  setNovaContaItem]  = useState<TocRow | null>(null)
   const [novoRegisto,    setNovoRegisto]    = useState(false)
+  const [detalheRow,     setDetalheRow]     = useState<TocRow | null>(null)
 
   // Pre-load all analytics for this tab so the column badge works
   const { data: analytics = [] } = useQuery<{ itemId: string; entries: AnalyticConfig[] }[]>({
@@ -2002,6 +2452,9 @@ function TabTable({
       {novoRegisto && (
         <NovoRegistoModal tab={tab} clientId={clientId} onClose={() => setNovoRegisto(false)} />
       )}
+      {detalheRow && (
+        <DetalheModal tab={tab} row={detalheRow} clientId={clientId} onClose={() => setDetalheRow(null)} />
+      )}
 
       {/* Filter toolbar */}
       <div className="px-5 py-2.5 border-b border-gray-100 flex flex-wrap items-center gap-2">
@@ -2101,14 +2554,18 @@ function TabTable({
             </thead>
             <tbody className="divide-y divide-gray-50">
               {sorted.map((row, i) => (
-                <tr key={(row.id as string | number | undefined) ?? i} className="hover:bg-gray-50">
+                <tr
+                  key={(row.id as string | number | undefined) ?? i}
+                  className="hover:bg-gray-50 cursor-pointer"
+                  onClick={() => setDetalheRow(row)}
+                >
                   {cols.map((c) => {
                     if (c.special === 'analitica') {
                       const rowId = String(row.id ?? '')
                       const cfg   = analyticsMap.get(rowId)
                       const count = cfg?.lines?.length ?? 0
                       return (
-                        <td key="analitica" className="px-5 py-3">
+                        <td key="analitica" className="px-5 py-3" onClick={e => e.stopPropagation()}>
                           <button
                             onClick={() => setAnaliticaItem(row)}
                             className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${
@@ -2135,7 +2592,7 @@ function TabTable({
                     if (c.special === 'nova-conta') {
                       const label = tab === 'clientes' ? 'Conta a Receber' : 'Conta a Pagar'
                       return (
-                        <td key="nova-conta" className="px-3 py-3 text-right">
+                        <td key="nova-conta" className="px-3 py-3 text-right" onClick={e => e.stopPropagation()}>
                           <button
                             onClick={() => setNovaContaItem(row)}
                             className="inline-flex items-center gap-1.5 text-xs font-medium text-primary-600 hover:text-white hover:bg-primary-600 border border-primary-200 hover:border-primary-600 rounded-lg px-2.5 py-1 transition-all"

@@ -86,6 +86,11 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.getCustomers(clientId))
   })
 
+  fastify.get('/toconline/:clientId/customers/:customerId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, customerId } = request.params as { clientId: string; customerId: string }
+    return reply.send(await svc.getCustomerWithAddress(clientId, customerId))
+  })
+
   fastify.post('/toconline/:clientId/customers', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     return reply.status(201).send(await svc.createCustomer(clientId, request.body as Record<string, unknown>))
@@ -94,6 +99,11 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
   fastify.post('/toconline/:clientId/addresses', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     return reply.status(201).send(await svc.createAddress(clientId, request.body as Record<string, unknown>))
+  })
+
+  fastify.patch('/toconline/:clientId/addresses/:addressId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, addressId } = request.params as { clientId: string; addressId: string }
+    return reply.send(await svc.patchAddress(clientId, addressId, request.body as Record<string, unknown>))
   })
 
   fastify.get('/toconline/:clientId/suppliers', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {

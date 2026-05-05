@@ -174,6 +174,37 @@ export class ToconlineService {
     return []
   }
 
+  private async apiPatch<T>(clientId: string, path: string, body: unknown): Promise<T> {
+    const cfg = await this.requireActiveConfig(clientId)
+    const token = decrypt(cfg.accessToken!)
+    console.info(`[TOConline] PATCH ${path} payload: ${JSON.stringify(body)}`)
+
+    let res = await fetch(`${cfg.baseUrl}${path}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/vnd.api+json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    if (res.status === 401) {
+      await this.tryRefreshToken(clientId, cfg)
+      const cfg2 = await this.requireActiveConfig(clientId)
+      const token2 = decrypt(cfg2.accessToken!)
+      res = await fetch(`${cfg.baseUrl}${path}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/vnd.api+json', Accept: 'application/json' },
+        body: JSON.stringify(body),
+      })
+    }
+
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = JSON.stringify(await res.clone().json()) } catch { detail = await res.text().catch(() => res.statusText) }
+      console.error(`[TOConline] PATCH ${path} failed for ${clientId} (${res.status}): ${detail}`)
+      throw httpError(res.status, `TOConline PATCH ${path} failed: ${detail}`)
+    }
+    return res.json() as Promise<T>
+  }
+
   private async apiPost<T>(clientId: string, path: string, body: unknown): Promise<T> {
     const cfg = await this.requireActiveConfig(clientId)
     const token = decrypt(cfg.accessToken!)
@@ -303,12 +334,93 @@ export class ToconlineService {
     return this.apiGetFlat(clientId, '/api/customers')
   }
 
-  async createCustomer(clientId: string, attrs: Record<string, unknown>) {
-    return this.apiPost(clientId, '/api/customers', { data: { type: 'customers', attributes: attrs } })
+  async getCustomerWithAddress(clientId: string, customerId: string) {
+    type JsonApiRef = { id: string }
+    type AddressRes = {
+      data: {
+        id: string
+        attributes: Record<string, unknown>
+        relationships?: { country?: { data?: JsonApiRef | null } }
+      }
+    }
+    type CustomerRes = {
+      data: {
+        id: string
+        attributes: Record<string, unknown>
+        relationships?: {
+          main_address?: { data?: JsonApiRef | null }
+          addresses?:    { data?: JsonApiRef[] | null }
+        }
+      }
+    }
+
+    const res = await this.apiGet<CustomerRes>(clientId, `/api/customers/${customerId}`)
+    const customer: Record<string, unknown> = { id: res.data.id, ...res.data.attributes }
+
+    const mainAddressId = res.data.relationships?.main_address?.data?.id
+    const allAddressRefs = res.data.relationships?.addresses?.data ?? []
+    const allAddressIds = Array.isArray(allAddressRefs) ? allAddressRefs.map(a => a.id) : []
+
+    if (allAddressIds.length > 0) {
+      const addresses = await Promise.all(
+        allAddressIds.map(async (id) => {
+          try {
+            const addrRes = await this.apiGet<AddressRes>(clientId, `/api/addresses/${id}`)
+            return {
+              id,
+              ...addrRes.data.attributes,
+              _countryId: addrRes.data.relationships?.country?.data?.id ?? null,
+              _isMain: id === mainAddressId,
+            }
+          } catch {
+            return { id, _isMain: id === mainAddressId }
+          }
+        })
+      )
+      customer._addresses = addresses
+      customer._address   = addresses.find(a => a._isMain) ?? addresses[0] ?? null
+    }
+
+    return customer
+  }
+
+  async createCustomer(clientId: string, attrs: Record<string, unknown>, addressAttrs?: Record<string, unknown>) {
+    type Rels = { main_address?: { data?: { id: string } | null }; addresses?: { data?: { id: string }[] | null } }
+    type Res  = { data: { id: string; relationships?: Rels } }
+
+    const created = await this.apiPost<Res>(clientId, '/api/customers', {
+      data: { type: 'customers', attributes: attrs },
+    })
+
+    if (addressAttrs && Object.keys(addressAttrs).length > 0) {
+      // Try the POST response first; if null fall back to a GET
+      let addressId = created.data.relationships?.main_address?.data?.id
+        ?? created.data.relationships?.addresses?.data?.[0]?.id
+
+      if (!addressId) {
+        try {
+          const got = await this.apiGet<Res>(clientId, `/api/customers/${created.data.id}`)
+          addressId = got.data.relationships?.main_address?.data?.id
+            ?? got.data.relationships?.addresses?.data?.[0]?.id
+        } catch { /* non-fatal */ }
+      }
+
+      if (addressId) {
+        await this.patchAddress(clientId, addressId, addressAttrs)
+      }
+    }
+
+    return created
   }
 
   async createAddress(clientId: string, attrs: Record<string, unknown>) {
     return this.apiPost(clientId, '/api/addresses', { data: { type: 'addresses', attributes: attrs } })
+  }
+
+  async patchAddress(clientId: string, addressId: string, attrs: Record<string, unknown>) {
+    return this.apiPatch(clientId, `/api/addresses/${addressId}`, {
+      data: { type: 'addresses', id: addressId, attributes: attrs },
+    })
   }
 
   async getSuppliers(clientId: string) {
