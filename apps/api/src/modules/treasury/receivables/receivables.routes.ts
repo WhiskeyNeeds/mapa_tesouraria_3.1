@@ -17,6 +17,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       dueDateFrom?: string
       dueDateTo?: string
       isRecurrent?: string
+      tocCustomerId?: string
       sortBy?: string
       sortDir?: string
       page?: string
@@ -106,6 +107,12 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
   fastify.delete(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     await svc.delete(clientId, id)
+    return reply.status(204).send()
+  })
+
+  fastify.delete(`${prefix}/by-customer/:tocCustomerId`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, tocCustomerId } = request.params as { clientId: string; tocCustomerId: string }
+    await svc.deleteByTocCustomerId(clientId, tocCustomerId)
     return reply.status(204).send()
   })
 }

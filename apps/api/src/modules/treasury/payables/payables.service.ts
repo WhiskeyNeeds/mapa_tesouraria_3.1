@@ -13,12 +13,13 @@ export class TreasuryPayablesService {
     dueDateFrom?: string
     dueDateTo?: string
     isRecurrent?: boolean
+    tocSupplierId?: string
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'
     sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
   }) {
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, isRecurrent, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, isRecurrent, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusFilter = Array.isArray(status)
       ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
       : status ? { status } : {}
@@ -28,6 +29,7 @@ export class TreasuryPayablesService {
       ...statusFilter,
       ...(origin ? { origin } : {}),
       ...(categoryId ? { categoryId } : {}),
+      ...(tocSupplierId ? { tocSupplierId } : {}),
       ...(entityName ? { OR: [
         { entityName: { contains: entityName, mode: 'insensitive' } },
         { reference: { contains: entityName, mode: 'insensitive' } },
@@ -128,12 +130,40 @@ export class TreasuryPayablesService {
     })
   }
 
-  async update(clientId: string, id: string, data: Partial<{ entityName: string; description: string; dueDate: string; status: TreasuryDocStatus }>) {
-    await this.getById(clientId, id)
-    return this.prisma.treasuryPayable.update({
-      where: { id },
-      data: { ...data, ...(data.dueDate ? { dueDate: new Date(data.dueDate) } : {}) },
-    })
+  async update(clientId: string, id: string, data: Partial<{
+    entityName: string
+    description: string
+    reference: string
+    documentDate: string
+    dueDate: string
+    categoryId: string
+    totalAmount: number
+    status: TreasuryDocStatus
+  }>) {
+    const item = await this.getById(clientId, id)
+
+    const updateData: Prisma.TreasuryPayableUpdateInput = {}
+    if (data.entityName   !== undefined) updateData.entityName   = data.entityName
+    if (data.description  !== undefined) updateData.description  = data.description
+    if (data.reference    !== undefined) updateData.reference    = data.reference
+    if (data.dueDate)                    updateData.dueDate      = new Date(data.dueDate)
+    if (data.documentDate)               updateData.documentDate = new Date(data.documentDate)
+    if (data.status)                     updateData.status       = data.status
+
+    if (data.categoryId) {
+      const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
+      if (!category) throw httpError(404, 'Category not found')
+      updateData.category = { connect: { id: data.categoryId } }
+      updateData.origin = category.launchToc ? 'TOCONLINE' : 'LOCAL'
+    }
+
+    if (data.totalAmount !== undefined) {
+      if (item.status !== 'OPEN') throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
+      updateData.totalAmount = data.totalAmount
+      updateData.pendingAmount = data.totalAmount
+    }
+
+    return this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
   }
 
   async settle(clientId: string, id: string) {
@@ -169,6 +199,13 @@ export class TreasuryPayablesService {
   async delete(clientId: string, id: string) {
     await this.getById(clientId, id)
     return this.prisma.treasuryPayable.update({ where: { id }, data: { deletedAt: new Date() } })
+  }
+
+  async deleteByTocSupplierId(clientId: string, tocSupplierId: string) {
+    return this.prisma.treasuryPayable.updateMany({
+      where: { clientId, tocSupplierId, deletedAt: null },
+      data: { deletedAt: new Date() },
+    })
   }
 
   async getKpis(clientId: string) {

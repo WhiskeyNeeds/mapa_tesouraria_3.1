@@ -4,6 +4,34 @@ import { ToconlineService } from './toconline.service.js'
 export async function toconlineRoutes(fastify: FastifyInstance) {
   const svc = new ToconlineService(fastify.prisma)
 
+  // Proxy de lookup de código postal PT (evita CORS no browser)
+  fastify.get('/postal/:cp', { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    const { cp } = request.params as { cp: string }
+    try {
+      // 1. Tentativa exacta (ex: 1000-001)
+      const res = await fetch(`https://json.geoapi.pt/cp/${encodeURIComponent(cp)}`)
+      if (res.ok) {
+        const data = await res.json() as Record<string, unknown>
+        if (data.Localidade) return reply.send({ localidade: data.Localidade })
+      }
+
+      // 2. Fallback: CP4 (primeiros 4 dígitos) — cobre sufixos inválidos como -000
+      const cp4 = cp.split('-')[0]
+      if (cp4?.length === 4) {
+        const res2 = await fetch(`https://json.geoapi.pt/cp4/${cp4}`)
+        if (res2.ok) {
+          const list = await res2.json() as Array<Record<string, unknown>>
+          const localidade = Array.isArray(list) ? list[0]?.Localidade : null
+          if (localidade) return reply.send({ localidade })
+        }
+      }
+
+      return reply.status(404).send({ localidade: null })
+    } catch {
+      return reply.status(502).send({ localidade: null })
+    }
+  })
+
   fastify.get('/toconline/config/:clientId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     return reply.send(await svc.getPublicConfig(clientId))
@@ -54,6 +82,26 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.status(204).send()
   })
 
+  fastify.get('/toconline/:clientId/sales/:docId/receipts', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, docId } = request.params as { clientId: string; docId: string }
+    return reply.send(await svc.getSalesDocumentReceipts(clientId, docId))
+  })
+
+  fastify.get('/toconline/:clientId/purchases/:docId/payments', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, docId } = request.params as { clientId: string; docId: string }
+    return reply.send(await svc.getPurchaseDocumentPayments(clientId, docId))
+  })
+
+  fastify.get('/toconline/:clientId/sales-receipts/:receiptId/lines', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, receiptId } = request.params as { clientId: string; receiptId: string }
+    return reply.send(await svc.getSalesReceiptLines(clientId, receiptId))
+  })
+
+  fastify.get('/toconline/:clientId/purchase-payments/:paymentId/lines', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, paymentId } = request.params as { clientId: string; paymentId: string }
+    return reply.send(await svc.getPurchasePaymentLines(clientId, paymentId))
+  })
+
   fastify.get('/toconline/:clientId/purchases', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const filters = request.query as Record<string, string>
@@ -86,6 +134,17 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.getCustomers(clientId))
   })
 
+  fastify.patch('/toconline/:clientId/customers/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    return reply.send(await svc.updateCustomer(clientId, id, request.body as Record<string, unknown>))
+  })
+
+  fastify.delete('/toconline/:clientId/customers/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    await svc.deleteCustomer(clientId, id)
+    return reply.status(204).send()
+  })
+
   fastify.get('/toconline/:clientId/customers/:customerId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId, customerId } = request.params as { clientId: string; customerId: string }
     return reply.send(await svc.getCustomerWithAddress(clientId, customerId))
@@ -93,7 +152,10 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
 
   fastify.post('/toconline/:clientId/customers', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.status(201).send(await svc.createCustomer(clientId, request.body as Record<string, unknown>))
+    const body = request.body as Record<string, unknown>
+    const attrs   = ('attrs' in body ? body.attrs   : body) as Record<string, unknown>
+    const address = ('attrs' in body ? body.address : undefined) as Record<string, unknown> | undefined
+    return reply.status(201).send(await svc.createCustomer(clientId, attrs, address))
   })
 
   fastify.post('/toconline/:clientId/addresses', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
@@ -111,9 +173,28 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.getSuppliers(clientId))
   })
 
+  fastify.patch('/toconline/:clientId/suppliers/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    return reply.send(await svc.updateSupplier(clientId, id, request.body as Record<string, unknown>))
+  })
+
+  fastify.delete('/toconline/:clientId/suppliers/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    await svc.deleteSupplier(clientId, id)
+    return reply.status(204).send()
+  })
+
+  fastify.get('/toconline/:clientId/suppliers/:supplierId', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, supplierId } = request.params as { clientId: string; supplierId: string }
+    return reply.send(await svc.getSupplierWithAddress(clientId, supplierId))
+  })
+
   fastify.post('/toconline/:clientId/suppliers', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.status(201).send(await svc.createSupplier(clientId, request.body as Record<string, unknown>))
+    const body = request.body as Record<string, unknown>
+    const attrs   = ('attrs' in body ? body.attrs   : body) as Record<string, unknown>
+    const address = ('attrs' in body ? body.address : undefined) as Record<string, unknown> | undefined
+    return reply.status(201).send(await svc.createSupplier(clientId, attrs, address))
   })
 
   fastify.get('/toconline/:clientId/expense-categories', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
@@ -131,6 +212,17 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.status(201).send(await svc.createItem(clientId, request.body as Record<string, unknown>))
   })
 
+  fastify.patch('/toconline/:clientId/items/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    return reply.send(await svc.updateItem(clientId, id, request.body as Record<string, unknown>))
+  })
+
+  fastify.delete('/toconline/:clientId/items/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    await svc.deleteItem(clientId, id)
+    return reply.status(204).send()
+  })
+
   fastify.get('/toconline/:clientId/services', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     return reply.send(await svc.getServices(clientId))
@@ -139,6 +231,17 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
   fastify.post('/toconline/:clientId/services', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     return reply.status(201).send(await svc.createService(clientId, request.body as Record<string, unknown>))
+  })
+
+  fastify.patch('/toconline/:clientId/services/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    return reply.send(await svc.updateService(clientId, id, request.body as Record<string, unknown>))
+  })
+
+  fastify.delete('/toconline/:clientId/services/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    await svc.deleteService(clientId, id)
+    return reply.status(204).send()
   })
 
   // ── Analítica (product cost-center distribution, stored locally) ──────────

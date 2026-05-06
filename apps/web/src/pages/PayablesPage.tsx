@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { Fragment, useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -7,7 +7,7 @@ import { formatCurrency, formatDate, statusLabel, statusVariant, tocStatusLabel,
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2 } from 'lucide-react'
+import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown } from 'lucide-react'
 
 interface TocPurchaseDoc {
   id: number
@@ -27,6 +27,26 @@ interface TocPurchaseDoc {
   currency_iso_code: string
   external_reference?: string
   notes?: string
+  [key: string]: unknown
+}
+
+interface TocPayment {
+  id: number | string
+  document_no: string
+  date: string
+  gross_total: number
+  [key: string]: unknown
+}
+
+interface PaymentLine {
+  payable_id: number | string
+  paid_value: number
+  gross_total: number
+  settlement_percentage?: number
+  document_no?: string
+  _doc_date?: string
+  _doc_due_date?: string
+  _doc_gross_total?: number
   [key: string]: unknown
 }
 
@@ -54,6 +74,140 @@ const emptyRecurrence = {
 
 type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc }
 
+function PaymentDocLines({ clientId, paymentId }: { clientId: string; paymentId: string }) {
+  const { data: lines = [], isLoading } = useQuery<PaymentLine[]>({
+    queryKey: ['toc-payment-lines', clientId, paymentId],
+    queryFn: () => api.get(`/toconline/${clientId}/purchase-payments/${paymentId}/lines`),
+  })
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
+          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar...
+        </td>
+      </tr>
+    )
+  }
+
+  if (!lines.length) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
+          Sem documentos associados
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <>
+      {lines.map((line, i) => (
+        <tr key={i} className="bg-blue-50/20 border-b border-gray-100/60">
+          <td className="pl-16 pr-3 py-1.5">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="w-1 h-1 rounded-full bg-blue-300 flex-shrink-0" />
+              <div>
+                <div className="text-gray-700 font-medium">{line.document_no ?? String(line.payable_id)}</div>
+                {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
+              </div>
+            </div>
+          </td>
+          <td className="px-5 py-1.5" />
+          <td className="px-5 py-1.5 text-xs text-gray-400">
+            {(() => {
+              const docTotal = Number(line._doc_gross_total ?? line.gross_total)
+              if (!docTotal) return ''
+              const pct = (line.paid_value / docTotal) * 100
+              return `${pct.toFixed(0)}%`
+            })()}
+          </td>
+          <td className="px-5 py-1.5 text-xs text-gray-400 whitespace-nowrap">
+            {line._doc_due_date ? formatDate(line._doc_due_date) : '—'}
+          </td>
+          <td className="px-5 py-1.5 text-right text-xs text-gray-500">
+            {line._doc_gross_total != null ? formatCurrency(line._doc_gross_total) : '—'}
+          </td>
+          <td className="px-5 py-1.5 text-right text-xs text-blue-700 font-semibold">{formatCurrency(line.paid_value)}</td>
+          <td colSpan={2} className="px-5 py-1.5" />
+        </tr>
+      ))}
+    </>
+  )
+}
+
+function PaymentSubRows({ clientId, tocDocId, entityName }: { clientId: string; tocDocId: string; entityName: string }) {
+  const [expandedPayments, setExpandedPayments] = useState<Set<string>>(new Set())
+
+  function togglePayment(id: string) {
+    setExpandedPayments((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const { data: payments = [], isLoading } = useQuery<TocPayment[]>({
+    queryKey: ['toc-purchase-payments', clientId, tocDocId],
+    queryFn: () => api.get(`/toconline/${clientId}/purchases/${tocDocId}/payments`),
+  })
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar pagamentos...
+        </td>
+      </tr>
+    )
+  }
+
+  if (!payments.length) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+          Sem pagamentos associados
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <>
+      {payments.map((pm) => {
+        const pmId = String(pm.id)
+        const isExpanded = expandedPayments.has(pmId)
+        return (
+          <Fragment key={pmId}>
+            <tr
+              className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-gray-100/60"
+              onClick={() => togglePayment(pmId)}
+            >
+              <td className="pl-10 pr-3 py-2">
+                <div className="flex items-center gap-2 text-xs">
+                  {isExpanded
+                    ? <ChevronDown className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                    : <ChevronRight className="w-3 h-3 text-gray-400 flex-shrink-0" />}
+                  <span className="text-gray-700 font-medium">{pm.document_no}</span>
+                </div>
+              </td>
+              <td className="px-5 py-2 text-xs text-gray-500">{entityName}</td>
+              <td className="px-5 py-2" />
+              <td className="px-5 py-2 text-xs text-gray-500">{pm.date ? formatDate(pm.date) : '—'}</td>
+              <td className="px-5 py-2" />
+              <td className="px-5 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(pm.gross_total)}</td>
+              <td className="px-5 py-2" />
+              <td className="px-3 py-2" />
+            </tr>
+            {isExpanded && <PaymentDocLines clientId={clientId} paymentId={pmId} />}
+          </Fragment>
+        )
+      })}
+    </>
+  )
+}
+
 export default function PayablesPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
@@ -70,13 +224,25 @@ export default function PayablesPage() {
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isRecurrentFilter, setIsRecurrentFilter] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState({ entityName: '', dueDate: '', description: '' })
+  const [editRow, setEditRow] = useState<Payable | null>(null)
+  const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
+  const [deleteRow, setDeleteRow] = useState<Payable | null>(null)
   const [originFilter, setOriginFilter] = useState('')
   const [partialId, setPartialId] = useState<string | null>(null)
   const [partialAmount, setPartialAmount] = useState('')
   const [partialMax, setPartialMax] = useState(0)
   const [importTocDoc, setImportTocDoc] = useState<TocPurchaseDoc | null>(null)
   const [importTocCatId, setImportTocCatId] = useState('')
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+
+  function toggleExpand(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const { data: kpis } = useQuery({
     queryKey: ['payables-kpis', selectedClientId],
@@ -138,7 +304,12 @@ export default function PayablesPage() {
 
   const deletePayable = useMutation({
     mutationFn: (id: string) => api.delete(`/treasury/${selectedClientId}/payables/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); toast.success('Documento eliminado.') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['payables'] })
+      qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      setDeleteRow(null)
+      toast.success('Documento eliminado.')
+    },
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -155,9 +326,15 @@ export default function PayablesPage() {
   })
 
   const updatePayable = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { entityName?: string; dueDate?: string; description?: string } }) =>
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.patch(`/treasury/${selectedClientId}/payables/${id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['payables'] }); setEditId(null); toast.success('Documento atualizado.') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['payables'] })
+      qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      setEditId(null)
+      setEditRow(null)
+      toast.success('Documento atualizado.')
+    },
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -386,90 +563,107 @@ export default function PayablesPage() {
                   return (
                     <tr key={`l-${p.id}`} className="hover:bg-gray-50 group">
                       <td className="px-5 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-medium text-gray-900">{p.reference}</span>
-                          {p.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
-                        </div>
-                        <div className="text-xs text-gray-400">{formatDate(p.documentDate)}{p.description ? ` · ${p.description}` : ''}</div>
-                      </td>
-                      <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
-                      <td className="px-5 py-3">
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.category.color }} />
-                          <span className="text-gray-700 text-xs">{p.category.name}</span>
-                          {!p.category.launchToc && <span className="text-gray-400 text-xs">· local</span>}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 whitespace-nowrap">
-                        {(() => {
-                          const now = Date.now()
-                          const due = new Date(p.dueDate).getTime()
-                          const isActive = p.status !== 'SETTLED' && p.status !== 'VOID'
-                          const overdue = isActive && due < now
-                          const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
-                          const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
-                          return (
-                            <>
-                              <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(p.dueDate)}</div>
-                              {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
-                              {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
-                            </>
-                          )
-                        })()}
-                      </td>
-                      <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(p.totalAmount)}</td>
-                      <td className="px-5 py-3 text-right">
-                        <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
-                        {p.status === 'PARTIAL' && Number(p.paidAmount) > 0 && (
-                          <div className="text-xs text-gray-400">pago: {formatCurrency(Number(p.paidAmount))}</div>
-                        )}
-                      </td>
-                      <td className="px-5 py-3"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status)}</Badge></td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            title="Editar"
-                            onClick={() => { setEditId(p.id); setEditForm({ entityName: p.entityName, dueDate: p.dueDate.slice(0, 10), description: p.description ?? '' }) }}
-                            className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
-                            <button
-                              title="Pagamento parcial"
-                              onClick={() => { setPartialId(p.id); setPartialAmount(''); setPartialMax(Number(p.pendingAmount)) }}
-                              className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                            >
-                              <DollarSign className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
-                            <button
-                              title="Liquidar totalmente"
-                              onClick={() => { if (confirm('Marcar como pago na totalidade?')) settlePayable.mutate(p.id) }}
-                              className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-                            >
-                              <CheckCircle className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {p.status !== 'VOID' && p.status !== 'SETTLED' && (
-                            <button
-                              title="Anular"
-                              onClick={() => { if (confirm('Anular este documento?')) voidPayable.mutate(p.id) }}
-                              className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                            >
-                              <XCircle className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          <button
-                            title="Eliminar"
-                            onClick={() => { if (confirm('Eliminar permanentemente?')) deletePayable.mutate(p.id) }}
-                            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        <div className="flex items-start gap-1.5">
+                          <span className="w-4 flex-shrink-0" />
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium text-gray-900">{p.reference}</span>
+                              {p.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
+                            </div>
+                            <div className="text-xs text-gray-400">{formatDate(p.documentDate)}{p.description ? ` · ${p.description}` : ''}</div>
+                          </div>
                         </div>
                       </td>
+                        <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
+                        <td className="px-5 py-3">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.category.color }} />
+                            <span className="text-gray-700 text-xs">{p.category.name}</span>
+                            {!p.category.launchToc && <span className="text-gray-400 text-xs">· local</span>}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 whitespace-nowrap">
+                          {(() => {
+                            const now = Date.now()
+                            const due = new Date(p.dueDate).getTime()
+                            const isActive = p.status !== 'SETTLED' && p.status !== 'VOID'
+                            const overdue = isActive && due < now
+                            const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
+                            const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
+                            return (
+                              <>
+                                <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(p.dueDate)}</div>
+                                {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
+                                {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
+                              </>
+                            )
+                          })()}
+                        </td>
+                        <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(p.totalAmount)}</td>
+                        <td className="px-5 py-3 text-right">
+                          <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
+                          {p.status === 'PARTIAL' && Number(p.paidAmount) > 0 && (
+                            <div className="text-xs text-gray-400">pago: {formatCurrency(Number(p.paidAmount))}</div>
+                          )}
+                        </td>
+                        <td className="px-5 py-3"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status)}</Badge></td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              title="Editar"
+                              onClick={() => {
+                                setEditId(p.id)
+                                setEditRow(p)
+                                setEditForm({
+                                  categoryId:   p.category.id,
+                                  entityName:   p.entityName,
+                                  reference:    p.reference,
+                                  documentDate: p.documentDate.slice(0, 10),
+                                  dueDate:      p.dueDate.slice(0, 10),
+                                  totalAmount:  String(p.totalAmount),
+                                  description:  p.description ?? '',
+                                })
+                              }}
+                              className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
+                              <button
+                                title="Pagamento parcial"
+                                onClick={() => { setPartialId(p.id); setPartialAmount(''); setPartialMax(Number(p.pendingAmount)) }}
+                                className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                              >
+                                <DollarSign className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
+                              <button
+                                title="Liquidar totalmente"
+                                onClick={() => settlePayable.mutate(p.id)}
+                                className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {p.status !== 'VOID' && p.status !== 'SETTLED' && (
+                              <button
+                                title="Anular"
+                                onClick={() => voidPayable.mutate(p.id)}
+                                className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button
+                              title="Eliminar"
+                              onClick={() => setDeleteRow(p)}
+                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
                     </tr>
                   )
                 }
@@ -482,33 +676,61 @@ export default function PayablesPage() {
                 const dueDate = d.due_date ?? date
                 const total = d.gross_total
                 const pending = d.pending_total
+                const key = `t-${docId}`
+                const isExpanded = expandedIds.has(key)
+                const paymentCount = Array.isArray(d.payments_ids) ? (d.payments_ids as unknown[]).length : 0
                 return (
-                  <tr key={`t-${docId}`} className="hover:bg-blue-50 bg-blue-50/30 group">
-                    <td className="px-5 py-3">
-                      <div className="font-medium text-gray-900">{ref}</div>
-                      <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
-                    </td>
-                    <td className="px-5 py-3 text-gray-700">{supplier}</td>
-                    <td className="px-5 py-3">
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">TOConline</span>
-                    </td>
-                    <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
-                      {dueDate ? formatDate(dueDate) : '—'}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
-                    <td className="px-5 py-3 text-right font-semibold text-red-700">{formatCurrency(pending)}</td>
-                    <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
-                    <td className="px-3 py-3">
-                      <button
-                        onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
-                        className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-lg border border-blue-200 transition-all whitespace-nowrap"
-                        title="Importar para local"
-                      >
-                        <ArrowDownToLine className="w-3 h-3" />
-                        Importar
-                      </button>
-                    </td>
-                  </tr>
+                  <Fragment key={key}>
+                    <tr className="hover:bg-blue-50 bg-blue-50/30 group">
+                      <td className="px-5 py-3">
+                        <div className="flex items-start gap-1.5">
+                          {paymentCount > 0 ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
+                              className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
+                              title={isExpanded ? 'Ocultar pagamentos' : 'Ver pagamentos'}
+                            >
+                              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                              <span className="text-xs font-semibold leading-none">{paymentCount}</span>
+                            </button>
+                          ) : (
+                            <span className="w-4 flex-shrink-0" />
+                          )}
+                          <div>
+                            <div className="font-medium text-gray-900">{ref}</div>
+                            <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-gray-700">{supplier}</td>
+                      <td className="px-5 py-3">
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">TOConline</span>
+                      </td>
+                      <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                        {dueDate ? formatDate(dueDate) : '—'}
+                      </td>
+                      <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
+                      <td className="px-5 py-3 text-right font-semibold text-red-700">{formatCurrency(pending)}</td>
+                      <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
+                      <td className="px-3 py-3">
+                        <button
+                          onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
+                          className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-lg border border-blue-200 transition-all whitespace-nowrap"
+                          title="Importar para local"
+                        >
+                          <ArrowDownToLine className="w-3 h-3" />
+                          Importar
+                        </button>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <PaymentSubRows
+                        clientId={selectedClientId!}
+                        tocDocId={docId}
+                        entityName={supplier}
+                      />
+                    )}
+                  </Fragment>
                 )
               })}
               {rows.length === 0 && (
@@ -594,28 +816,96 @@ export default function PayablesPage() {
         </div>
       </Modal>
 
-      <Modal open={!!editId} onClose={() => setEditId(null)} title="Editar Conta a Pagar">
-        <div className="space-y-4">
-          <div>
+      <Modal open={!!editId} onClose={() => { setEditId(null); setEditRow(null) }} title="Editar Conta a Pagar" size="lg">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="label">Categoria</label>
+            <select className="input" value={editForm.categoryId} onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}>
+              <option value="">Selecionar...</option>
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2">
             <label className="label">Fornecedor / Entidade</label>
             <input className="input" value={editForm.entityName} onChange={(e) => setEditForm({ ...editForm, entityName: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Nº Documento</label>
+            <input className="input" value={editForm.reference} onChange={(e) => setEditForm({ ...editForm, reference: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">
+              Valor (€)
+              {editRow && editRow.status !== 'OPEN' && (
+                <span className="ml-1 text-xs text-gray-400 font-normal">(só editável em aberto)</span>
+              )}
+            </label>
+            <input
+              type="number"
+              className="input"
+              value={editForm.totalAmount}
+              onChange={(e) => setEditForm({ ...editForm, totalAmount: e.target.value })}
+              disabled={editRow?.status !== 'OPEN'}
+            />
+          </div>
+          <div>
+            <label className="label">Data Documento</label>
+            <input type="date" className="input" value={editForm.documentDate} onChange={(e) => setEditForm({ ...editForm, documentDate: e.target.value })} />
           </div>
           <div>
             <label className="label">Data Vencimento</label>
             <input type="date" className="input" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} />
           </div>
-          <div>
+          <div className="col-span-2">
             <label className="label">Descrição</label>
             <input className="input" value={editForm.description} placeholder="(opcional)" onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
           </div>
+        </div>
+        {updatePayable.isError && (
+          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(updatePayable.error as Error).message}</p>
+        )}
+        <div className="flex gap-3 mt-6">
+          <button onClick={() => { setEditId(null); setEditRow(null) }} className="btn-secondary flex-1">Cancelar</button>
+          <button
+            onClick={() => {
+              if (!editId) return
+              const body: Record<string, unknown> = {
+                categoryId:   editForm.categoryId  || undefined,
+                entityName:   editForm.entityName,
+                reference:    editForm.reference   || undefined,
+                documentDate: editForm.documentDate || undefined,
+                dueDate:      editForm.dueDate      || undefined,
+                description:  editForm.description  || undefined,
+              }
+              if (editRow?.status === 'OPEN' && editForm.totalAmount)
+                body.totalAmount = parseFloat(editForm.totalAmount)
+              updatePayable.mutate({ id: editId, data: body })
+            }}
+            className="btn-primary flex-1"
+            disabled={updatePayable.isPending || !editForm.entityName || !editForm.dueDate}
+          >
+            {updatePayable.isPending ? 'A guardar...' : 'Guardar'}
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={!!deleteRow} onClose={() => setDeleteRow(null)} title="Eliminar Conta a Pagar">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            O documento <span className="font-semibold text-gray-900">{deleteRow?.reference}</span> de{' '}
+            <span className="font-semibold text-gray-900">{deleteRow?.entityName}</span> será permanentemente eliminado. Esta acção não pode ser revertida.
+          </p>
+          {deletePayable.isError && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(deletePayable.error as Error).message}</p>
+          )}
           <div className="flex gap-3 pt-2">
-            <button onClick={() => setEditId(null)} className="btn-secondary flex-1">Cancelar</button>
+            <button onClick={() => setDeleteRow(null)} className="btn-secondary flex-1">Cancelar</button>
             <button
-              onClick={() => editId && updatePayable.mutate({ id: editId, data: { entityName: editForm.entityName, dueDate: editForm.dueDate, description: editForm.description || undefined } })}
-              className="btn-primary flex-1"
-              disabled={updatePayable.isPending || !editForm.entityName || !editForm.dueDate}
+              onClick={() => deleteRow && deletePayable.mutate(deleteRow.id)}
+              className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-50 transition-colors"
+              disabled={deletePayable.isPending}
             >
-              {updatePayable.isPending ? 'A guardar...' : 'Guardar'}
+              {deletePayable.isPending ? 'A eliminar...' : 'Eliminar'}
             </button>
           </div>
         </div>

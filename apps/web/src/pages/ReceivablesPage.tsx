@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { Fragment, useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -7,7 +7,7 @@ import { formatCurrency, formatDate, statusLabel, statusVariant, tocStatusLabel,
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2 } from 'lucide-react'
+import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown } from 'lucide-react'
 
 interface TocSalesDoc {
   id: number
@@ -27,6 +27,26 @@ interface TocSalesDoc {
   currency_iso_code: string
   external_reference?: string
   notes?: string
+  [key: string]: unknown
+}
+
+interface TocReceipt {
+  id: number | string
+  document_no: string
+  date: string
+  gross_total: number
+  [key: string]: unknown
+}
+
+interface ReceiptLine {
+  receivable_id: number | string
+  received_value: number
+  gross_total: number
+  settlement_percentage?: number
+  document_no?: string
+  _doc_date?: string
+  _doc_due_date?: string
+  _doc_gross_total?: number
   [key: string]: unknown
 }
 
@@ -54,6 +74,140 @@ const emptyRecurrence = {
 
 type Row = { _src: 'local'; r: Receivable } | { _src: 'toc'; d: TocSalesDoc }
 
+function ReceiptDocLines({ clientId, receiptId }: { clientId: string; receiptId: string }) {
+  const { data: lines = [], isLoading } = useQuery<ReceiptLine[]>({
+    queryKey: ['toc-receipt-lines', clientId, receiptId],
+    queryFn: () => api.get(`/toconline/${clientId}/sales-receipts/${receiptId}/lines`),
+  })
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
+          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar...
+        </td>
+      </tr>
+    )
+  }
+
+  if (!lines.length) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
+          Sem documentos associados
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <>
+      {lines.map((line, i) => (
+        <tr key={i} className="bg-blue-50/20 border-b border-gray-100/60">
+          <td className="pl-16 pr-3 py-1.5">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="w-1 h-1 rounded-full bg-blue-300 flex-shrink-0" />
+              <div>
+                <div className="text-gray-700 font-medium">{line.document_no ?? String(line.receivable_id)}</div>
+                {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
+              </div>
+            </div>
+          </td>
+          <td className="px-5 py-1.5" />
+          <td className="px-5 py-1.5 text-xs text-gray-400">
+            {(() => {
+              const docTotal = Number(line._doc_gross_total ?? line.gross_total)
+              if (!docTotal) return ''
+              const pct = (line.received_value / docTotal) * 100
+              return `${pct.toFixed(0)}%`
+            })()}
+          </td>
+          <td className="px-5 py-1.5 text-xs text-gray-400 whitespace-nowrap">
+            {line._doc_due_date ? formatDate(line._doc_due_date) : '—'}
+          </td>
+          <td className="px-5 py-1.5 text-right text-xs text-gray-500">
+            {line._doc_gross_total != null ? formatCurrency(line._doc_gross_total) : '—'}
+          </td>
+          <td className="px-5 py-1.5 text-right text-xs text-blue-700 font-semibold">{formatCurrency(line.received_value)}</td>
+          <td colSpan={2} className="px-5 py-1.5" />
+        </tr>
+      ))}
+    </>
+  )
+}
+
+function ReceiptSubRows({ clientId, tocDocId, entityName }: { clientId: string; tocDocId: string; entityName: string }) {
+  const [expandedReceipts, setExpandedReceipts] = useState<Set<string>>(new Set())
+
+  function toggleReceipt(id: string) {
+    setExpandedReceipts((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const { data: receipts = [], isLoading } = useQuery<TocReceipt[]>({
+    queryKey: ['toc-sales-receipts', clientId, tocDocId],
+    queryFn: () => api.get(`/toconline/${clientId}/sales/${tocDocId}/receipts`),
+  })
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar recibos...
+        </td>
+      </tr>
+    )
+  }
+
+  if (!receipts.length) {
+    return (
+      <tr>
+        <td colSpan={8} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+          Sem recibos associados
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <>
+      {receipts.map((rc) => {
+        const rcId = String(rc.id)
+        const isExpanded = expandedReceipts.has(rcId)
+        return (
+          <Fragment key={rcId}>
+            <tr
+              className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-gray-100/60"
+              onClick={() => toggleReceipt(rcId)}
+            >
+              <td className="pl-10 pr-3 py-2">
+                <div className="flex items-center gap-2 text-xs">
+                  {isExpanded
+                    ? <ChevronDown className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                    : <ChevronRight className="w-3 h-3 text-gray-400 flex-shrink-0" />}
+                  <span className="text-gray-700 font-medium">{rc.document_no}</span>
+                </div>
+              </td>
+              <td className="px-5 py-2 text-xs text-gray-500">{entityName}</td>
+              <td className="px-5 py-2" />
+              <td className="px-5 py-2 text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</td>
+              <td className="px-5 py-2" />
+              <td className="px-5 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(rc.gross_total)}</td>
+              <td className="px-5 py-2" />
+              <td className="px-3 py-2" />
+            </tr>
+            {isExpanded && <ReceiptDocLines clientId={clientId} receiptId={rcId} />}
+          </Fragment>
+        )
+      })}
+    </>
+  )
+}
+
 export default function ReceivablesPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
@@ -71,12 +225,24 @@ export default function ReceivablesPage() {
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isRecurrentFilter, setIsRecurrentFilter] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState({ entityName: '', dueDate: '', description: '' })
+  const [editRow, setEditRow] = useState<Receivable | null>(null)
+  const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
+  const [deleteRow, setDeleteRow] = useState<Receivable | null>(null)
   const [partialId, setPartialId] = useState<string | null>(null)
   const [partialAmount, setPartialAmount] = useState('')
   const [partialMax, setPartialMax] = useState(0)
   const [importTocDoc, setImportTocDoc] = useState<TocSalesDoc | null>(null)
   const [importTocCatId, setImportTocCatId] = useState('')
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+
+  function toggleExpand(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const { data: kpis } = useQuery({
     queryKey: ['receivables-kpis', selectedClientId],
@@ -138,7 +304,12 @@ export default function ReceivablesPage() {
 
   const deleteReceivable = useMutation({
     mutationFn: (id: string) => api.delete(`/treasury/${selectedClientId}/receivables/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); toast.success('Documento eliminado.') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['receivables'] })
+      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
+      setDeleteRow(null)
+      toast.success('Documento eliminado.')
+    },
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -155,9 +326,15 @@ export default function ReceivablesPage() {
   })
 
   const updateReceivable = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { entityName?: string; dueDate?: string; description?: string } }) =>
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.patch(`/treasury/${selectedClientId}/receivables/${id}`, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['receivables'] }); setEditId(null); toast.success('Documento atualizado.') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['receivables'] })
+      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
+      setEditId(null)
+      setEditRow(null)
+      toast.success('Documento atualizado.')
+    },
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -388,90 +565,107 @@ export default function ReceivablesPage() {
                   return (
                     <tr key={`l-${r.id}`} className="hover:bg-gray-50 group">
                       <td className="px-5 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-medium text-gray-900">{r.reference}</span>
-                          {r.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
-                        </div>
-                        <div className="text-xs text-gray-400">{formatDate(r.documentDate)}{r.description ? ` · ${r.description}` : ''}</div>
-                      </td>
-                      <td className="px-5 py-3 text-gray-700">{r.entityName}</td>
-                      <td className="px-5 py-3">
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.category.color }} />
-                          <span className="text-gray-700 text-xs">{r.category.name}</span>
-                          {!r.category.launchToc && <span className="text-gray-400 text-xs">· local</span>}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 whitespace-nowrap">
-                        {(() => {
-                          const now = Date.now()
-                          const due = new Date(r.dueDate).getTime()
-                          const isActive = r.status !== 'SETTLED' && r.status !== 'VOID'
-                          const overdue = isActive && due < now
-                          const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
-                          const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
-                          return (
-                            <>
-                              <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(r.dueDate)}</div>
-                              {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
-                              {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
-                            </>
-                          )
-                        })()}
-                      </td>
-                      <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(r.totalAmount)}</td>
-                      <td className="px-5 py-3 text-right">
-                        <div className="font-semibold text-green-700">{formatCurrency(r.pendingAmount)}</div>
-                        {r.status === 'PARTIAL' && Number(r.receivedAmount) > 0 && (
-                          <div className="text-xs text-gray-400">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
-                        )}
-                      </td>
-                      <td className="px-5 py-3"><Badge variant={statusVariant(r.status)}>{statusLabel(r.status)}</Badge></td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            title="Editar"
-                            onClick={() => { setEditId(r.id); setEditForm({ entityName: r.entityName, dueDate: r.dueDate.slice(0, 10), description: r.description ?? '' }) }}
-                            className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          {(r.status === 'OPEN' || r.status === 'PARTIAL') && (
-                            <button
-                              title="Pagamento parcial"
-                              onClick={() => { setPartialId(r.id); setPartialAmount(''); setPartialMax(Number(r.pendingAmount)) }}
-                              className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                            >
-                              <DollarSign className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {(r.status === 'OPEN' || r.status === 'PARTIAL') && (
-                            <button
-                              title="Liquidar totalmente"
-                              onClick={() => { if (confirm('Marcar como recebido na totalidade?')) settleReceivable.mutate(r.id) }}
-                              className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-                            >
-                              <CheckCircle className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {r.status !== 'VOID' && r.status !== 'SETTLED' && (
-                            <button
-                              title="Anular"
-                              onClick={() => { if (confirm('Anular este documento?')) voidReceivable.mutate(r.id) }}
-                              className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                            >
-                              <XCircle className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          <button
-                            title="Eliminar"
-                            onClick={() => { if (confirm('Eliminar permanentemente?')) deleteReceivable.mutate(r.id) }}
-                            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        <div className="flex items-start gap-1.5">
+                          <span className="w-4 flex-shrink-0" />
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium text-gray-900">{r.reference}</span>
+                              {r.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
+                            </div>
+                            <div className="text-xs text-gray-400">{formatDate(r.documentDate)}{r.description ? ` · ${r.description}` : ''}</div>
+                          </div>
                         </div>
                       </td>
+                        <td className="px-5 py-3 text-gray-700">{r.entityName}</td>
+                        <td className="px-5 py-3">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.category.color }} />
+                            <span className="text-gray-700 text-xs">{r.category.name}</span>
+                            {!r.category.launchToc && <span className="text-gray-400 text-xs">· local</span>}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 whitespace-nowrap">
+                          {(() => {
+                            const now = Date.now()
+                            const due = new Date(r.dueDate).getTime()
+                            const isActive = r.status !== 'SETTLED' && r.status !== 'VOID'
+                            const overdue = isActive && due < now
+                            const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
+                            const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
+                            return (
+                              <>
+                                <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(r.dueDate)}</div>
+                                {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
+                                {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
+                              </>
+                            )
+                          })()}
+                        </td>
+                        <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(r.totalAmount)}</td>
+                        <td className="px-5 py-3 text-right">
+                          <div className="font-semibold text-green-700">{formatCurrency(r.pendingAmount)}</div>
+                          {r.status === 'PARTIAL' && Number(r.receivedAmount) > 0 && (
+                            <div className="text-xs text-gray-400">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
+                          )}
+                        </td>
+                        <td className="px-5 py-3"><Badge variant={statusVariant(r.status)}>{statusLabel(r.status)}</Badge></td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              title="Editar"
+                              onClick={() => {
+                                setEditId(r.id)
+                                setEditRow(r)
+                                setEditForm({
+                                  categoryId:   r.category.id,
+                                  entityName:   r.entityName,
+                                  reference:    r.reference,
+                                  documentDate: r.documentDate.slice(0, 10),
+                                  dueDate:      r.dueDate.slice(0, 10),
+                                  totalAmount:  String(r.totalAmount),
+                                  description:  r.description ?? '',
+                                })
+                              }}
+                              className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            {(r.status === 'OPEN' || r.status === 'PARTIAL') && (
+                              <button
+                                title="Pagamento parcial"
+                                onClick={() => { setPartialId(r.id); setPartialAmount(''); setPartialMax(Number(r.pendingAmount)) }}
+                                className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                              >
+                                <DollarSign className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {(r.status === 'OPEN' || r.status === 'PARTIAL') && (
+                              <button
+                                title="Liquidar totalmente"
+                                onClick={() => settleReceivable.mutate(r.id)}
+                                className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {r.status !== 'VOID' && r.status !== 'SETTLED' && (
+                              <button
+                                title="Anular"
+                                onClick={() => voidReceivable.mutate(r.id)}
+                                className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button
+                              title="Eliminar"
+                              onClick={() => setDeleteRow(r)}
+                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
                     </tr>
                   )
                 }
@@ -484,33 +678,61 @@ export default function ReceivablesPage() {
                 const dueDate = d.due_date ?? date
                 const total = d.gross_total
                 const pending = d.pending_total
+                const key = `t-${docId}`
+                const isExpanded = expandedIds.has(key)
+                const receiptCount = Array.isArray(d.receipts_ids) ? (d.receipts_ids as unknown[]).length : 0
                 return (
-                  <tr key={`t-${docId}`} className="hover:bg-green-50 bg-green-50/30 group">
-                    <td className="px-5 py-3">
-                      <div className="font-medium text-gray-900">{ref}</div>
-                      <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
-                    </td>
-                    <td className="px-5 py-3 text-gray-700">{customer}</td>
-                    <td className="px-5 py-3">
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">TOConline</span>
-                    </td>
-                    <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
-                      {dueDate ? formatDate(dueDate) : '—'}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
-                    <td className="px-5 py-3 text-right font-semibold text-green-700">{formatCurrency(pending)}</td>
-                    <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
-                    <td className="px-3 py-3">
-                      <button
-                        onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
-                        className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg border border-green-200 transition-all whitespace-nowrap"
-                        title="Importar para local"
-                      >
-                        <ArrowDownToLine className="w-3 h-3" />
-                        Importar
-                      </button>
-                    </td>
-                  </tr>
+                  <Fragment key={key}>
+                    <tr className="hover:bg-green-50 bg-green-50/30 group">
+                      <td className="px-5 py-3">
+                        <div className="flex items-start gap-1.5">
+                          {receiptCount > 0 ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
+                              className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
+                              title={isExpanded ? 'Ocultar recibos' : 'Ver recibos'}
+                            >
+                              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                              <span className="text-xs font-semibold leading-none">{receiptCount}</span>
+                            </button>
+                          ) : (
+                            <span className="w-4 flex-shrink-0" />
+                          )}
+                          <div>
+                            <div className="font-medium text-gray-900">{ref}</div>
+                            <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-gray-700">{customer}</td>
+                      <td className="px-5 py-3">
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">TOConline</span>
+                      </td>
+                      <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                        {dueDate ? formatDate(dueDate) : '—'}
+                      </td>
+                      <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
+                      <td className="px-5 py-3 text-right font-semibold text-green-700">{formatCurrency(pending)}</td>
+                      <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
+                      <td className="px-3 py-3">
+                        <button
+                          onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
+                          className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg border border-green-200 transition-all whitespace-nowrap"
+                          title="Importar para local"
+                        >
+                          <ArrowDownToLine className="w-3 h-3" />
+                          Importar
+                        </button>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <ReceiptSubRows
+                        clientId={selectedClientId!}
+                        tocDocId={docId}
+                        entityName={customer}
+                      />
+                    )}
+                  </Fragment>
                 )
               })}
               {rows.length === 0 && (
@@ -596,28 +818,96 @@ export default function ReceivablesPage() {
         </div>
       </Modal>
 
-      <Modal open={!!editId} onClose={() => setEditId(null)} title="Editar Conta a Receber">
-        <div className="space-y-4">
-          <div>
+      <Modal open={!!editId} onClose={() => { setEditId(null); setEditRow(null) }} title="Editar Conta a Receber" size="lg">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="label">Categoria</label>
+            <select className="input" value={editForm.categoryId} onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}>
+              <option value="">Selecionar...</option>
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2">
             <label className="label">Cliente / Entidade</label>
             <input className="input" value={editForm.entityName} onChange={(e) => setEditForm({ ...editForm, entityName: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">Nº Documento</label>
+            <input className="input" value={editForm.reference} onChange={(e) => setEditForm({ ...editForm, reference: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">
+              Valor (€)
+              {editRow && editRow.status !== 'OPEN' && (
+                <span className="ml-1 text-xs text-gray-400 font-normal">(só editável em aberto)</span>
+              )}
+            </label>
+            <input
+              type="number"
+              className="input"
+              value={editForm.totalAmount}
+              onChange={(e) => setEditForm({ ...editForm, totalAmount: e.target.value })}
+              disabled={editRow?.status !== 'OPEN'}
+            />
+          </div>
+          <div>
+            <label className="label">Data Documento</label>
+            <input type="date" className="input" value={editForm.documentDate} onChange={(e) => setEditForm({ ...editForm, documentDate: e.target.value })} />
           </div>
           <div>
             <label className="label">Data Vencimento</label>
             <input type="date" className="input" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} />
           </div>
-          <div>
+          <div className="col-span-2">
             <label className="label">Descrição</label>
             <input className="input" value={editForm.description} placeholder="(opcional)" onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
           </div>
+        </div>
+        {updateReceivable.isError && (
+          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(updateReceivable.error as Error).message}</p>
+        )}
+        <div className="flex gap-3 mt-6">
+          <button onClick={() => { setEditId(null); setEditRow(null) }} className="btn-secondary flex-1">Cancelar</button>
+          <button
+            onClick={() => {
+              if (!editId) return
+              const body: Record<string, unknown> = {
+                categoryId:   editForm.categoryId  || undefined,
+                entityName:   editForm.entityName,
+                reference:    editForm.reference   || undefined,
+                documentDate: editForm.documentDate || undefined,
+                dueDate:      editForm.dueDate      || undefined,
+                description:  editForm.description  || undefined,
+              }
+              if (editRow?.status === 'OPEN' && editForm.totalAmount)
+                body.totalAmount = parseFloat(editForm.totalAmount)
+              updateReceivable.mutate({ id: editId, data: body })
+            }}
+            className="btn-primary flex-1"
+            disabled={updateReceivable.isPending || !editForm.entityName || !editForm.dueDate}
+          >
+            {updateReceivable.isPending ? 'A guardar...' : 'Guardar'}
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={!!deleteRow} onClose={() => setDeleteRow(null)} title="Eliminar Conta a Receber">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            O documento <span className="font-semibold text-gray-900">{deleteRow?.reference}</span> de{' '}
+            <span className="font-semibold text-gray-900">{deleteRow?.entityName}</span> será permanentemente eliminado. Esta acção não pode ser revertida.
+          </p>
+          {deleteReceivable.isError && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(deleteReceivable.error as Error).message}</p>
+          )}
           <div className="flex gap-3 pt-2">
-            <button onClick={() => setEditId(null)} className="btn-secondary flex-1">Cancelar</button>
+            <button onClick={() => setDeleteRow(null)} className="btn-secondary flex-1">Cancelar</button>
             <button
-              onClick={() => editId && updateReceivable.mutate({ id: editId, data: { entityName: editForm.entityName, dueDate: editForm.dueDate, description: editForm.description || undefined } })}
-              className="btn-primary flex-1"
-              disabled={updateReceivable.isPending || !editForm.entityName || !editForm.dueDate}
+              onClick={() => deleteRow && deleteReceivable.mutate(deleteRow.id)}
+              className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-50 transition-colors"
+              disabled={deleteReceivable.isPending}
             >
-              {updateReceivable.isPending ? 'A guardar...' : 'Guardar'}
+              {deleteReceivable.isPending ? 'A eliminar...' : 'Eliminar'}
             </button>
           </div>
         </div>

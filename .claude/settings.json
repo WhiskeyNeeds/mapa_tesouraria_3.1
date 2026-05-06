@@ -50,7 +50,11 @@
       "PowerShell(if \\(-not $?\\) { \"not found\" })",
       "Read(//c/Users/ruise/.claude/**)",
       "mcp__toconline-documenta-o-api__searchDocumentation",
-      "mcp__toconline-documenta-o-api__getPage"
+      "mcp__toconline-documenta-o-api__getPage",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\" -Directory)",
+      "Bash(Select-Object Name)"
     ],
     "additionalDirectories": [
       "C:\\Users\\ruise\\.claude"

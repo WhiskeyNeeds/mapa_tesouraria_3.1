@@ -12,7 +12,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const q = request.query as {
       status?: string; origin?: TreasuryDocOrigin; categoryId?: string
       entityName?: string; dueDateFrom?: string; dueDateTo?: string
-      isRecurrent?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
+      isRecurrent?: string; tocSupplierId?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
     const statusValue = q.status?.includes(',')
       ? (q.status.split(',') as TreasuryDocStatus[])
@@ -98,6 +98,12 @@ export async function payablesRoutes(fastify: FastifyInstance) {
   fastify.delete(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     await svc.delete(clientId, id)
+    return reply.status(204).send()
+  })
+
+  fastify.delete(`${prefix}/by-supplier/:tocSupplierId`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, tocSupplierId } = request.params as { clientId: string; tocSupplierId: string }
+    await svc.deleteByTocSupplierId(clientId, tocSupplierId)
     return reply.status(204).send()
   })
 }

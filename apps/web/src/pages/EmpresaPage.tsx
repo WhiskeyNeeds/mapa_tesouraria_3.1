@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   Search, Users, Truck, Package, Wrench, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2, Eye,
+  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2, Eye, Pencil,
 } from 'lucide-react'
 
 type Tab = 'clientes' | 'fornecedores' | 'produtos' | 'servicos'
@@ -836,21 +836,28 @@ const TAX_CODES = [
   { code: 'ISE', label: 'ISE — Isento (0%)' },
 ]
 
-function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: string; onClose: () => void }) {
+function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clientId: string; onClose: () => void; editRow?: TocRow | null }) {
   const qc = useQueryClient()
 
+  // helpers used for initial state only
+  const sv = (v: unknown) => (v != null ? String(v) : '')
+  const bv = (v: unknown) => v === true
+  const cli  = editRow && tab === 'clientes'                          ? editRow : null
+  const forn = editRow && tab === 'fornecedores'                      ? editRow : null
+  const item = editRow && (tab === 'produtos' || tab === 'servicos')  ? editRow : null
+
   // ── cliente — geral ──
-  const [cli_nif,          setCli_nif]          = useState('')
-  const [cli_nome,         setCli_nome]         = useState('')
+  const [cli_nif,          setCli_nif]          = useState(() => cli ? sv(cli.tax_registration_number) : '')
+  const [cli_nome,         setCli_nome]         = useState(() => cli ? sv(cli.business_name) : '')
   const [cli_subconta,     setCli_subconta]     = useState('')
-  const [cli_contacto,     setCli_contacto]     = useState('')
-  const [cli_email,        setCli_email]        = useState('')
-  const [cli_tel,          setCli_tel]          = useState('')
-  const [cli_telem,        setCli_telem]        = useState('')
-  const [cli_website,      setCli_website]      = useState('')
-  const [cli_sp,           setCli_sp]           = useState(false)
-  const [cli_ivaC,         setCli_ivaC]         = useState(false)
-  const [cli_isentoIva,    setCli_isentoIva]    = useState(false)
+  const [cli_contacto,     setCli_contacto]     = useState(() => cli ? sv(cli.contact_name) : '')
+  const [cli_email,        setCli_email]        = useState(() => cli ? sv(cli.email) : '')
+  const [cli_tel,          setCli_tel]          = useState(() => cli ? sv(cli.phone_number) : '')
+  const [cli_telem,        setCli_telem]        = useState(() => cli ? sv(cli.mobile_number) : '')
+  const [cli_website,      setCli_website]      = useState(() => cli ? sv(cli.website) : '')
+  const [cli_sp,           setCli_sp]           = useState(() => cli ? bv(cli.not_final_customer) : false)
+  const [cli_ivaC,         setCli_ivaC]         = useState(() => cli ? bv(cli.cashed_vat) : false)
+  const [cli_isentoIva,    setCli_isentoIva]    = useState(() => cli ? bv(cli.is_tax_exempt) : false)
   const [cli_ativo,        setCli_ativo]        = useState(true)
   // ── cliente — morada ──
   const [cli_moradaDesig,  setCli_moradaDesig]  = useState('Sede')
@@ -861,14 +868,14 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
   const [cli_pais,         setCli_pais]         = useState('1')
   const [cli_moradaDesc,   setCli_moradaDesc]   = useState(false)
   // ── cliente — observações ──
-  const [cli_obsDoc,       setCli_obsDoc]       = useState('')
-  const [cli_obsInt,       setCli_obsInt]       = useState('')
+  const [cli_obsDoc,       setCli_obsDoc]       = useState(() => cli ? sv(cli.observations) : '')
+  const [cli_obsInt,       setCli_obsInt]       = useState(() => cli ? sv(cli.internal_observations) : '')
   // ── cliente — fiscal e crédito ──
   const [cli_isentoRazao,  setCli_isentoRazao]  = useState('')
-  const [cli_regiaoFiscal, setCli_regiaoFiscal] = useState('PT')
-  const [cli_contaContab,  setCli_contaContab]  = useState('')
-  const [cli_limCredValor, setCli_limCredValor] = useState('')
-  const [cli_limCredDias,  setCli_limCredDias]  = useState('')
+  const [cli_regiaoFiscal, setCli_regiaoFiscal] = useState(() => cli ? (sv(cli.tax_country_region) || 'PT') : 'PT')
+  const [cli_contaContab,  setCli_contaContab]  = useState(() => cli ? sv(cli.accounting_number) : '')
+  const [cli_limCredValor, setCli_limCredValor] = useState(() => cli && cli.credit_limit_value != null ? sv(cli.credit_limit_value) : '')
+  const [cli_limCredDias,  setCli_limCredDias]  = useState(() => cli && cli.credit_limit_days  != null ? sv(cli.credit_limit_days)  : '')
   // ── cliente — informações adicionais ──
   const [cli_prazoVenc,    setCli_prazoVenc]    = useState('')
   const [cli_retencao,     setCli_retencao]     = useState('')
@@ -884,23 +891,23 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
   const [flipped,          setFlipped]          = useState(false)
 
   // ── fornecedor ──
-  const [forn_nif,          setForn_nif]          = useState('')
-  const [forn_nome,         setForn_nome]         = useState('')
+  const [forn_nif,          setForn_nif]          = useState(() => forn ? sv(forn.tax_registration_number) : '')
+  const [forn_nome,         setForn_nome]         = useState(() => forn ? sv(forn.business_name) : '')
   const [forn_subconta,     setForn_subconta]     = useState('')
   const [forn_contacto,     setForn_contacto]     = useState('')
   const [forn_cargo,        setForn_cargo]        = useState('')
   const [forn_email,        setForn_email]        = useState('')
   const [forn_telefone,     setForn_telefone]     = useState('')
   const [forn_telem,        setForn_telem]        = useState('')
-  const [forn_website,      setForn_website]      = useState('')
+  const [forn_website,      setForn_website]      = useState(() => forn ? sv(forn.website) : '')
   const [forn_tipoContacto, setForn_tipoContacto] = useState<string[]>(['others'])
   const [forn_tipoOpen,     setForn_tipoOpen]     = useState(false)
-  const [forn_ativoIva,       setForn_ativoIva]       = useState(false)
+  const [forn_ativoIva,       setForn_ativoIva]       = useState(() => forn ? bv(forn.is_tax_exempt) : false)
   const [forn_isentoIvaRazao, setForn_isentoIvaRazao] = useState('')
-  const [forn_sp,           setForn_sp]           = useState(false)
-  const [forn_af,           setForn_af]           = useState(false)
-  const [forn_m10,          setForn_m10]          = useState(false)
-  const [forn_aceitarAd,    setForn_aceitarAd]    = useState(false)
+  const [forn_sp,           setForn_sp]           = useState(() => forn ? bv(forn.is_taxable) : false)
+  const [forn_af,           setForn_af]           = useState(() => forn ? bv(forn.self_billing) : false)
+  const [forn_m10,          setForn_m10]          = useState(() => forn ? bv(forn.is_independent_worker) : false)
+  const [forn_aceitarAd,    setForn_aceitarAd]    = useState(() => forn ? bv(forn.trusted_email_source) : false)
   const [forn_ativo,        setForn_ativo]        = useState(true)
   // ── morada ──
   const [forn_moradaDesig,  setForn_moradaDesig]  = useState('Sede')
@@ -911,7 +918,7 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
   const [forn_pais,         setForn_pais]         = useState('1')
   const [forn_moradaCarga,  setForn_moradaCarga]  = useState(false)
   // ── observações ──
-  const [forn_obs,          setForn_obs]          = useState('')
+  const [forn_obs,          setForn_obs]          = useState(() => forn ? sv(forn.internal_observations) : '')
   // ── informações adicionais ──
   const [forn_prazoVenc,    setForn_prazoVenc]    = useState('')
   const [forn_moeda,        setForn_moeda]        = useState('EUR')
@@ -924,26 +931,26 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
   const [forn_flipped,      setForn_flipped]      = useState(false)
 
   // ── produto / serviço ──
-  const [item_codigo,       setItem_codigo]       = useState('')
-  const [item_desc,         setItem_desc]         = useState('')
-  const [item_preco,        setItem_preco]        = useState('')
-  const [item_preco2,       setItem_preco2]       = useState('')
-  const [item_preco3,       setItem_preco3]       = useState('')
-  const [item_precoCompra,  setItem_precoCompra]  = useState('')
-  const [item_ivaInc,       setItem_ivaInc]       = useState(false)
-  const [item_taxa,         setItem_taxa]         = useState('NOR')
-  const [item_ativo,        setItem_ativo]        = useState(true)
-  const [item_barcode,      setItem_barcode]      = useState('')
-  const [item_notas,        setItem_notas]        = useState('')
-  const [item_locArmazem,   setItem_locArmazem]   = useState('')
-  const [item_isMercadoria, setItem_isMercadoria] = useState(false)
-  const [item_tipoInv,      setItem_tipoInv]      = useState('')
-  const [item_grupoServico, setItem_grupoServico] = useState('')
-  const [item_numContab,    setItem_numContab]    = useState('')
-  const [item_custoFin,     setItem_custoFin]     = useState('')
-  const [item_custoTrans,   setItem_custoTrans]   = useState('')
-  const [item_custoOutros,  setItem_custoOutros]  = useState('')
-  const [item_custoAlf,     setItem_custoAlf]     = useState('')
+  const [item_codigo,       setItem_codigo]       = useState(() => item ? sv(item.item_code) : '')
+  const [item_desc,         setItem_desc]         = useState(() => item ? sv(item.item_description) : '')
+  const [item_preco,        setItem_preco]        = useState(() => item && item.sales_price   != null ? sv(item.sales_price)   : '')
+  const [item_preco2,       setItem_preco2]       = useState(() => item && item.sales_price_2 != null ? sv(item.sales_price_2) : '')
+  const [item_preco3,       setItem_preco3]       = useState(() => item && item.sales_price_3 != null ? sv(item.sales_price_3) : '')
+  const [item_precoCompra,  setItem_precoCompra]  = useState(() => item && item.purchase_price != null ? sv(item.purchase_price) : '')
+  const [item_ivaInc,       setItem_ivaInc]       = useState(() => item ? bv(item.sales_price_includes_vat) : false)
+  const [item_taxa,         setItem_taxa]         = useState(() => item ? (sv(item.tax_code) || 'NOR') : 'NOR')
+  const [item_ativo,        setItem_ativo]        = useState(() => item ? item.is_active !== false : true)
+  const [item_barcode,      setItem_barcode]      = useState(() => item ? sv(item.ean_barcode) : '')
+  const [item_notas,        setItem_notas]        = useState(() => item ? sv(item.notes) : '')
+  const [item_locArmazem,   setItem_locArmazem]   = useState(() => item ? sv(item.location_in_warehouse) : '')
+  const [item_isMercadoria, setItem_isMercadoria] = useState(() => item ? bv(item.is_merchandise) : false)
+  const [item_tipoInv,      setItem_tipoInv]      = useState(() => item ? sv(item.product_inventory_type) : '')
+  const [item_grupoServico, setItem_grupoServico] = useState(() => item ? sv(item.service_group) : '')
+  const [item_numContab,    setItem_numContab]    = useState(() => item ? sv(item.accounting_number) : '')
+  const [item_custoFin,     setItem_custoFin]     = useState(() => item && item.financial_cost  != null ? sv(item.financial_cost)  : '')
+  const [item_custoTrans,   setItem_custoTrans]   = useState(() => item && item.transport_cost  != null ? sv(item.transport_cost)  : '')
+  const [item_custoOutros,  setItem_custoOutros]  = useState(() => item && item.other_cost      != null ? sv(item.other_cost)      : '')
+  const [item_custoAlf,     setItem_custoAlf]     = useState(() => item && item.customs_cost    != null ? sv(item.customs_cost)    : '')
   const [item_flipped,      setItem_flipped]      = useState(false)
 
   const { data: countries = [] } = useQuery<TocRow[]>({
@@ -953,32 +960,65 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
     enabled: tab === 'clientes' || tab === 'fornecedores',
   })
 
+  const { data: cliDetail } = useQuery<TocRow>({
+    queryKey: ['toc-customer-detail', clientId, editRow?.id],
+    queryFn: () => api.get(`/toconline/${clientId}/customers/${String(editRow!.id)}`),
+    enabled: tab === 'clientes' && !!editRow?.id,
+    staleTime: 60_000,
+  })
+
+  const { data: fornDetail } = useQuery<TocRow>({
+    queryKey: ['toc-supplier-detail', clientId, editRow?.id],
+    queryFn: () => api.get(`/toconline/${clientId}/suppliers/${String(editRow!.id)}`),
+    enabled: tab === 'fornecedores' && !!editRow?.id,
+    staleTime: 60_000,
+  })
+
+  const cliAddrPrefilled  = useRef(false)
+  const fornAddrPrefilled = useRef(false)
+
   useEffect(() => {
-    if (cli_codPostal.length === 0) { setCli_localidade(''); return }
-    if (cli_codPostal.length !== 8) return
+    if (!cliDetail || !cli) return
+    const addr = (cliDetail as Record<string, unknown>)._address as Record<string, unknown> | null | undefined
+    if (!addr) return
+    cliAddrPrefilled.current = true
+    if (addr.address_detail) setCli_morada(String(addr.address_detail))
+    if (addr.postcode)       setCli_codPostal(String(addr.postcode))
+    if (addr.city)           setCli_localidade(String(addr.city))
+  }, [cliDetail]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!fornDetail || !forn) return
+    const addr = (fornDetail as Record<string, unknown>)._address as Record<string, unknown> | null | undefined
+    if (!addr) return
+    fornAddrPrefilled.current = true
+    if (addr.address_detail) setForn_morada(String(addr.address_detail))
+    if (addr.postcode)       setForn_codPostal(String(addr.postcode))
+    if (addr.city)           setForn_localidade(String(addr.city))
+  }, [fornDetail]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (cliAddrPrefilled.current) { cliAddrPrefilled.current = false; return }
+    if (cli_codPostal.length < 8) { setCli_localidade(''); return }
+    let cancelled = false
     setCli_localidadeLoading(true)
-    fetch(`https://api.zippopotam.us/pt/${encodeURIComponent(cli_codPostal)}`)
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then((data: { places?: Array<{ 'place name': string }> }) => {
-        const place = data.places?.[0]?.['place name']
-        if (place) setCli_localidade(place)
-      })
+    ;(api.get(`/postal/${cli_codPostal}`) as Promise<{ localidade: string | null }>)
+      .then(data => { if (!cancelled && data.localidade) setCli_localidade(data.localidade) })
       .catch(() => {})
-      .finally(() => setCli_localidadeLoading(false))
+      .finally(() => { if (!cancelled) setCli_localidadeLoading(false) })
+    return () => { cancelled = true }
   }, [cli_codPostal])
 
   useEffect(() => {
-    if (forn_codPostal.length === 0) { setForn_localidade(''); return }
-    if (forn_codPostal.length !== 8) return
+    if (fornAddrPrefilled.current) { fornAddrPrefilled.current = false; return }
+    if (forn_codPostal.length < 8) { setForn_localidade(''); return }
+    let cancelled = false
     setForn_localidadeLoading(true)
-    fetch(`https://api.zippopotam.us/pt/${encodeURIComponent(forn_codPostal)}`)
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then((data: { places?: Array<{ 'place name': string }> }) => {
-        const place = data.places?.[0]?.['place name']
-        if (place) setForn_localidade(place)
-      })
+    ;(api.get(`/postal/${forn_codPostal}`) as Promise<{ localidade: string | null }>)
+      .then(data => { if (!cancelled && data.localidade) setForn_localidade(data.localidade) })
       .catch(() => {})
-      .finally(() => setForn_localidadeLoading(false))
+      .finally(() => { if (!cancelled) setForn_localidadeLoading(false) })
+    return () => { cancelled = true }
   }, [forn_codPostal])
 
   const queryKeyMap: Record<Tab, string[]> = {
@@ -997,22 +1037,29 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
 
   const mutation = useMutation({
     mutationFn: async ({ attrs, address }: { attrs: Record<string, unknown>; address?: Record<string, unknown> }) => {
-      const result = await api.post(endpointMap[tab], attrs) as Record<string, unknown>
+      if (editRow) {
+        const id = String(editRow.id)
+        let result: Record<string, unknown>
+        if (tab === 'clientes')          result = await api.patch(`/toconline/${clientId}/customers/${id}`, attrs) as Record<string, unknown>
+        else if (tab === 'fornecedores') result = await api.patch(`/toconline/${clientId}/suppliers/${id}`, attrs) as Record<string, unknown>
+        else if (tab === 'produtos')     result = await api.patch(`/toconline/${clientId}/items/${id}`,     attrs) as Record<string, unknown>
+        else                             result = await api.patch(`/toconline/${clientId}/services/${id}`,  attrs) as Record<string, unknown>
 
-      if (address && (tab === 'clientes' || tab === 'fornecedores')) {
-        // TOConline auto-creates a blank address on entity creation.
-        // We must PATCH that blank address — not POST a new one.
-        const data = result.data as Record<string, unknown> | undefined
-        const rels = data?.relationships as Record<string, unknown> | undefined
-        const mainAddr = (rels?.main_address as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined
-        const addressId = mainAddr?.id as string | undefined
-
-        if (addressId) {
-          await api.patch(`/toconline/${clientId}/addresses/${addressId}`, address).catch(() => {})
+        // Also patch address when editing a client or supplier
+        if (address && (tab === 'clientes' || tab === 'fornecedores')) {
+          const detail = tab === 'clientes' ? cliDetail : fornDetail
+          const addrId = ((detail as Record<string, unknown> | undefined)?._address as Record<string, unknown> | undefined)?.id as string | undefined
+          if (addrId) {
+            await api.patch(`/toconline/${clientId}/addresses/${addrId}`, address)
+          }
         }
-      }
 
-      return result
+        return result
+      }
+      const body = (tab === 'clientes' || tab === 'fornecedores')
+        ? { attrs, address }
+        : attrs
+      return api.post(endpointMap[tab], body) as Promise<Record<string, unknown>>
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeyMap[tab] })
@@ -1025,14 +1072,13 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
       const attrs: Record<string, unknown> = {
         tax_registration_number: cli_nif ? parseInt(cli_nif, 10) : undefined,
         business_name:           cli_nome,
-        active:                  cli_ativo,
       }
 
       if (cli_subconta)  attrs.sub_account          = cli_subconta
       if (cli_contacto)  attrs.contact_name         = cli_contacto
       if (cli_email)     attrs.email                = cli_email
-      if (cli_tel)       attrs.phone_number         = parseInt(cli_tel, 10)
-      if (cli_telem)     attrs.mobile_number        = parseInt(cli_telem, 10)
+      if (cli_tel)       attrs.phone_number         = cli_tel
+      if (cli_telem)     attrs.mobile_number        = cli_telem
       if (cli_website)   attrs.website              = cli_website
       if (cli_sp)        attrs.not_final_customer   = true
       if (cli_ivaC)      attrs.cashed_vat           = true
@@ -1046,9 +1092,6 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
       if (cli_limCredDias)  attrs.credit_limit_days  = parseInt(cli_limCredDias, 10)
       if (cli_obsDoc)    attrs.observations          = cli_obsDoc
       if (cli_obsInt)    attrs.internal_observations = cli_obsInt
-
-      const validEmails = cli_emails.filter(e => e.trim())
-      if (validEmails.length > 0) attrs.additional_emails = validEmails
 
       return attrs
     }
@@ -1105,12 +1148,9 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
     return !!item_codigo.trim() && !!item_desc.trim()
   }
 
-  const titles: Record<Tab, string> = {
-    clientes:     'Novo Cliente',
-    fornecedores: 'Novo Fornecedor',
-    produtos:     'Novo Produto',
-    servicos:     'Novo Serviço',
-  }
+  const titles: Record<Tab, string> = editRow
+    ? { clientes: 'Editar Cliente', fornecedores: 'Editar Fornecedor', produtos: 'Editar Produto', servicos: 'Editar Serviço' }
+    : { clientes: 'Novo Cliente',   fornecedores: 'Novo Fornecedor',   produtos: 'Novo Produto',   servicos: 'Novo Serviço' }
 
   const sHdr = (label: string) => (
     <div className="px-6 py-1.5 bg-teal-600 text-white text-xs font-semibold uppercase tracking-wide">
@@ -1169,7 +1209,7 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Plus className="w-4 h-4 text-primary-600" />
+            {editRow ? <Pencil className="w-4 h-4 text-primary-600" /> : <Plus className="w-4 h-4 text-primary-600" />}
             <span className="font-semibold text-gray-900 text-sm">
               {titles[tab]}
               {tab === 'clientes' && flipped ? ' — Informações Adicionais' : ''}
@@ -1315,10 +1355,10 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">Localidade</label>
                     <input
-                      className="input text-sm w-full bg-gray-50 cursor-not-allowed"
-                      placeholder={cli_localidadeLoading ? 'A pesquisar…' : 'Automático'}
+                      className="input text-sm w-full"
+                      placeholder={cli_localidadeLoading ? 'A pesquisar…' : 'Localidade'}
                       value={cli_localidade}
-                      readOnly
+                      onChange={e => setCli_localidade(e.target.value)}
                     />
                   </div>
                   <div>
@@ -1713,10 +1753,10 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
                       <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">Localidade</label>
                         <input
-                          className="input text-sm w-full bg-gray-50 cursor-not-allowed"
-                          placeholder={forn_localidadeLoading ? 'A pesquisar…' : 'Automático'}
+                          className="input text-sm w-full"
+                          placeholder={forn_localidadeLoading ? 'A pesquisar…' : 'Localidade'}
                           value={forn_localidade}
-                          readOnly
+                          onChange={e => setForn_localidade(e.target.value)}
                         />
                       </div>
                       <div>
@@ -2005,29 +2045,29 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
           <button onClick={onClose} className="btn-secondary text-sm px-4">CANCELAR</button>
           <button
             onClick={() => {
-              const address = (tab === 'clientes' && (cli_morada || cli_codPostal || cli_localidade))
+              const address = (tab === 'clientes' && (cli_morada || cli_codPostal || cli_localidade || cli_moradaDesig))
                 ? {
                     name:           cli_moradaDesig || 'Sede',
                     address_detail: cli_morada     || undefined,
                     postcode:       cli_codPostal  || undefined,
                     city:           cli_localidade || undefined,
                     region:         cli_localidade || undefined,
-                    country_id:     cli_pais ? parseInt(cli_pais, 10) : 1,
+                    country_id:     cli_pais       || '1',
                     is_primary:     true,
-                    for_discharge:  cli_moradaDesc ? 1 : 0,
-                    for_charge:     0,
+                    for_discharge:  cli_moradaDesc,
+                    for_charge:     false,
                   }
-                : (tab === 'fornecedores' && (forn_morada || forn_codPostal || forn_localidade))
+                : (tab === 'fornecedores' && (forn_morada || forn_codPostal || forn_localidade || forn_moradaDesig))
                 ? {
                     name:           forn_moradaDesig || 'Sede',
                     address_detail: forn_morada     || undefined,
                     postcode:       forn_codPostal  || undefined,
                     city:           forn_localidade || undefined,
                     region:         forn_localidade || undefined,
-                    country_id:     forn_pais ? parseInt(forn_pais, 10) : 1,
+                    country_id:     forn_pais       || '1',
                     is_primary:     true,
-                    for_discharge:  0,
-                    for_charge:     forn_moradaCarga ? 1 : 0,
+                    for_discharge:  false,
+                    for_charge:     forn_moradaCarga,
                   }
                 : undefined
               mutation.mutate({ attrs: buildAttrs(), address })
@@ -2035,7 +2075,7 @@ function NovoRegistoModal({ tab, clientId, onClose }: { tab: Tab; clientId: stri
             disabled={!canSubmit() || mutation.isPending}
             className="btn-primary text-sm px-4 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {mutation.isPending ? 'A criar…' : 'CRIAR'}
+            {mutation.isPending ? (editRow ? 'A guardar…' : 'A criar…') : (editRow ? 'GUARDAR' : 'CRIAR')}
           </button>
         </div>
       </div>
@@ -2050,6 +2090,12 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
     queryKey: ['toc-customer-detail', clientId, row.id],
     queryFn: () => api.get(`/toconline/${clientId}/customers/${row.id}`),
     enabled: tab === 'clientes' && !!row.id,
+    staleTime: 60_000,
+  })
+  const { data: supplierDetail, isLoading: loadingSupplierDetail } = useQuery<TocRow>({
+    queryKey: ['toc-supplier-detail', clientId, row.id],
+    queryFn: () => api.get(`/toconline/${clientId}/suppliers/${row.id}`),
+    enabled: tab === 'fornecedores' && !!row.id,
     staleTime: 60_000,
   })
   const dHdr = (label: string) => (
@@ -2193,33 +2239,75 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
           })()}
 
           {/* ── FORNECEDORES ── */}
-          {tab === 'fornecedores' && (<>
-            {dHdr('Identificação')}
-            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
-              <Field label="NIF" value={row.tax_registration_number} mono />
-              <Field label="Nome" value={row.business_name} />
-              <Field label="Sub-conta" value={row.sub_account} mono />
-              <Field label="Ativo" value={row.active} bool />
-              <Field label="Sujeito Passivo" value={row.is_taxable} bool />
-              <Field label="Auto-faturação" value={row.self_billing} bool />
-              <Field label="Modelo 10 (trabalhador independente)" value={row.is_independent_worker} bool />
-              <Field label="Isento de IVA" value={row.is_tax_exempt} bool />
-              <Field label="Aceitar documentos por e-mail" value={row.trusted_email_source} bool />
-            </div>
-
-            {dHdr('Contacto')}
-            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
-              <Field label="E-mail" value={row.email} />
-              <Field label="Website" value={row.website} />
-            </div>
-
-            {!!row.internal_observations && (<>
-              {dHdr('Observações Internas')}
-              <div className="px-6 py-3">
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">{String(row.internal_observations)}</p>
+          {tab === 'fornecedores' && (() => {
+            const d = supplierDetail ?? row
+            const COUNTRY: Record<string, string> = {
+              '1': 'Portugal Continental', '2': 'Madeira', '3': 'Açores',
+            }
+            const addresses = (supplierDetail?._addresses ?? []) as Record<string, unknown>[]
+            return (<>
+              {dHdr('Identificação')}
+              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                <Field label="NIF" value={d.tax_registration_number} mono />
+                <Field label="Nome" value={d.business_name} />
+                <Field label="Sub-conta" value={d.sub_account} mono />
+                <Field label="Ativo" value={d.active} bool />
+                <Field label="Sujeito Passivo" value={d.is_taxable} bool />
+                <Field label="Auto-faturação" value={d.self_billing} bool />
+                <Field label="Modelo 10 (trabalhador independente)" value={d.is_independent_worker} bool />
+                <Field label="Isento de IVA" value={d.is_tax_exempt} bool />
+                <Field label="Aceitar documentos por e-mail" value={d.trusted_email_source} bool />
               </div>
-            </>)}
-          </>)}
+
+              {dHdr('Contacto')}
+              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                <Field label="E-mail" value={d.email} />
+                <Field label="Website" value={d.website} />
+              </div>
+
+              {/* Moradas */}
+              {loadingSupplierDetail ? (
+                <div className="px-6 py-3 flex items-center gap-2 text-xs text-gray-400">
+                  <div className="animate-spin rounded-full h-3 w-3 border border-gray-300 border-t-primary-500" />
+                  A carregar moradas…
+                </div>
+              ) : addresses.length === 0 ? (
+                <>
+                  {dHdr('Morada')}
+                  <div className="px-6 py-3 text-xs text-gray-400 italic">Sem morada registada</div>
+                </>
+              ) : addresses.map((addr, i) => {
+                const isMain    = addr._isMain as boolean | undefined
+                const countryId = addr._countryId as string | undefined
+                const heading   = addresses.length > 1
+                  ? `Morada ${i + 1}${isMain ? ' (principal)' : ''}`
+                  : 'Morada'
+                return (
+                  <div key={i}>
+                    {dHdr(heading)}
+                    <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                      <Field label="Designação"       value={addr.name} />
+                      <Field label="Código postal"    value={addr.postcode} mono />
+                      <Field label="Morada"           value={addr.address_detail} full />
+                      <Field label="Localidade"       value={addr.city} />
+                      <Field label="Região"           value={addr.region} />
+                      {countryId && <Field label="País" value={COUNTRY[countryId] ?? `ID ${countryId}`} />}
+                      <Field label="Morada principal" value={isMain}          bool />
+                      <Field label="Descarga"         value={addr.for_discharge} bool />
+                      <Field label="Carga"            value={addr.for_charge}    bool />
+                    </div>
+                  </div>
+                )
+              })}
+
+              {!!d.internal_observations && (<>
+                {dHdr('Observações Internas')}
+                <div className="px-6 py-3">
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{String(d.internal_observations)}</p>
+                </div>
+              </>)}
+            </>)
+          })()}
 
           {/* ── PRODUTOS / SERVIÇOS ── */}
           {(tab === 'produtos' || tab === 'servicos') && (<>
@@ -2334,10 +2422,54 @@ function TabTable({
   const [filterNotice,   setFilterNotice]   = useState<NoticeFilter>('')
   const [filterModelo10, setFilterModelo10] = useState<Modelo10Filter>('')
 
-  const [analiticaItem,  setAnaliticaItem]  = useState<TocRow | null>(null)
-  const [novaContaItem,  setNovaContaItem]  = useState<TocRow | null>(null)
-  const [novoRegisto,    setNovoRegisto]    = useState(false)
-  const [detalheRow,     setDetalheRow]     = useState<TocRow | null>(null)
+  const [analiticaItem,     setAnaliticaItem]     = useState<TocRow | null>(null)
+  const [novaContaItem,     setNovaContaItem]     = useState<TocRow | null>(null)
+  const [novoRegisto,       setNovoRegisto]       = useState(false)
+  const [detalheRow,        setDetalheRow]        = useState<TocRow | null>(null)
+  const [editingRow,        setEditingRow]        = useState<TocRow | null>(null)
+  const [deleteConfirm,     setDeleteConfirm]     = useState<TocRow | null>(null)
+  const [linkedDocsCount,   setLinkedDocsCount]   = useState<number | null>(null)
+  const [linkedDocsLoading, setLinkedDocsLoading] = useState(false)
+
+  const qc = useQueryClient()
+  const queryKeyMap: Record<Tab, string[]> = {
+    clientes:     ['toc-customers', clientId],
+    fornecedores: ['toc-suppliers', clientId],
+    produtos:     ['toc-items',     clientId],
+    servicos:     ['toc-services',  clientId],
+  }
+
+  useEffect(() => {
+    if (!deleteConfirm) { setLinkedDocsCount(null); return }
+    if (tab !== 'clientes' && tab !== 'fornecedores') { setLinkedDocsCount(0); return }
+    setLinkedDocsLoading(true)
+    const tocId = String(deleteConfirm.id)
+    const url = tab === 'clientes'
+      ? `/treasury/${clientId}/receivables?tocCustomerId=${tocId}&limit=1`
+      : `/treasury/${clientId}/payables?tocSupplierId=${tocId}&limit=1`
+    ;(api.get(url) as Promise<{ total: number }>)
+      .then(data => setLinkedDocsCount(data.total ?? 0))
+      .catch(() => setLinkedDocsCount(0))
+      .finally(() => setLinkedDocsLoading(false))
+  }, [deleteConfirm]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const deleteMutation = useMutation({
+    mutationFn: async (row: TocRow) => {
+      const id = String(row.id)
+      if (tab === 'clientes')     await api.delete(`/treasury/${clientId}/receivables/by-customer/${id}`)
+      if (tab === 'fornecedores') await api.delete(`/treasury/${clientId}/payables/by-supplier/${id}`)
+      if (tab === 'clientes')     return api.delete(`/toconline/${clientId}/customers/${id}`)
+      if (tab === 'fornecedores') return api.delete(`/toconline/${clientId}/suppliers/${id}`)
+      if (tab === 'produtos')     return api.delete(`/toconline/${clientId}/items/${id}`)
+      return api.delete(`/toconline/${clientId}/services/${id}`)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeyMap[tab] })
+      if (tab === 'clientes')     qc.invalidateQueries({ queryKey: ['receivables', clientId] })
+      if (tab === 'fornecedores') qc.invalidateQueries({ queryKey: ['payables',    clientId] })
+      setDeleteConfirm(null)
+    },
+  })
 
   // Pre-load all analytics for this tab so the column badge works
   const { data: analytics = [] } = useQuery<{ itemId: string; entries: AnalyticConfig[] }[]>({
@@ -2449,8 +2581,58 @@ function TabTable({
           onClose={() => setNovaContaItem(null)}
         />
       )}
-      {novoRegisto && (
-        <NovoRegistoModal tab={tab} clientId={clientId} onClose={() => setNovoRegisto(false)} />
+      {(novoRegisto || editingRow) && (
+        <NovoRegistoModal
+          tab={tab}
+          clientId={clientId}
+          editRow={editingRow}
+          onClose={() => { setNovoRegisto(false); setEditingRow(null) }}
+        />
+      )}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0" />
+              <p className="text-sm font-semibold text-gray-900">Eliminar registo?</p>
+            </div>
+            <p className="text-sm text-gray-600">
+              <span className="font-medium">{String(deleteConfirm.business_name ?? deleteConfirm.item_description ?? deleteConfirm.id)}</span> será permanentemente eliminado no TOConline. Esta acção não pode ser revertida.
+            </p>
+            {(tab === 'clientes' || tab === 'fornecedores') && (
+              linkedDocsLoading ? (
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <div className="animate-spin rounded-full h-3 w-3 border border-gray-300 border-t-primary-500" />
+                  A verificar registos associados…
+                </div>
+              ) : linkedDocsCount != null && linkedDocsCount > 0 ? (
+                <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span>
+                    Este {tab === 'clientes' ? 'cliente' : 'fornecedor'} tem{' '}
+                    <span className="font-semibold">{linkedDocsCount} {linkedDocsCount === 1 ? (tab === 'clientes' ? 'conta a receber' : 'conta a pagar') : (tab === 'clientes' ? 'contas a receber' : 'contas a pagar')}</span>{' '}
+                    associadas nesta plataforma. Ao confirmar, esses registos também serão eliminados permanentemente.
+                  </span>
+                </div>
+              ) : null
+            )}
+            {deleteMutation.isError && (
+              <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {(deleteMutation.error as Error).message}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeleteConfirm(null)} className="btn-secondary text-sm px-4">CANCELAR</button>
+              <button
+                onClick={() => deleteMutation.mutate(deleteConfirm)}
+                disabled={deleteMutation.isPending || linkedDocsLoading}
+                className="text-sm px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold disabled:opacity-50 transition-colors"
+              >
+                {deleteMutation.isPending ? 'A eliminar…' : 'ELIMINAR'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {detalheRow && (
         <DetalheModal tab={tab} row={detalheRow} clientId={clientId} onClose={() => setDetalheRow(null)} />
@@ -2550,13 +2732,14 @@ function TabTable({
                     {c.sortKey && <SortIcon field={c.sortKey} sortField={sortField} sortDir={sortDir} />}
                   </th>
                 ))}
+                <th className="w-16" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {sorted.map((row, i) => (
                 <tr
                   key={(row.id as string | number | undefined) ?? i}
-                  className="hover:bg-gray-50 cursor-pointer"
+                  className="hover:bg-gray-50 cursor-pointer group"
                   onClick={() => setDetalheRow(row)}
                 >
                   {cols.map((c) => {
@@ -2611,6 +2794,24 @@ function TabTable({
                       </td>
                     )
                   })}
+                  <td className="px-3 py-3 text-right" onClick={e => e.stopPropagation()}>
+                    <div className="inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => setEditingRow(row)}
+                        className="p-1 text-gray-400 hover:text-primary-600 rounded transition-colors"
+                        title="Editar"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setDeleteConfirm(row)}
+                        className="p-1 text-gray-400 hover:text-red-600 rounded transition-colors"
+                        title="Eliminar"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

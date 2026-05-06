@@ -205,6 +205,30 @@ export class ToconlineService {
     return res.json() as Promise<T>
   }
 
+  private async apiDelete(clientId: string, path: string): Promise<void> {
+    const cfg = await this.requireActiveConfig(clientId)
+    const token = decrypt(cfg.accessToken!)
+    let res = await fetch(`${cfg.baseUrl}${path}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    })
+    if (res.status === 401) {
+      await this.tryRefreshToken(clientId, cfg)
+      const cfg2 = await this.requireActiveConfig(clientId)
+      const token2 = decrypt(cfg2.accessToken!)
+      res = await fetch(`${cfg.baseUrl}${path}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token2}`, Accept: 'application/json' },
+      })
+    }
+    if (!res.ok && res.status !== 204) {
+      let detail = res.statusText
+      try { detail = JSON.stringify(await res.clone().json()) } catch { detail = await res.text().catch(() => res.statusText) }
+      console.error(`[TOConline] DELETE ${path} failed for ${clientId} (${res.status}): ${detail}`)
+      throw httpError(res.status, `TOConline DELETE ${path} failed: ${detail}`)
+    }
+  }
+
   private async apiPost<T>(clientId: string, path: string, body: unknown): Promise<T> {
     const cfg = await this.requireActiveConfig(clientId)
     const token = decrypt(cfg.accessToken!)
@@ -286,6 +310,144 @@ export class ToconlineService {
   }
 
   // ── TOConline endpoints ────────────────────────────────────────────────────
+
+  async getSalesDocumentReceipts(clientId: string, docId: string) {
+    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_documents/${docId}`)
+    const obj = raw as Record<string, unknown>
+
+    let receiptIds: number[] = []
+    if (obj.data && typeof obj.data === 'object') {
+      const data = obj.data as Record<string, unknown>
+      const attrs = (data.attributes ?? data) as Record<string, unknown>
+      if (Array.isArray(attrs.receipts_ids)) receiptIds = attrs.receipts_ids as number[]
+    } else if (Array.isArray(obj.receipts_ids)) {
+      receiptIds = obj.receipts_ids as number[]
+    }
+
+    if (receiptIds.length === 0) return []
+
+    const results = await Promise.allSettled(
+      receiptIds.map((id) => this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_receipts/${id}`))
+    )
+    return results
+      .filter((r): r is PromiseFulfilledResult<unknown> => r.status === 'fulfilled')
+      .map((r) => r.value as Record<string, unknown>)
+  }
+
+  async getPurchaseDocumentPayments(clientId: string, docId: string) {
+    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_documents/${docId}`)
+    const obj = raw as Record<string, unknown>
+
+    let paymentIds: number[] = []
+    if (obj.data && typeof obj.data === 'object') {
+      const data = obj.data as Record<string, unknown>
+      const attrs = (data.attributes ?? data) as Record<string, unknown>
+      if (Array.isArray(attrs.payments_ids)) paymentIds = attrs.payments_ids as number[]
+    } else if (Array.isArray(obj.payments_ids)) {
+      paymentIds = obj.payments_ids as number[]
+    }
+
+    if (paymentIds.length === 0) return []
+
+    const results = await Promise.allSettled(
+      paymentIds.map((id) => this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_payments/${id}`))
+    )
+    return results
+      .filter((r): r is PromiseFulfilledResult<unknown> => r.status === 'fulfilled')
+      .map((r) => r.value as Record<string, unknown>)
+  }
+
+  async getSalesReceiptLines(clientId: string, receiptId: string) {
+    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_receipts/${receiptId}`)
+    const obj = raw as Record<string, unknown>
+
+    let attrs: Record<string, unknown>
+    if (obj.data && typeof obj.data === 'object') {
+      const data = obj.data as Record<string, unknown>
+      attrs = (data.attributes ?? data) as Record<string, unknown>
+    } else {
+      attrs = obj
+    }
+
+    const lines = Array.isArray(attrs.lines) ? attrs.lines as Array<Record<string, unknown>> : []
+    if (lines.length === 0) return []
+
+    const enriched = await Promise.allSettled(
+      lines.map(async (line) => {
+        const receivableId = line.receivable_id
+        if (!receivableId) return line
+        try {
+          const docRaw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_documents/${receivableId}`)
+          const docObj = docRaw as Record<string, unknown>
+          let docAttrs: Record<string, unknown>
+          if (docObj.data && typeof docObj.data === 'object') {
+            const d = docObj.data as Record<string, unknown>
+            docAttrs = (d.attributes ?? d) as Record<string, unknown>
+          } else {
+            docAttrs = docObj
+          }
+          return {
+            ...line,
+            document_no: docAttrs.document_no,
+            _doc_date: docAttrs.date,
+            _doc_due_date: docAttrs.due_date,
+            _doc_gross_total: docAttrs.gross_total,
+          }
+        } catch {
+          return line
+        }
+      })
+    )
+    return enriched
+      .filter((r): r is PromiseFulfilledResult<Record<string, unknown>> => r.status === 'fulfilled')
+      .map((r) => r.value)
+  }
+
+  async getPurchasePaymentLines(clientId: string, paymentId: string) {
+    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_payments/${paymentId}`)
+    const obj = raw as Record<string, unknown>
+
+    let attrs: Record<string, unknown>
+    if (obj.data && typeof obj.data === 'object') {
+      const data = obj.data as Record<string, unknown>
+      attrs = (data.attributes ?? data) as Record<string, unknown>
+    } else {
+      attrs = obj
+    }
+
+    const lines = Array.isArray(attrs.lines) ? attrs.lines as Array<Record<string, unknown>> : []
+    if (lines.length === 0) return []
+
+    const enriched = await Promise.allSettled(
+      lines.map(async (line) => {
+        const payableId = line.payable_id
+        if (!payableId) return line
+        try {
+          const docRaw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_documents/${payableId}`)
+          const docObj = docRaw as Record<string, unknown>
+          let docAttrs: Record<string, unknown>
+          if (docObj.data && typeof docObj.data === 'object') {
+            const d = docObj.data as Record<string, unknown>
+            docAttrs = (d.attributes ?? d) as Record<string, unknown>
+          } else {
+            docAttrs = docObj
+          }
+          return {
+            ...line,
+            document_no: docAttrs.document_no,
+            _doc_date: docAttrs.date,
+            _doc_due_date: docAttrs.due_date,
+            _doc_gross_total: docAttrs.gross_total,
+          }
+        } catch {
+          return line
+        }
+      })
+    )
+    return enriched
+      .filter((r): r is PromiseFulfilledResult<Record<string, unknown>> => r.status === 'fulfilled')
+      .map((r) => r.value)
+  }
 
   async getPurchaseDocuments(clientId: string, filters?: Record<string, string>) {
     const raw = await this.apiGet<unknown>(clientId, '/api/v1/commercial_purchases_documents', filters)
@@ -418,23 +580,97 @@ export class ToconlineService {
   }
 
   async patchAddress(clientId: string, addressId: string, attrs: Record<string, unknown>) {
-    return this.apiPatch(clientId, `/api/addresses/${addressId}`, {
-      data: { type: 'addresses', id: addressId, attributes: attrs },
-    })
+    const body = {
+      data: {
+        type: 'addresses',
+        id: addressId,
+        attributes: attrs,
+      },
+    }
+    // The TOConline API expects PATCH /api/addresses with the id in the body (not in the URL path)
+    return this.apiPatch(clientId, '/api/addresses', body)
   }
 
   async getSuppliers(clientId: string) {
     return this.apiGetFlat(clientId, '/api/suppliers')
   }
 
-  async createSupplier(clientId: string, attrsOrEnvelope: Record<string, unknown>) {
-    // Accept either a JSON:API envelope ({ data: { type, attributes } })
-    // or a plain attributes object. If the caller already sent a data
-    // envelope, forward it as-is to avoid double-wrapping.
-    if (attrsOrEnvelope && typeof attrsOrEnvelope === 'object' && 'data' in attrsOrEnvelope) {
-      return this.apiPost(clientId, '/api/suppliers', attrsOrEnvelope)
+  async getSupplierWithAddress(clientId: string, supplierId: string) {
+    type JsonApiRef = { id: string }
+    type AddressRes = {
+      data: {
+        id: string
+        attributes: Record<string, unknown>
+        relationships?: { country?: { data?: JsonApiRef | null } }
+      }
     }
-    return this.apiPost(clientId, '/api/suppliers', { data: { type: 'suppliers', attributes: attrsOrEnvelope } })
+    type SupplierRes = {
+      data: {
+        id: string
+        attributes: Record<string, unknown>
+        relationships?: {
+          main_address?: { data?: JsonApiRef | null }
+          addresses?:    { data?: JsonApiRef[] | null }
+        }
+      }
+    }
+
+    const res = await this.apiGet<SupplierRes>(clientId, `/api/suppliers/${supplierId}`)
+    const supplier: Record<string, unknown> = { id: res.data.id, ...res.data.attributes }
+
+    const mainAddressId = res.data.relationships?.main_address?.data?.id
+    const allAddressRefs = res.data.relationships?.addresses?.data ?? []
+    const allAddressIds = Array.isArray(allAddressRefs) ? allAddressRefs.map(a => a.id) : []
+
+    if (allAddressIds.length > 0) {
+      const addresses = await Promise.all(
+        allAddressIds.map(async (id) => {
+          try {
+            const addrRes = await this.apiGet<AddressRes>(clientId, `/api/addresses/${id}`)
+            return {
+              id,
+              ...addrRes.data.attributes,
+              _countryId: addrRes.data.relationships?.country?.data?.id ?? null,
+              _isMain: id === mainAddressId,
+            }
+          } catch {
+            return { id, _isMain: id === mainAddressId }
+          }
+        })
+      )
+      supplier._addresses = addresses
+      supplier._address   = addresses.find(a => a._isMain) ?? addresses[0] ?? null
+    }
+
+    return supplier
+  }
+
+  async createSupplier(clientId: string, attrs: Record<string, unknown>, addressAttrs?: Record<string, unknown>) {
+    type Rels = { main_address?: { data?: { id: string } | null }; addresses?: { data?: { id: string }[] | null } }
+    type Res  = { data: { id: string; relationships?: Rels } }
+
+    const created = await this.apiPost<Res>(clientId, '/api/suppliers', {
+      data: { type: 'suppliers', attributes: attrs },
+    })
+
+    if (addressAttrs && Object.keys(addressAttrs).length > 0) {
+      let addressId = created.data.relationships?.main_address?.data?.id
+        ?? created.data.relationships?.addresses?.data?.[0]?.id
+
+      if (!addressId) {
+        try {
+          const got = await this.apiGet<Res>(clientId, `/api/suppliers/${created.data.id}`)
+          addressId = got.data.relationships?.main_address?.data?.id
+            ?? got.data.relationships?.addresses?.data?.[0]?.id
+        } catch { /* non-fatal */ }
+      }
+
+      if (addressId) {
+        await this.patchAddress(clientId, addressId, addressAttrs)
+      }
+    }
+
+    return created
   }
 
   async getBankAccounts(clientId: string) {
@@ -463,6 +699,52 @@ export class ToconlineService {
 
   async createService(clientId: string, attrs: Record<string, unknown>) {
     return this.apiPost(clientId, '/api/services', { data: { type: 'services', attributes: { ...attrs, type: 'Service' } } })
+  }
+
+  // ── Update / Delete ────────────────────────────────────────────────────────────
+
+  async updateCustomer(clientId: string, id: string, attrs: Record<string, unknown>) {
+    // PATCH /api/customers/{id} — ID in URL and in body (JSON:API standard)
+    return this.apiPatch(clientId, `/api/customers/${id}`, {
+      data: { type: 'customers', id, attributes: attrs },
+    })
+  }
+
+  async deleteCustomer(clientId: string, id: string): Promise<void> {
+    await this.apiDelete(clientId, `/api/customers/${id}`)
+  }
+
+  async updateSupplier(clientId: string, id: string, attrs: Record<string, unknown>) {
+    // PATCH /api/suppliers/{id} — ID in URL and in body (JSON:API standard)
+    return this.apiPatch(clientId, `/api/suppliers/${id}`, {
+      data: { type: 'suppliers', id, attributes: attrs },
+    })
+  }
+
+  async deleteSupplier(clientId: string, id: string): Promise<void> {
+    await this.apiDelete(clientId, `/api/suppliers/${id}`)
+  }
+
+  async updateItem(clientId: string, id: string, attrs: Record<string, unknown>) {
+    // PATCH /api/products — ID only in body, NOT in URL (same pattern as addresses)
+    return this.apiPatch(clientId, '/api/products', {
+      data: { type: 'products', id, attributes: attrs },
+    })
+  }
+
+  async deleteItem(clientId: string, id: string): Promise<void> {
+    await this.apiDelete(clientId, `/api/products/${id}`)
+  }
+
+  async updateService(clientId: string, id: string, attrs: Record<string, unknown>) {
+    // PATCH /api/services — ID only in body, NOT in URL (same pattern as addresses)
+    return this.apiPatch(clientId, '/api/services', {
+      data: { type: 'services', id, attributes: attrs },
+    })
+  }
+
+  async deleteService(clientId: string, id: string): Promise<void> {
+    await this.apiDelete(clientId, `/api/services/${id}`)
   }
 
   // ── Analítica (local persistence) ────────────────────────────────────────────
