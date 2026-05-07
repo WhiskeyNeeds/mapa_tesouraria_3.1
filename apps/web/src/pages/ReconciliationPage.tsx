@@ -6,18 +6,26 @@ import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, statusLabel, statusVariant } from '@/lib/utils'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { CheckSquare, Square, RefreshCw, AlertCircle, Search, ChevronDown, ChevronRight, Undo2 } from 'lucide-react'
+import {
+  CheckSquare, Square, RefreshCw, AlertCircle, Search,
+  ChevronDown, ChevronRight, Undo2, SlidersHorizontal, X,
+  Link2, Zap,
+} from 'lucide-react'
 
 interface Movement {
   id: string; date: string; amount: number; description: string; status: string
-  bankAccount?: { name: string }; category?: { name: string }
+  bankAccount?: { id: string; name: string }; category?: { name: string }
 }
 interface Document {
-  id: string; reference: string; entityName: string; dueDate: string; pendingAmount: number; totalAmount: number; status: string
-  category: { name: string; color: string; launchToc: boolean }; type: 'receivable' | 'payable'
+  id: string; reference: string; entityName: string; dueDate: string
+  pendingAmount: number; totalAmount: number; status: string
+  category: { name: string; color: string; launchToc: boolean }
+  type: 'receivable' | 'payable'
 }
-interface Allocation { type: 'receivable' | 'payable'; id: string; amount: number; reference: string; entityName: string; pendingAmount: number }
-
+interface Allocation {
+  type: 'receivable' | 'payable'; id: string; amount: number
+  reference: string; entityName: string; pendingAmount: number
+}
 interface RecHistoryItem {
   id: string; status: string; isDryRun: boolean; totalMovements: number; totalAllocated: number
   createdAt: string; direction: string; reversedAt?: string; reversedReason?: string
@@ -27,39 +35,74 @@ interface RecHistoryItem {
   payables: Array<{ amountAllocated: number; payable: { id: string; reference: string; entityName: string } }>
 }
 
+// ── Filter helpers ─────────────────────────────────────────────────────────────
+
+function FilterBadge({ count }: { count: number }) {
+  if (!count) return null
+  return (
+    <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary-600 text-white text-[9px] font-bold leading-none">
+      {count}
+    </span>
+  )
+}
+
+function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-gray-400 w-20 flex-shrink-0">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
 export default function ReconciliationPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
 
-  // Selection state
+  // ── Selection state ─────────────────────────────────────────────────────────
   const [selectedMovements, setSelectedMovements] = useState<Movement[]>([])
   const [selectedDocs, setSelectedDocs] = useState<Document[]>([])
   const [allocations, setAllocations] = useState<Allocation[]>([])
 
-  // UI state
+  // ── UI state ────────────────────────────────────────────────────────────────
   const [showModal, setShowModal] = useState(false)
   const [isDryRun, setIsDryRun] = useState(true)
   const [previewData, setPreviewData] = useState<{ direction: string; totalMovements: number; totalAllocated: number; tocActions: unknown[] } | null>(null)
-  const [movSearch, setMovSearch] = useState('')
-  const [docSearch, setDocSearch] = useState('')
 
-  // History state
+  // ── Movement filters ────────────────────────────────────────────────────────
+  const [movSearch, setMovSearch] = useState('')
+  const [movFiltersOpen, setMovFiltersOpen] = useState(false)
+  const [movDateFrom, setMovDateFrom] = useState('')
+  const [movDateTo, setMovDateTo] = useState('')
+  const [movBankId, setMovBankId] = useState('')
+  const [movSign, setMovSign] = useState<'all' | 'credit' | 'debit'>('all')
+  const [movAmountMin, setMovAmountMin] = useState('')
+  const [movAmountMax, setMovAmountMax] = useState('')
+
+  // ── Document filters ────────────────────────────────────────────────────────
+  const [docSearch, setDocSearch] = useState('')
+  const [docFiltersOpen, setDocFiltersOpen] = useState(false)
+  const [docType, setDocType] = useState<'all' | 'receivable' | 'payable'>('all')
+  const [docDateFrom, setDocDateFrom] = useState('')
+  const [docDateTo, setDocDateTo] = useState('')
+  const [docAmountMin, setDocAmountMin] = useState('')
+  const [docAmountMax, setDocAmountMax] = useState('')
+
+  // ── History ─────────────────────────────────────────────────────────────────
   const [historyLimit, setHistoryLimit] = useState(10)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-
-  // Reverse state
   const [reverseId, setReverseId] = useState<string | null>(null)
   const [reverseReason, setReverseReason] = useState('')
 
-  // ── Direction locking ────────────────────────────────────────────────────────
-
+  // ── Direction lock ──────────────────────────────────────────────────────────
   const currentDirection = useMemo<'REVENUE' | 'EXPENSE' | null>(() => {
     if (selectedMovements.length === 0) return null
     return Number(selectedMovements[0].amount) >= 0 ? 'REVENUE' : 'EXPENSE'
   }, [selectedMovements])
 
-  // When direction changes, drop docs that don't match
   useEffect(() => {
     if (!currentDirection) return
     const compatType = currentDirection === 'REVENUE' ? 'receivable' : 'payable'
@@ -67,72 +110,101 @@ export default function ReconciliationPage() {
     setAllocations((prev) => prev.filter((a) => a.type === compatType))
   }, [currentDirection])
 
-  // ── Queries ──────────────────────────────────────────────────────────────────
-
+  // ── Queries ─────────────────────────────────────────────────────────────────
   const { data: settings } = useQuery({
     queryKey: ['settings', selectedClientId],
     queryFn: () => api.get<{ reconciliationDryRun: boolean }>(`/treasury/${selectedClientId}/settings`),
     enabled: !!selectedClientId,
   })
-
   useEffect(() => {
     if (settings?.reconciliationDryRun !== undefined) setIsDryRun(settings.reconciliationDryRun)
   }, [settings?.reconciliationDryRun])
 
-  const { data: movementsData } = useQuery({
+  const { data: movementsData, refetch: refetchMovements } = useQuery({
     queryKey: ['movements-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Movement[] }>(`/treasury/${selectedClientId}/movements?status=CLASSIFIED&limit=100`),
+    queryFn: () => api.get<{ items: Movement[] }>(`/treasury/${selectedClientId}/movements?limit=500&sortBy=date&sortDir=desc`),
     enabled: !!selectedClientId,
   })
-
   const { data: receivablesData } = useQuery({
     queryKey: ['receivables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[] }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL&limit=100`),
+    queryFn: () => api.get<{ items: Document[] }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL&limit=200`),
     enabled: !!selectedClientId,
   })
-
   const { data: payablesData } = useQuery({
     queryKey: ['payables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[] }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL&limit=100`),
+    queryFn: () => api.get<{ items: Document[] }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL&limit=200`),
     enabled: !!selectedClientId,
   })
-
   const { data: historyData } = useQuery({
     queryKey: ['reconciliations', selectedClientId, historyLimit],
     queryFn: () => api.get<{ items: RecHistoryItem[]; total: number }>(`/treasury/${selectedClientId}/reconciliations?limit=${historyLimit}`),
     enabled: !!selectedClientId,
   })
 
-  // ── Derived lists ────────────────────────────────────────────────────────────
-
-  const allPendingMovements = movementsData?.items ?? []
-  const allPendingDocs: Document[] = useMemo(() => [
+  // ── Raw lists ────────────────────────────────────────────────────────────────
+  const allMovements = movementsData?.items ?? []
+  const allDocs: Document[] = useMemo(() => [
     ...(receivablesData?.items ?? []).map((r) => ({ ...r, type: 'receivable' as const })),
     ...(payablesData?.items ?? []).map((p) => ({ ...p, type: 'payable' as const })),
   ], [receivablesData, payablesData])
 
-  const pendingMovements = useMemo(() =>
-    movSearch ? allPendingMovements.filter((m) => m.description.toLowerCase().includes(movSearch.toLowerCase())) : allPendingMovements,
-    [allPendingMovements, movSearch]
-  )
+  // ── Unique bank accounts for filter dropdown ──────────────────────────────
+  const bankAccounts = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const m of allMovements) {
+      if (m.bankAccount) map.set(m.bankAccount.id, m.bankAccount.name)
+    }
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }))
+  }, [allMovements])
 
-  const pendingDocs: Document[] = useMemo(() => {
-    const searched = docSearch
-      ? allPendingDocs.filter((d) => d.entityName.toLowerCase().includes(docSearch.toLowerCase()) || d.reference.toLowerCase().includes(docSearch.toLowerCase()))
-      : allPendingDocs
-    if (!currentDirection) return searched
-    return searched.filter((d) => currentDirection === 'REVENUE' ? d.type === 'receivable' : d.type === 'payable')
-  }, [allPendingDocs, docSearch, currentDirection])
+  // ── Filter counts (for badge) ─────────────────────────────────────────────
+  const movFilterCount = [movDateFrom, movDateTo, movBankId, movAmountMin, movAmountMax].filter(Boolean).length
+    + (movSign !== 'all' ? 1 : 0)
+  const docFilterCount = [docDateFrom, docDateTo, docAmountMin, docAmountMax].filter(Boolean).length
+    + (docType !== 'all' ? 1 : 0)
 
-  // ── Totals ───────────────────────────────────────────────────────────────────
+  // ── Filtered movements ────────────────────────────────────────────────────
+  const pendingMovements = useMemo(() => {
+    let list = allMovements
+    if (movSearch) list = list.filter((m) => m.description.toLowerCase().includes(movSearch.toLowerCase()))
+    if (movBankId) list = list.filter((m) => m.bankAccount?.id === movBankId)
+    if (movSign === 'credit') list = list.filter((m) => Number(m.amount) >= 0)
+    if (movSign === 'debit')  list = list.filter((m) => Number(m.amount) < 0)
+    if (movDateFrom) list = list.filter((m) => m.date >= movDateFrom)
+    if (movDateTo)   list = list.filter((m) => m.date <= movDateTo)
+    if (movAmountMin) list = list.filter((m) => Math.abs(Number(m.amount)) >= parseFloat(movAmountMin))
+    if (movAmountMax) list = list.filter((m) => Math.abs(Number(m.amount)) <= parseFloat(movAmountMax))
+    return list
+  }, [allMovements, movSearch, movBankId, movSign, movDateFrom, movDateTo, movAmountMin, movAmountMax])
 
+  // ── Filtered documents ────────────────────────────────────────────────────
+  const pendingDocs = useMemo(() => {
+    let list = allDocs
+    if (docType !== 'all') list = list.filter((d) => d.type === docType)
+    if (docSearch) list = list.filter((d) =>
+      d.entityName.toLowerCase().includes(docSearch.toLowerCase()) ||
+      d.reference.toLowerCase().includes(docSearch.toLowerCase())
+    )
+    if (docDateFrom) list = list.filter((d) => d.dueDate >= docDateFrom)
+    if (docDateTo)   list = list.filter((d) => d.dueDate <= docDateTo)
+    if (docAmountMin) list = list.filter((d) => Number(d.pendingAmount) >= parseFloat(docAmountMin))
+    if (docAmountMax) list = list.filter((d) => Number(d.pendingAmount) <= parseFloat(docAmountMax))
+    return list
+  }, [allDocs, docType, docSearch, docDateFrom, docDateTo, docAmountMin, docAmountMax])
+
+  const pendingReceivables  = useMemo(() => pendingDocs.filter((d) => d.type === 'receivable'),     [pendingDocs])
+  const pendingPayables     = useMemo(() => pendingDocs.filter((d) => d.type === 'payable'),        [pendingDocs])
+
+  // ── Totals ────────────────────────────────────────────────────────────────
   const totalMovements = selectedMovements.reduce((s, m) => s + Math.abs(Number(m.amount)), 0)
   const totalAllocated = allocations.reduce((s, a) => s + a.amount, 0)
   const diff = Math.abs(totalMovements - totalAllocated)
   const canConfirm = selectedMovements.length > 0 && selectedDocs.length > 0 && diff < 0.01 && totalMovements > 0
 
-  // ── Selection handlers ───────────────────────────────────────────────────────
+  // Quick match: 1 movement, 1 doc, amounts match exactly
+  const isQuickMatch = selectedMovements.length === 1 && selectedDocs.length === 1 && canConfirm
 
+  // ── Handlers ──────────────────────────────────────────────────────────────
   function toggleMovement(m: Movement) {
     if (selectedMovements.find((x) => x.id === m.id)) {
       const next = selectedMovements.filter((x) => x.id !== m.id)
@@ -141,13 +213,15 @@ export default function ReconciliationPage() {
     } else {
       if (currentDirection !== null) {
         const mDir = Number(m.amount) >= 0 ? 'REVENUE' : 'EXPENSE'
-        if (mDir !== currentDirection) return // blocked
+        if (mDir !== currentDirection) return
       }
       setSelectedMovements((prev) => [...prev, m])
     }
   }
 
   function toggleDoc(d: Document) {
+    if (currentDirection === 'REVENUE' && d.type === 'payable') return
+    if (currentDirection === 'EXPENSE' && d.type === 'receivable') return
     if (selectedDocs.find((x) => x.id === d.id)) {
       setSelectedDocs((prev) => prev.filter((x) => x.id !== d.id))
       setAllocations((prev) => prev.filter((a) => a.id !== d.id))
@@ -155,38 +229,19 @@ export default function ReconciliationPage() {
       setSelectedDocs((prev) => [...prev, d])
       const remaining = totalMovements - totalAllocated
       const amount = Math.min(Number(d.pendingAmount), remaining > 0 ? remaining : 0)
-      setAllocations((prev) => [...prev, { type: d.type, id: d.id, amount, reference: d.reference, entityName: d.entityName, pendingAmount: Number(d.pendingAmount) }])
+      setAllocations((prev) => [...prev, {
+        type: d.type, id: d.id, amount,
+        reference: d.reference, entityName: d.entityName, pendingAmount: Number(d.pendingAmount),
+      }])
     }
   }
 
-  function selectAllMovements() {
-    if (selectedMovements.length > 0) {
-      setSelectedMovements([]); setSelectedDocs([]); setAllocations([])
-    } else {
-      // Only select same-sign movements (use first in list to decide, default positive)
-      const firstSign = pendingMovements.length > 0 ? (Number(pendingMovements[0].amount) >= 0 ? 1 : -1) : 1
-      setSelectedMovements(pendingMovements.filter((m) => (Number(m.amount) >= 0 ? 1 : -1) === firstSign))
-    }
-  }
+  function clearAll() { setSelectedMovements([]); setSelectedDocs([]); setAllocations([]) }
 
-  function selectAllDocs() {
-    if (selectedDocs.length === pendingDocs.length) {
-      setSelectedDocs([]); setAllocations([])
-    } else {
-      setSelectedDocs(pendingDocs)
-      let remaining = totalMovements
-      setAllocations(pendingDocs.map((d) => {
-        const amount = Math.min(Number(d.pendingAmount), remaining > 0 ? remaining : 0)
-        remaining = Math.max(0, remaining - amount)
-        return { type: d.type, id: d.id, amount, reference: d.reference, entityName: d.entityName, pendingAmount: Number(d.pendingAmount) }
-      }))
-    }
-  }
+  function clearMovFilters() { setMovSearch(''); setMovBankId(''); setMovSign('all'); setMovDateFrom(''); setMovDateTo(''); setMovAmountMin(''); setMovAmountMax('') }
+  function clearDocFilters() { setDocSearch(''); setDocType('all'); setDocDateFrom(''); setDocDateTo(''); setDocAmountMin(''); setDocAmountMax('') }
 
-  function openModal() { setPreviewData(null); setShowModal(true) }
-
-  // ── Mutations ────────────────────────────────────────────────────────────────
-
+  // ── Mutations ─────────────────────────────────────────────────────────────
   const preview = useMutation({
     mutationFn: () => api.post(`/treasury/${selectedClientId}/reconciliations/preview`, {
       movementIds: selectedMovements.map((m) => m.id),
@@ -197,38 +252,37 @@ export default function ReconciliationPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const confirm = useMutation({
-    mutationFn: () => api.post(`/treasury/${selectedClientId}/reconciliations/confirm`, {
-      movementIds: selectedMovements.map((m) => m.id),
-      allocations: allocations.map((a) => ({ type: a.type, id: a.id, amount: a.amount })),
-      isDryRun,
-    }),
+  const confirmMutation = useMutation({
+    mutationFn: (payload?: { movementIds: string[]; allocations: { type: string; id: string; amount: number }[]; isDryRun: boolean }) =>
+      api.post(`/treasury/${selectedClientId}/reconciliations/confirm`, payload ?? {
+        movementIds: selectedMovements.map((m) => m.id),
+        allocations: allocations.map((a) => ({ type: a.type, id: a.id, amount: a.amount })),
+        isDryRun,
+      }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['movements-pending'] })
-      qc.invalidateQueries({ queryKey: ['receivables-pending'] })
-      qc.invalidateQueries({ queryKey: ['payables-pending'] })
-      qc.invalidateQueries({ queryKey: ['reconciliations'] })
-      qc.invalidateQueries({ queryKey: ['movements'] })
-      qc.invalidateQueries({ queryKey: ['receivables'] })
-      qc.invalidateQueries({ queryKey: ['payables'] })
-      setSelectedMovements([]); setSelectedDocs([]); setAllocations([])
-      setShowModal(false)
+      ['movements-pending', 'receivables-pending', 'payables-pending', 'reconciliations', 'movements', 'receivables', 'payables']
+        .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
+      clearAll(); setShowModal(false)
       toast.success(isDryRun ? 'Simulação concluída (dry-run).' : 'Reconciliação concluída com sucesso.')
     },
     onError: (e) => toast.error((e as Error).message),
   })
 
+  // Quick match — confirm immediately without modal
+  function quickMatch() {
+    confirmMutation.mutate({
+      movementIds: selectedMovements.map((m) => m.id),
+      allocations: allocations.map((a) => ({ type: a.type, id: a.id, amount: a.amount })),
+      isDryRun,
+    })
+  }
+
   const reverse = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
       api.post(`/treasury/${selectedClientId}/reconciliations/${id}/reverse`, { reason }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['reconciliations'] })
-      qc.invalidateQueries({ queryKey: ['movements-pending'] })
-      qc.invalidateQueries({ queryKey: ['movements'] })
-      qc.invalidateQueries({ queryKey: ['receivables-pending'] })
-      qc.invalidateQueries({ queryKey: ['receivables'] })
-      qc.invalidateQueries({ queryKey: ['payables-pending'] })
-      qc.invalidateQueries({ queryKey: ['payables'] })
+      ['reconciliations', 'movements-pending', 'movements', 'receivables-pending', 'receivables', 'payables-pending', 'payables']
+        .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
       setReverseId(null); setReverseReason('')
       toast.success('Reconciliação revertida.')
     },
@@ -237,208 +291,428 @@ export default function ReconciliationPage() {
 
   const hasSelection = selectedMovements.length > 0 || selectedDocs.length > 0
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ── Movement row ──────────────────────────────────────────────────────────
+  function MovRow({ m }: { m: Movement }) {
+    const selected = !!selectedMovements.find((x) => x.id === m.id)
+    const isCredit = Number(m.amount) >= 0
+    const amtCls = isCredit ? 'text-emerald-700' : 'text-red-700'
+    const isReconciled = m.status === 'RECONCILED'
+    const isBlocked = isReconciled || (currentDirection !== null && !selected &&
+      ((isCredit && currentDirection === 'EXPENSE') || (!isCredit && currentDirection === 'REVENUE')))
+    return (
+      <button
+        onClick={() => toggleMovement(m)}
+        disabled={isBlocked}
+        className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-100
+          ${selected ? 'bg-primary-50 border-l-2 border-primary-500' : isBlocked ? 'opacity-40 cursor-not-allowed bg-gray-50' : 'hover:bg-slate-50 border-l-2 border-transparent'}`}
+      >
+        {selected
+          ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
+          : <Square className={`w-4 h-4 flex-shrink-0 ${isBlocked ? 'text-gray-200' : 'text-gray-300'}`} />}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-900 truncate">{m.description}</span>
+            {isReconciled && (
+              <span className="inline-flex items-center text-[10px] font-semibold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">reconciliado</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className="text-xs text-gray-400">{formatDate(m.date)}</span>
+            {m.bankAccount && <><span className="text-gray-200">·</span><span className="text-xs text-gray-400 truncate">{m.bankAccount.name}</span></>}
+          </div>
+        </div>
+        <span className={`text-sm font-semibold whitespace-nowrap ${amtCls}`}>
+          {isCredit ? '+' : '−'}{formatCurrency(Math.abs(Number(m.amount)))}
+        </span>
+      </button>
+    )
+  }
 
-  const directionLabel = currentDirection === 'REVENUE' ? '↓ Entradas' : currentDirection === 'EXPENSE' ? '↑ Saídas' : null
-  const directionColor = currentDirection === 'REVENUE' ? 'text-green-700 bg-green-50 border-green-200' : currentDirection === 'EXPENSE' ? 'text-red-700 bg-red-50 border-red-200' : ''
+  // ── Document row ──────────────────────────────────────────────────────────
+  function DocRow({ d }: { d: Document }) {
+    const selected = !!selectedDocs.find((x) => x.id === d.id)
+    const isBlocked = !selected && currentDirection !== null &&
+      ((d.type === 'receivable' && currentDirection === 'EXPENSE') || (d.type === 'payable' && currentDirection === 'REVENUE'))
+    const amt = totalMovements - totalAllocated
+    const isSuggested = !selected && !isBlocked && selectedMovements.length > 0 &&
+      Math.abs(Number(d.pendingAmount) - (selectedMovements.length === 1 ? totalMovements : amt)) < 0.01
+    const amtCls = d.type === 'receivable' ? 'text-emerald-700' : 'text-red-700'
+    return (
+      <button
+        onClick={() => toggleDoc(d)}
+        disabled={isBlocked}
+        className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-100
+          ${selected ? 'bg-primary-50 border-l-2 border-primary-500' : isBlocked ? 'opacity-30 cursor-not-allowed bg-gray-50' : isSuggested ? 'bg-amber-50/60 hover:bg-amber-50 border-l-2 border-amber-300' : 'hover:bg-slate-50 border-l-2 border-transparent'}`}
+      >
+        {selected
+          ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
+          : <Square className={`w-4 h-4 flex-shrink-0 ${isBlocked ? 'text-gray-200' : isSuggested ? 'text-amber-400' : 'text-gray-300'}`} />}
+        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: d.category.color }} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-900">{d.reference}</span>
+            {d.status === 'PARTIAL' && <Badge variant="yellow">parc. liquidado</Badge>}
+            {isSuggested && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
+                <Zap className="w-2.5 h-2.5" /> sugerido
+              </span>
+            )}
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5 truncate">{d.entityName} · {d.category.name}</div>
+        </div>
+        <div className="text-right whitespace-nowrap flex-shrink-0">
+          <div className={`text-sm font-semibold ${amtCls}`}>{formatCurrency(Number(d.pendingAmount))}</div>
+          <div className="text-xs text-gray-400">{formatDate(d.dueDate)}</div>
+        </div>
+      </button>
+    )
+  }
 
-  const docsHeading = currentDirection === 'REVENUE'
-    ? 'Contas a Receber (CR)'
-    : currentDirection === 'EXPENSE'
-    ? 'Contas a Pagar (CP)'
-    : 'Documentos Pendentes (CR + CP)'
+  // ── Section headers ───────────────────────────────────────────────────────
+  function SectionHeader({ label, count, sign }: { label: string; count: number; sign: 'credit' | 'debit' }) {
+    const isBlocked = currentDirection !== null &&
+      ((sign === 'credit' && currentDirection === 'EXPENSE') || (sign === 'debit' && currentDirection === 'REVENUE'))
+    const cls = sign === 'credit' ? 'bg-emerald-50/80 text-emerald-800' : 'bg-red-50/80 text-red-800'
+    if (!count) return null
+    return (
+      <div className={`px-4 py-1.5 flex items-center justify-between border-b border-gray-100 ${isBlocked ? 'bg-gray-100/80 opacity-50' : cls}`}>
+        <span className="text-[10px] font-bold uppercase tracking-wider">{label}</span>
+        <span className="text-[10px] font-medium opacity-70">{count}</span>
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-6 pb-28">
+    <div className="space-y-5 pb-28">
+      {/* Page header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Reconciliação</h1>
-        <div className="flex items-center gap-2 text-sm text-gray-500">
-          <RefreshCw className="w-4 h-4" />
-          <span>Selecione movimentos e documentos para reconciliar</span>
+        <div>
+          <h1 className="section-title">Reconciliação</h1>
+          <p className="section-subtitle mt-0.5">Associe movimentos bancários a documentos de compra e venda</p>
         </div>
+        <button onClick={() => refetchMovements()} className="btn-ghost flex items-center gap-1.5 text-xs">
+          <RefreshCw className="w-3.5 h-3.5" /> Atualizar
+        </button>
       </div>
 
       {/* Two-column selection */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
-        {/* Movements */}
-        <div className="card">
-          <div className="px-5 py-4 border-b border-gray-100 space-y-2">
-            <div className="flex items-center justify-between">
+        {/* ── Movements ────────────────────────────────────────────────────── */}
+        <div className="card flex flex-col">
+          {/* Card header */}
+          <div className="px-4 py-3.5 border-b border-gray-100 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-semibold text-gray-900 text-sm">Movimentos Bancários</h2>
               <div className="flex items-center gap-2">
-                <h2 className="font-semibold text-gray-900 text-sm">Movimentos Bancários Pendentes</h2>
-                {directionLabel && (
-                  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${directionColor}`}>
-                    {directionLabel}
-                  </span>
+                <span className="text-xs text-gray-400">{pendingMovements.length} de {allMovements.length}</span>
+                <button
+                  onClick={() => setMovFiltersOpen((v) => !v)}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border transition-colors ${movFiltersOpen || movFilterCount > 0 ? 'border-primary-300 bg-primary-50 text-primary-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                >
+                  <SlidersHorizontal className="w-3 h-3" />
+                  Filtros
+                  <FilterBadge count={movFilterCount} />
+                </button>
+                {selectedMovements.length > 0 && (
+                  <button onClick={() => { setSelectedMovements([]); setSelectedDocs([]); setAllocations([]) }} className="text-xs text-gray-400 hover:text-gray-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 )}
               </div>
-              {pendingMovements.length > 0 && (
-                <button onClick={selectAllMovements} className="text-xs text-primary-600 hover:text-primary-700 font-medium">
-                  {selectedMovements.length > 0 ? 'Limpar' : 'Selecionar todos'}
-                </button>
-              )}
             </div>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
-              <input className="input pl-7 text-xs py-1 w-full" placeholder="Pesquisar descrição..." value={movSearch} onChange={(e) => setMovSearch(e.target.value)} />
-            </div>
-          </div>
-          <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
-            {pendingMovements.map((m) => {
-              const selected = !!selectedMovements.find((x) => x.id === m.id)
-              const mDir = Number(m.amount) >= 0 ? 'REVENUE' : 'EXPENSE'
-              const blocked = currentDirection !== null && !selected && mDir !== currentDirection
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => toggleMovement(m)}
-                  disabled={blocked}
-                  title={blocked ? `Apenas ${currentDirection === 'REVENUE' ? 'entradas' : 'saídas'} nesta reconciliação` : undefined}
-                  className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors
-                    ${selected ? 'bg-primary-50' : blocked ? 'opacity-35 cursor-not-allowed bg-gray-50' : 'hover:bg-gray-50'}`}
-                >
-                  {selected
-                    ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
-                    : <Square className={`w-4 h-4 flex-shrink-0 ${blocked ? 'text-gray-200' : 'text-gray-300'}`} />}
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm text-gray-900 truncate">{m.description}</div>
-                    <div className="text-xs text-gray-400">{formatDate(m.date)} · {m.bankAccount?.name}</div>
-                  </div>
-                  <span className={`text-sm font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Math.abs(Number(m.amount)))}
-                  </span>
-                </button>
-              )
-            })}
-            {pendingMovements.length === 0 && <div className="px-5 py-8 text-center text-gray-400 text-sm">Sem movimentos pendentes</div>}
-          </div>
-        </div>
 
-        {/* Documents */}
-        <div className="card">
-          <div className="px-5 py-4 border-b border-gray-100 space-y-2">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900 text-sm">{docsHeading}</h2>
-              {pendingDocs.length > 0 && (
-                <button onClick={selectAllDocs} className="text-xs text-primary-600 hover:text-primary-700 font-medium">
-                  {selectedDocs.length === pendingDocs.length ? 'Desselecionar todos' : 'Selecionar todos'}
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
+              <input
+                className="input pl-7 text-xs py-1.5 w-full"
+                placeholder="Pesquisar descrição..."
+                value={movSearch}
+                onChange={(e) => setMovSearch(e.target.value)}
+              />
+              {movSearch && (
+                <button onClick={() => setMovSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                  <X className="w-3 h-3" />
                 </button>
               )}
             </div>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
-              <input className="input pl-7 text-xs py-1 w-full" placeholder="Pesquisar cliente, fornecedor, referência..." value={docSearch} onChange={(e) => setDocSearch(e.target.value)} />
-            </div>
-          </div>
-          <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
-            {pendingDocs.map((d) => {
-              const selected = !!selectedDocs.find((x) => x.id === d.id)
-              const isSuggested = !selected && selectedMovements.length > 0 && Math.abs(Number(d.pendingAmount) - totalMovements) < 0.01
-              return (
-                <button
-                  key={d.id}
-                  onClick={() => toggleDoc(d)}
-                  className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors
-                    ${selected ? 'bg-primary-50 hover:bg-primary-100' : isSuggested ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-gray-50'}`}
-                >
-                  {selected
-                    ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
-                    : <Square className={`w-4 h-4 flex-shrink-0 ${isSuggested ? 'text-amber-400' : 'text-gray-300'}`} />}
-                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: d.category.color }} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm text-gray-900 flex items-center gap-2">
-                      {d.reference}
-                      <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${d.type === 'receivable' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                        {d.type === 'receivable' ? 'CR' : 'CP'}
-                      </span>
-                      {d.status === 'PARTIAL' && <span className="text-xs text-amber-600">parcial</span>}
-                      {isSuggested && <span className="text-xs text-amber-700 font-medium">← sugerido</span>}
-                    </div>
-                    <div className="text-xs text-gray-400">{d.entityName} · {d.category.name}</div>
+
+            {/* Filter panel */}
+            {movFiltersOpen && (
+              <div className="space-y-2 pt-1 pb-0.5 border-t border-gray-100 mt-1">
+                <FilterRow label="Tipo">
+                  <div className="flex gap-1">
+                    {(['all', 'credit', 'debit'] as const).map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => setMovSign(v)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${movSign === v ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                      >
+                        {v === 'all' ? 'Todos' : v === 'credit' ? 'Entradas' : 'Saídas'}
+                      </button>
+                    ))}
                   </div>
-                  <div className="text-right whitespace-nowrap">
-                    <div className={`text-sm font-semibold ${d.type === 'receivable' ? 'text-green-700' : 'text-red-700'}`}>
-                      {formatCurrency(Number(d.pendingAmount))}
-                    </div>
-                    <div className="text-xs text-gray-400">{formatDate(d.dueDate)}</div>
-                  </div>
-                </button>
-              )
-            })}
-            {pendingDocs.length === 0 && (
-              <div className="px-5 py-8 text-center text-gray-400 text-sm">
-                {currentDirection
-                  ? `Sem ${currentDirection === 'REVENUE' ? 'contas a receber' : 'contas a pagar'} pendentes`
-                  : 'Sem documentos pendentes'}
+                </FilterRow>
+                {bankAccounts.length > 1 && (
+                  <FilterRow label="Conta">
+                    <select
+                      className="input text-xs py-1 flex-1"
+                      value={movBankId}
+                      onChange={(e) => setMovBankId(e.target.value)}
+                    >
+                      <option value="">Todas as contas</option>
+                      {bankAccounts.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </FilterRow>
+                )}
+                <FilterRow label="Data">
+                  <input type="date" className="input text-xs py-1 flex-1" value={movDateFrom} onChange={(e) => setMovDateFrom(e.target.value)} />
+                  <span className="text-gray-300 text-xs">–</span>
+                  <input type="date" className="input text-xs py-1 flex-1" value={movDateTo} onChange={(e) => setMovDateTo(e.target.value)} />
+                </FilterRow>
+                <FilterRow label="Montante">
+                  <input type="number" min="0" step="0.01" className="input text-xs py-1 flex-1" placeholder="Mín." value={movAmountMin} onChange={(e) => setMovAmountMin(e.target.value)} />
+                  <span className="text-gray-300 text-xs">–</span>
+                  <input type="number" min="0" step="0.01" className="input text-xs py-1 flex-1" placeholder="Máx." value={movAmountMax} onChange={(e) => setMovAmountMax(e.target.value)} />
+                </FilterRow>
+                {movFilterCount > 0 && (
+                  <button onClick={clearMovFilters} className="text-[11px] text-primary-600 hover:text-primary-700 font-medium">
+                    Limpar filtros
+                  </button>
+                )}
               </div>
             )}
           </div>
+
+          {/* Movement list */}
+          <div className="flex-1 overflow-y-auto" style={{ maxHeight: '420px' }}>
+            {pendingMovements.map((m) => <MovRow key={m.id} m={m} />)}
+            {pendingMovements.length === 0 && (
+              <div className="px-4 py-10 text-center text-gray-400 text-sm">
+                {allMovements.length === 0
+                  ? 'Sem movimentos bancários'
+                  : 'Nenhum resultado para os filtros aplicados'}
+              </div>
+            )}
+          </div>
+
+          {/* Footer with selection info */}
+          {selectedMovements.length > 0 && (
+            <div className="px-4 py-2.5 border-t border-gray-100 bg-primary-50/50 flex items-center justify-between text-xs">
+              <span className="text-primary-700 font-medium">{selectedMovements.length} selecionado(s) · {formatCurrency(totalMovements)}</span>
+              <span className="text-primary-500 text-[11px]">→ selecione documentos</span>
+            </div>
+          )}
+        </div>
+
+        {/* ── Documents ─────────────────────────────────────────────────────── */}
+        <div className="card flex flex-col">
+          {/* Card header */}
+          <div className="px-4 py-3.5 border-b border-gray-100 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-semibold text-gray-900 text-sm">Documentos Pendentes</h2>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">{pendingDocs.length} de {allDocs.length}</span>
+                <button
+                  onClick={() => setDocFiltersOpen((v) => !v)}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border transition-colors ${docFiltersOpen || docFilterCount > 0 ? 'border-primary-300 bg-primary-50 text-primary-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                >
+                  <SlidersHorizontal className="w-3 h-3" />
+                  Filtros
+                  <FilterBadge count={docFilterCount} />
+                </button>
+              </div>
+            </div>
+
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none" />
+              <input
+                className="input pl-7 text-xs py-1.5 w-full"
+                placeholder="Pesquisar entidade, referência..."
+                value={docSearch}
+                onChange={(e) => setDocSearch(e.target.value)}
+              />
+              {docSearch && (
+                <button onClick={() => setDocSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {/* Filter panel */}
+            {docFiltersOpen && (
+              <div className="space-y-2 pt-1 pb-0.5 border-t border-gray-100 mt-1">
+                <FilterRow label="Tipo">
+                  <div className="flex gap-1">
+                    {(['all', 'receivable', 'payable'] as const).map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => setDocType(v)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${docType === v ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                      >
+                        {v === 'all' ? 'Todos' : v === 'receivable' ? 'A Receber' : 'A Pagar'}
+                      </button>
+                    ))}
+                  </div>
+                </FilterRow>
+                <FilterRow label="Vencimento">
+                  <input type="date" className="input text-xs py-1 flex-1" value={docDateFrom} onChange={(e) => setDocDateFrom(e.target.value)} />
+                  <span className="text-gray-300 text-xs">–</span>
+                  <input type="date" className="input text-xs py-1 flex-1" value={docDateTo} onChange={(e) => setDocDateTo(e.target.value)} />
+                </FilterRow>
+                <FilterRow label="Pendente">
+                  <input type="number" min="0" step="0.01" className="input text-xs py-1 flex-1" placeholder="Mín." value={docAmountMin} onChange={(e) => setDocAmountMin(e.target.value)} />
+                  <span className="text-gray-300 text-xs">–</span>
+                  <input type="number" min="0" step="0.01" className="input text-xs py-1 flex-1" placeholder="Máx." value={docAmountMax} onChange={(e) => setDocAmountMax(e.target.value)} />
+                </FilterRow>
+                {docFilterCount > 0 && (
+                  <button onClick={clearDocFilters} className="text-[11px] text-primary-600 hover:text-primary-700 font-medium">
+                    Limpar filtros
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Document list */}
+          <div className="flex-1 overflow-y-auto" style={{ maxHeight: '420px' }}>
+            {pendingReceivables.length > 0 && (
+              <>
+                <SectionHeader label="↓ Contas a Receber" count={pendingReceivables.length} sign="credit" />
+                {pendingReceivables.map((d) => <DocRow key={d.id} d={d} />)}
+              </>
+            )}
+            {pendingPayables.length > 0 && (
+              <>
+                <SectionHeader label="↑ Contas a Pagar" count={pendingPayables.length} sign="debit" />
+                {pendingPayables.map((d) => <DocRow key={d.id} d={d} />)}
+              </>
+            )}
+            {pendingDocs.length === 0 && (
+              <div className="px-4 py-10 text-center text-gray-400 text-sm">
+                {allDocs.length === 0
+                  ? 'Sem documentos pendentes'
+                  : 'Nenhum resultado para os filtros aplicados'}
+              </div>
+            )}
+          </div>
+
+          {/* Footer with selection info */}
+          {selectedDocs.length > 0 && (
+            <div className="px-4 py-2.5 border-t border-gray-100 bg-primary-50/50 flex items-center justify-between text-xs">
+              <span className="text-primary-700 font-medium">{selectedDocs.length} selecionado(s) · {formatCurrency(totalAllocated)}</span>
+              {diff > 0.01
+                ? <span className="text-red-600 font-medium">Diferença: {formatCurrency(diff)}</span>
+                : <span className="text-emerald-600 font-medium">✓ Balanceado</span>}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Floating action bar */}
+      {/* ── Floating action bar ─────────────────────────────────────────────── */}
       {hasSelection && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-xl shadow-lg px-6 py-4 flex items-center gap-6 z-40 max-w-3xl w-full mx-auto">
-          <div className="text-sm text-gray-700 flex-1 min-w-0">
-            <span className="font-semibold">{selectedMovements.length}</span> mov. ·{' '}
-            <span className="font-semibold">{selectedDocs.length}</span> doc. ·{' '}
-            Total: <span className="font-semibold">{formatCurrency(totalMovements)}</span> ·{' '}
-            Alocado: <span className="font-semibold">{formatCurrency(totalAllocated)}</span>
-            {diff > 0.01 && <span className="text-red-600 ml-2">· Falta: {formatCurrency(diff)}</span>}
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-3xl px-4">
+          <div className="bg-white border border-gray-200 rounded-2xl shadow-modal px-5 py-4 flex items-center gap-4">
+            {/* Stats */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-3 text-sm flex-wrap">
+                <span className="text-gray-500">
+                  <span className="font-semibold text-gray-900">{selectedMovements.length}</span> mov.
+                </span>
+                {selectedMovements.length > 0 && selectedDocs.length > 0 && (
+                  <Link2 className="w-3.5 h-3.5 text-primary-400" />
+                )}
+                <span className="text-gray-500">
+                  <span className="font-semibold text-gray-900">{selectedDocs.length}</span> doc.
+                </span>
+                <span className="text-gray-300 hidden sm:block">|</span>
+                <span className="text-gray-500 hidden sm:block">
+                  Mov.: <span className="font-semibold text-gray-900">{formatCurrency(totalMovements)}</span>
+                </span>
+                {diff > 0.01
+                  ? <span className="text-red-600 font-medium text-xs">Diferença: {formatCurrency(diff)}</span>
+                  : selectedDocs.length > 0 && <span className="text-emerald-600 font-medium text-xs">✓ Balanceado</span>}
+              </div>
+              {isDryRun && (
+                <div className="text-[10px] text-amber-600 font-medium mt-0.5">Modo dry-run activo</div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button onClick={clearAll} className="btn-ghost text-xs py-1.5">
+                <X className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Quick Match — direct confirm for perfect 1:1 */}
+              {isQuickMatch && (
+                <button
+                  onClick={quickMatch}
+                  disabled={confirmMutation.isPending}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-btn"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  {confirmMutation.isPending ? 'A confirmar...' : 'Match direto'}
+                </button>
+              )}
+
+              {/* Full reconciliation modal */}
+              {selectedDocs.length > 0 && (
+                <button
+                  onClick={() => { setPreviewData(null); setShowModal(true) }}
+                  className="btn-primary text-sm py-2"
+                  disabled={selectedMovements.length === 0}
+                >
+                  Reconciliar seleção
+                </button>
+              )}
+            </div>
           </div>
-          <button onClick={openModal} className="btn-primary whitespace-nowrap" disabled={selectedMovements.length === 0 || selectedDocs.length === 0}>
-            Reconciliar seleção
-          </button>
-          <button onClick={() => { setSelectedMovements([]); setSelectedDocs([]); setAllocations([]) }} className="btn-secondary">
-            Limpar
-          </button>
         </div>
       )}
 
-      {/* History */}
+      {/* ── History ───────────────────────────────────────────────────────── */}
       <div className="card">
-        <div className="px-5 py-4 border-b border-gray-100">
+        <div className="px-4 py-3.5 border-b border-gray-100 flex items-center justify-between">
           <h2 className="font-semibold text-gray-900 text-sm">Histórico de Reconciliações</h2>
+          <span className="text-xs text-gray-400">{historyData?.total ?? 0} total</span>
         </div>
         <div className="divide-y divide-gray-50">
           {(historyData?.items ?? []).map((rec) => {
             const isExpanded = expandedId === rec.id
             return (
               <div key={rec.id}>
-                <div className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors">
-                  {/* Expand toggle */}
-                  <button
-                    onClick={() => setExpandedId(isExpanded ? null : rec.id)}
-                    className="text-gray-400 hover:text-gray-600 flex-shrink-0"
-                  >
+                <div className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
+                  <button onClick={() => setExpandedId(isExpanded ? null : rec.id)} className="text-gray-300 hover:text-gray-500 flex-shrink-0">
                     {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                   </button>
-
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-gray-900 flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant={statusVariant(rec.status)}>{statusLabel(rec.status)}</Badge>
                       {rec.isDryRun && <Badge variant="yellow">Dry-run</Badge>}
-                      <span className={`text-xs font-medium ${rec.direction === 'REVENUE' ? 'text-green-700' : 'text-red-700'}`}>
+                      <span className={`text-xs font-medium ${rec.direction === 'REVENUE' ? 'text-emerald-700' : 'text-red-700'}`}>
                         {rec.direction === 'REVENUE' ? '↓ Entrada' : '↑ Saída'}
                       </span>
-                      <span className="text-gray-400 text-xs">
-                        {rec.movements.length} mov. · {rec.receivables.length + rec.payables.length} doc.
-                      </span>
+                      <span className="text-gray-400 text-xs">{rec.movements.length} mov. · {rec.receivables.length + rec.payables.length} doc.</span>
                     </div>
                     <div className="text-xs text-gray-400 mt-0.5">
                       {formatDate(rec.createdAt)} · {rec.createdBy?.name}
-                      {rec.reversedAt && <span className="ml-2 text-amber-600">Revertida {formatDate(rec.reversedAt)}{rec.reversedReason ? ` · ${rec.reversedReason}` : ''}</span>}
+                      {rec.reversedAt && (
+                        <span className="ml-2 text-amber-600">
+                          Revertida {formatDate(rec.reversedAt)}{rec.reversedReason ? ` — ${rec.reversedReason}` : ''}
+                        </span>
+                      )}
                     </div>
                   </div>
-
-                  <div className="text-right flex-shrink-0 flex items-center gap-3">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <div className="text-sm font-semibold text-gray-900">{formatCurrency(rec.totalAllocated)}</div>
                     {rec.status === 'CONFIRMED' && (
                       <button
                         onClick={() => { setReverseId(rec.id); setReverseReason('') }}
-                        title="Desfazer reconciliação"
-                        className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                        title="Reverter reconciliação"
+                        className="p-1.5 text-gray-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
                       >
                         <Undo2 className="w-4 h-4" />
                       </button>
@@ -446,41 +720,40 @@ export default function ReconciliationPage() {
                   </div>
                 </div>
 
-                {/* Inline expansion */}
                 {isExpanded && (
-                  <div className="px-12 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50/50 border-t border-gray-100">
+                  <div className="px-10 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/50 border-t border-gray-100">
                     <div>
-                      <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2 mt-3">Movimentos</h4>
-                      <div className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 mt-3">Movimentos associados</h4>
+                      <div className="space-y-1.5">
                         {rec.movements.map((link) => (
-                          <div key={link.movement.id} className="flex justify-between text-xs text-gray-700 bg-white rounded px-3 py-1.5 border border-gray-100">
+                          <div key={link.movement.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
                             <span className="truncate mr-2 text-gray-600">{link.movement.description}</span>
-                            <span className={`font-medium whitespace-nowrap ${Number(link.movement.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                              {formatCurrency(Math.abs(Number(link.movement.amount)))}
+                            <span className={`font-semibold whitespace-nowrap ${Number(link.movement.amount) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                              {Number(link.movement.amount) >= 0 ? '+' : '−'}{formatCurrency(Math.abs(Number(link.movement.amount)))}
                             </span>
                           </div>
                         ))}
                       </div>
                     </div>
                     <div>
-                      <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2 mt-3">Documentos liquidados</h4>
-                      <div className="space-y-1">
+                      <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 mt-3">Documentos liquidados</h4>
+                      <div className="space-y-1.5">
                         {rec.receivables.map((link) => (
-                          <div key={link.receivable.id} className="flex justify-between text-xs text-gray-700 bg-white rounded px-3 py-1.5 border border-gray-100">
+                          <div key={link.receivable.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
                             <span className="truncate mr-2">
-                              <span className="text-green-700 font-medium mr-1">CR</span>
+                              <span className="text-emerald-700 font-bold mr-1 text-[10px]">CR</span>
                               {link.receivable.reference} · {link.receivable.entityName}
                             </span>
-                            <span className="font-medium text-green-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
+                            <span className="font-semibold text-emerald-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
                           </div>
                         ))}
                         {rec.payables.map((link) => (
-                          <div key={link.payable.id} className="flex justify-between text-xs text-gray-700 bg-white rounded px-3 py-1.5 border border-gray-100">
+                          <div key={link.payable.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
                             <span className="truncate mr-2">
-                              <span className="text-red-700 font-medium mr-1">CP</span>
+                              <span className="text-red-700 font-bold mr-1 text-[10px]">CP</span>
                               {link.payable.reference} · {link.payable.entityName}
                             </span>
-                            <span className="font-medium text-red-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
+                            <span className="font-semibold text-red-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
                           </div>
                         ))}
                       </div>
@@ -491,11 +764,11 @@ export default function ReconciliationPage() {
             )
           })}
           {(historyData?.items ?? []).length === 0 && (
-            <div className="px-5 py-8 text-center text-gray-400 text-sm">Sem reconciliações ainda</div>
+            <div className="px-4 py-10 text-center text-gray-400 text-sm">Sem reconciliações registadas</div>
           )}
         </div>
         {historyData && historyData.total > historyLimit && (
-          <div className="px-5 py-3 border-t border-gray-100">
+          <div className="px-4 py-3 border-t border-gray-100">
             <button onClick={() => setHistoryLimit((l) => l + 10)} className="text-xs text-primary-600 hover:text-primary-700 font-medium">
               Ver mais ({historyData.total - historyLimit} restantes)
             </button>
@@ -503,11 +776,11 @@ export default function ReconciliationPage() {
         )}
       </div>
 
-      {/* Confirmation modal */}
+      {/* ── Confirmation modal ─────────────────────────────────────────────── */}
       <Modal open={showModal} onClose={() => setShowModal(false)} title="Confirmar Reconciliação" size="xl">
         <div className="space-y-4">
           {isDryRun && (
-            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+            <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
               <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <span>Modo dry-run — nenhum recibo/pagamento será criado no TOConline</span>
             </div>
@@ -515,30 +788,35 @@ export default function ReconciliationPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Movimentos ({selectedMovements.length})</h3>
-              <div className="space-y-2">
+              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2.5">Movimentos ({selectedMovements.length})</h3>
+              <div className="space-y-1.5">
                 {selectedMovements.map((m) => (
-                  <div key={m.id} className="flex justify-between text-sm bg-gray-50 rounded-lg px-3 py-2">
-                    <span className="text-gray-700 truncate mr-2">{m.description}</span>
-                    <span className={`font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      {formatCurrency(Math.abs(Number(m.amount)))}
+                  <div key={m.id} className="flex justify-between text-sm bg-slate-50 rounded-lg px-3 py-2.5 border border-gray-100">
+                    <span className="text-gray-700 truncate mr-2 text-xs">{m.description}</span>
+                    <span className={`font-semibold whitespace-nowrap text-xs ${Number(m.amount) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                      {Number(m.amount) >= 0 ? '+' : '−'}{formatCurrency(Math.abs(Number(m.amount)))}
                     </span>
                   </div>
                 ))}
               </div>
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Documentos — Valor a dar baixa</h3>
+              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2.5">Documentos — Valor a dar baixa</h3>
               <div className="space-y-2">
                 {allocations.map((a, i) => (
-                  <div key={a.id} className="bg-gray-50 rounded-lg px-3 py-2">
-                    <div className="flex justify-between text-xs text-gray-500 mb-1">
-                      <span>{a.reference} · {a.entityName}</span>
-                      <span>máx. {formatCurrency(a.pendingAmount)}</span>
+                  <div key={a.id} className="bg-slate-50 rounded-lg px-3 py-2.5 border border-gray-100">
+                    <div className="flex justify-between text-xs text-gray-500 mb-1.5">
+                      <span className="flex items-center gap-1">
+                        <span className={`font-bold ${a.type === 'receivable' ? 'text-emerald-700' : 'text-red-700'}`}>
+                          {a.type === 'receivable' ? 'CR' : 'CP'}
+                        </span>
+                        <span className="truncate">{a.reference} · {a.entityName}</span>
+                      </span>
+                      <span className="text-gray-400 flex-shrink-0 ml-2">máx. {formatCurrency(a.pendingAmount)}</span>
                     </div>
                     <input
                       type="number"
-                      className="input text-sm py-1"
+                      className="input text-sm py-1.5"
                       value={a.amount}
                       max={a.pendingAmount}
                       step="0.01"
@@ -553,42 +831,43 @@ export default function ReconciliationPage() {
             </div>
           </div>
 
-          {/* Validation bar */}
-          <div className={`rounded-lg px-4 py-2.5 text-sm font-medium ${diff < 0.01 ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
-            Alocado: {formatCurrency(totalAllocated)} · Movimentos: {formatCurrency(totalMovements)} · {diff < 0.01 ? '✓ Balanceado' : `Falta: ${formatCurrency(diff)}`}
+          {/* Balance bar */}
+          <div className={`rounded-xl px-4 py-3 text-sm font-medium flex items-center justify-between ${diff < 0.01 ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+            <span>Alocado: <strong>{formatCurrency(totalAllocated)}</strong> · Movimentos: <strong>{formatCurrency(totalMovements)}</strong></span>
+            <span>{diff < 0.01 ? '✓ Balanceado' : `Diferença: ${formatCurrency(diff)}`}</span>
           </div>
 
           {previewData && (
-            <div className="bg-blue-50 rounded-lg px-4 py-3 text-sm text-blue-800">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800">
               {(previewData.tocActions as Array<{ type: string }>).length > 0
                 ? `Serão criados: ${(previewData.tocActions as Array<{ type: string }>).filter((a) => a.type === 'receivable').length} recibo(s) + ${(previewData.tocActions as Array<{ type: string }>).filter((a) => a.type === 'payable').length} pagamento(s) no TOConline`
                 : 'Operação apenas local (sem chamadas ao TOConline)'}
             </div>
           )}
 
-          <div className="flex items-center gap-2">
-            <input type="checkbox" id="dryrun" checked={isDryRun} onChange={(e) => setIsDryRun(e.target.checked)} className="rounded" />
-            <label htmlFor="dryrun" className="text-sm text-gray-700">Modo dry-run (não escreve no TOConline)</label>
+          <div className="flex items-center gap-2 py-1">
+            <input type="checkbox" id="dryrun" checked={isDryRun} onChange={(e) => setIsDryRun(e.target.checked)} className="rounded border-gray-300" />
+            <label htmlFor="dryrun" className="text-sm text-gray-700 select-none cursor-pointer">Modo dry-run (não escreve no TOConline)</label>
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex gap-3 pt-1">
             <button onClick={() => setShowModal(false)} className="btn-secondary flex-1">Cancelar</button>
             {!previewData && (
               <button onClick={() => preview.mutate()} className="btn-secondary flex-1" disabled={preview.isPending}>
                 {preview.isPending ? 'A analisar...' : 'Pré-visualizar'}
               </button>
             )}
-            <button onClick={() => confirm.mutate()} className="btn-primary flex-1" disabled={!canConfirm || confirm.isPending}>
-              {confirm.isPending ? 'A confirmar...' : 'Confirmar'}
+            <button onClick={() => confirmMutation.mutate(undefined)} className="btn-primary flex-1" disabled={!canConfirm || confirmMutation.isPending}>
+              {confirmMutation.isPending ? 'A confirmar...' : 'Confirmar'}
             </button>
           </div>
         </div>
       </Modal>
 
-      {/* Reverse modal */}
-      <Modal open={!!reverseId} onClose={() => { setReverseId(null); setReverseReason('') }} title="Desfazer Reconciliação">
+      {/* ── Reverse modal ──────────────────────────────────────────────────── */}
+      <Modal open={!!reverseId} onClose={() => { setReverseId(null); setReverseReason('') }} title="Reverter Reconciliação">
         <div className="space-y-4">
-          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+          <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span>
               Esta ação irá reverter todos os estados dos movimentos e documentos associados. Os registos no TOConline
@@ -605,13 +884,11 @@ export default function ReconciliationPage() {
               autoFocus
             />
           </div>
-          <div className="flex gap-3 pt-2">
-            <button onClick={() => { setReverseId(null); setReverseReason('') }} className="btn-secondary flex-1">
-              Cancelar
-            </button>
+          <div className="flex gap-3 pt-1">
+            <button onClick={() => { setReverseId(null); setReverseReason('') }} className="btn-secondary flex-1">Cancelar</button>
             <button
               onClick={() => reverseId && reverse.mutate({ id: reverseId, reason: reverseReason || undefined })}
-              className="btn-primary flex-1 bg-amber-600 hover:bg-amber-700 focus:ring-amber-500"
+              className="flex-1 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium shadow-btn transition-all"
               disabled={reverse.isPending}
             >
               {reverse.isPending ? 'A reverter...' : 'Confirmar reversão'}

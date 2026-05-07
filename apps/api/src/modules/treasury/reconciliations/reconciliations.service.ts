@@ -130,13 +130,15 @@ export class TreasuryReconciliationsService {
         await tx.treasuryReconciliationMovement.create({
           data: { reconciliationId: recon.id, movementId: movId, amount: Number(mov.amount) },
         })
-        await tx.treasuryBankMovement.update({
-          where: { id: movId },
-          data: {
-            reconciledAmount: { increment: Math.abs(Number(mov.amount)) },
-            status: 'RECONCILED',
-          },
-        })
+        if (!isDryRun) {
+          await tx.treasuryBankMovement.update({
+            where: { id: movId },
+            data: {
+              reconciledAmount: { increment: Math.abs(Number(mov.amount)) },
+              status: 'RECONCILED',
+            },
+          })
+        }
       }
 
       // Link and process allocations
@@ -171,18 +173,20 @@ export class TreasuryReconciliationsService {
             data: { reconciliationId: recon.id, receivableId: alloc.id, amountAllocated: alloc.amount, tocReceiptId, tocError },
           })
 
-          const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
-          if (rec) {
-            const newReceived = Number(rec.receivedAmount) + alloc.amount
-            const newPending = Number(rec.totalAmount) - newReceived
-            await tx.treasuryReceivable.update({
-              where: { id: alloc.id },
-              data: {
-                receivedAmount: newReceived,
-                pendingAmount: Math.max(0, newPending),
-                status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
-              },
-            })
+          if (!isDryRun) {
+            const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
+            if (rec) {
+              const newReceived = Number(rec.receivedAmount) + alloc.amount
+              const newPending = Number(rec.totalAmount) - newReceived
+              await tx.treasuryReceivable.update({
+                where: { id: alloc.id },
+                data: {
+                  receivedAmount: newReceived,
+                  pendingAmount: Math.max(0, newPending),
+                  status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
+                },
+              })
+            }
           }
         } else {
           let tocPaymentId: string | undefined
@@ -206,18 +210,20 @@ export class TreasuryReconciliationsService {
             data: { reconciliationId: recon.id, payableId: alloc.id, amountAllocated: alloc.amount, tocPaymentId, tocError },
           })
 
-          const pay = await tx.treasuryPayable.findUnique({ where: { id: alloc.id } })
-          if (pay) {
-            const newPaid = Number(pay.paidAmount) + alloc.amount
-            const newPending = Number(pay.totalAmount) - newPaid
-            await tx.treasuryPayable.update({
-              where: { id: alloc.id },
-              data: {
-                paidAmount: newPaid,
-                pendingAmount: Math.max(0, newPending),
-                status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
-              },
-            })
+          if (!isDryRun) {
+            const pay = await tx.treasuryPayable.findUnique({ where: { id: alloc.id } })
+            if (pay) {
+              const newPaid = Number(pay.paidAmount) + alloc.amount
+              const newPending = Number(pay.totalAmount) - newPaid
+              await tx.treasuryPayable.update({
+                where: { id: alloc.id },
+                data: {
+                  paidAmount: newPaid,
+                  pendingAmount: Math.max(0, newPending),
+                  status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
+                },
+              })
+            }
           }
         }
       }

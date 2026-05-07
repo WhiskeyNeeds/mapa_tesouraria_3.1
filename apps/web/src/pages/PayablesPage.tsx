@@ -1,4 +1,5 @@
 import { Fragment, useState, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -7,7 +8,7 @@ import { formatCurrency, formatDate, statusLabel, statusVariant, tocStatusLabel,
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, SendToBack, Printer, ChevronLeft } from 'lucide-react'
 
 interface TocPurchaseDoc {
   id: number
@@ -35,6 +36,7 @@ interface TocPayment {
   document_no: string
   date: string
   gross_total: number
+  net_total?: number
   [key: string]: unknown
 }
 
@@ -42,11 +44,16 @@ interface PaymentLine {
   payable_id: number | string
   paid_value: number
   gross_total: number
+  net_total?: number
   settlement_percentage?: number
+  settlement_amount?: number
+  retention_total?: number
   document_no?: string
   _doc_date?: string
   _doc_due_date?: string
   _doc_gross_total?: number
+  _doc_pending_total?: number
+  _doc_external_reference?: string
   [key: string]: unknown
 }
 
@@ -61,7 +68,7 @@ interface Payable {
 interface Category { id: string; name: string; type: string; launchToc: boolean }
 
 const emptyForm = {
-  categoryId: '', entityName: '', reference: '', description: '',
+  categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
   documentDate: '', dueDate: '', totalAmount: '', currency: 'EUR',
 }
 const emptyRecurrence = {
@@ -71,82 +78,144 @@ const emptyRecurrence = {
   endDate: '',
   occurrences: '',
 }
+const emptyTocLine = { description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
+const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
 
 type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc }
 
-function PaymentDocLines({ clientId, paymentId }: { clientId: string; paymentId: string }) {
+function PaymentDetailModal({
+  open, onClose, payment, clientId, entityName,
+}: {
+  open: boolean
+  onClose: () => void
+  payment: TocPayment | null
+  clientId: string
+  entityName: string
+}) {
   const { data: lines = [], isLoading } = useQuery<PaymentLine[]>({
-    queryKey: ['toc-payment-lines', clientId, paymentId],
-    queryFn: () => api.get(`/toconline/${clientId}/purchase-payments/${paymentId}/lines`),
+    queryKey: ['toc-payment-lines', clientId, String(payment?.id ?? '')],
+    queryFn: () => api.get(`/toconline/${clientId}/purchase-payments/${payment!.id}/lines`),
+    enabled: open && !!payment,
   })
 
-  if (isLoading) {
-    return (
-      <tr>
-        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
-          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar...
-        </td>
-      </tr>
-    )
-  }
+  if (!open || !payment) return null
 
-  if (!lines.length) {
-    return (
-      <tr>
-        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
-          Sem documentos associados
-        </td>
-      </tr>
-    )
-  }
+  const series = payment.document_no?.match(/[A-Z]+\s+(\d+)\//)?.[1] ?? ''
 
   return (
-    <>
-      {lines.map((line, i) => (
-        <tr key={i} className="bg-blue-50/20 border-b border-gray-100/60">
-          <td className="pl-16 pr-3 py-1.5">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="w-1 h-1 rounded-full bg-blue-300 flex-shrink-0" />
-              <div>
-                <div className="text-gray-700 font-medium">{line.document_no ?? String(line.payable_id)}</div>
-                {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
-              </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl animate-scale-in overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-3 bg-teal-600">
+          <h2 className="text-sm font-semibold text-white truncate pr-4">
+            {payment.document_no} - {entityName}
+          </h2>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-teal-200 hover:text-white hover:bg-teal-700 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex items-start gap-6 px-6 py-4 border-b border-gray-100">
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-gray-400 mb-0.5">Data de pagamento</div>
+            <div className="text-sm font-medium text-gray-700">{formatDate(payment.date)}</div>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-gray-400 mb-0.5">Série de Pagamento</div>
+            <div className="text-sm font-medium text-gray-700">{series || '—'}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-gray-400 mb-0.5">Total pago</div>
+            <div className="text-xl font-bold text-gray-800">{formatCurrency(payment.gross_total)}</div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 max-h-[calc(100vh-20rem)] overflow-y-auto">
+          <h3 className="text-sm font-semibold text-teal-600 mb-3">
+            Documento(s) liquidados ({isLoading ? '…' : lines.length})
+          </h3>
+          {isLoading ? (
+            <div className="flex items-center gap-2 py-8 text-sm text-gray-400 justify-center">
+              <RefreshCw className="w-4 h-4 animate-spin" />A carregar documentos...
             </div>
-          </td>
-          <td className="px-5 py-1.5" />
-          <td className="px-5 py-1.5 text-xs text-gray-400">
-            {(() => {
-              const docTotal = Number(line._doc_gross_total ?? line.gross_total)
-              if (!docTotal) return ''
-              const pct = (line.paid_value / docTotal) * 100
-              return `${pct.toFixed(0)}%`
-            })()}
-          </td>
-          <td className="px-5 py-1.5 text-xs text-gray-400 whitespace-nowrap">
-            {line._doc_due_date ? formatDate(line._doc_due_date) : '—'}
-          </td>
-          <td className="px-5 py-1.5 text-right text-xs text-gray-500">
-            {line._doc_gross_total != null ? formatCurrency(line._doc_gross_total) : '—'}
-          </td>
-          <td className="px-5 py-1.5 text-right text-xs text-blue-700 font-semibold">{formatCurrency(line.paid_value)}</td>
-          <td colSpan={2} className="px-5 py-1.5" />
-        </tr>
-      ))}
-    </>
+          ) : lines.length === 0 ? (
+            <div className="py-8 text-sm text-gray-400 text-center">Sem documentos associados</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-teal-600 text-white">
+                    <th className="px-3 py-2 text-left font-medium">Documento</th>
+                    <th className="px-3 py-2 text-left font-medium">Vossa referência</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor total</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor pendente</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor retido</th>
+                    <th className="px-3 py-2 text-right font-medium">% desc. financ.</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor desconto</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor pago</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((line, i) => {
+                    const retentionValue = Number(line.retention_total ?? 0)
+                    const discountPct = Number(line.settlement_percentage ?? 0)
+                    const discountValue = Number(line.settlement_amount ?? 0)
+                    return (
+                      <tr key={i} className={i % 2 === 0 ? 'bg-teal-50/40' : 'bg-white'}>
+                        <td className="px-3 py-2 border-b border-gray-100">
+                          <div className="font-medium text-gray-700">{line.document_no ?? String(line.payable_id)}</div>
+                          {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
+                        </td>
+                        <td className="px-3 py-2 border-b border-gray-100 text-gray-500">
+                          {line._doc_external_reference || '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">
+                          {line._doc_gross_total != null ? formatCurrency(line._doc_gross_total) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">
+                          {line._doc_pending_total != null ? formatCurrency(line._doc_pending_total) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{formatCurrency(retentionValue)}</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{discountPct} %</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{formatCurrency(discountValue)}</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 font-semibold text-gray-700">{formatCurrency(line.paid_value)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between px-6 py-3 border-t border-gray-100">
+          <div className="flex items-center gap-2">
+            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-600">
+              <Printer className="w-3.5 h-3.5" />Imprimir
+            </button>
+            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 rounded-lg hover:bg-red-50 transition-colors text-red-500">
+              <XCircle className="w-3.5 h-3.5" />Anular
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="w-8 h-8 flex items-center justify-center border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-400">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button className="px-4 py-1.5 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors uppercase tracking-wide">
+              Opções de Pagamento
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
 function PaymentSubRows({ clientId, tocDocId, entityName }: { clientId: string; tocDocId: string; entityName: string }) {
-  const [expandedPayments, setExpandedPayments] = useState<Set<string>>(new Set())
-
-  function togglePayment(id: string) {
-    setExpandedPayments((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const [detailPayment, setDetailPayment] = useState<TocPayment | null>(null)
 
   const { data: payments = [], isLoading } = useQuery<TocPayment[]>({
     queryKey: ['toc-purchase-payments', clientId, tocDocId],
@@ -175,35 +244,37 @@ function PaymentSubRows({ clientId, tocDocId, entityName }: { clientId: string; 
 
   return (
     <>
-      {payments.map((pm) => {
-        const pmId = String(pm.id)
-        const isExpanded = expandedPayments.has(pmId)
-        return (
-          <Fragment key={pmId}>
-            <tr
-              className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-gray-100/60"
-              onClick={() => togglePayment(pmId)}
-            >
-              <td className="pl-10 pr-3 py-2">
-                <div className="flex items-center gap-2 text-xs">
-                  {isExpanded
-                    ? <ChevronDown className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                    : <ChevronRight className="w-3 h-3 text-gray-400 flex-shrink-0" />}
-                  <span className="text-gray-700 font-medium">{pm.document_no}</span>
-                </div>
-              </td>
-              <td className="px-5 py-2 text-xs text-gray-500">{entityName}</td>
-              <td className="px-5 py-2" />
-              <td className="px-5 py-2 text-xs text-gray-500">{pm.date ? formatDate(pm.date) : '—'}</td>
-              <td className="px-5 py-2" />
-              <td className="px-5 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(pm.gross_total)}</td>
-              <td className="px-5 py-2" />
-              <td className="px-3 py-2" />
-            </tr>
-            {isExpanded && <PaymentDocLines clientId={clientId} paymentId={pmId} />}
-          </Fragment>
-        )
-      })}
+      {payments.map((pm) => (
+        <tr
+          key={String(pm.id)}
+          className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-teal-50/40"
+          onClick={() => setDetailPayment(pm)}
+        >
+          <td className="pl-10 pr-3 py-2">
+            <div className="flex items-center gap-2 text-xs">
+              <ChevronRight className="w-3 h-3 text-teal-400 flex-shrink-0" />
+              <span className="text-gray-700 font-medium">{pm.document_no}</span>
+            </div>
+          </td>
+          <td className="px-5 py-2 text-xs text-gray-500">{entityName}</td>
+          <td className="px-5 py-2" />
+          <td className="px-5 py-2 text-xs text-gray-500">{pm.date ? formatDate(pm.date) : '—'}</td>
+          <td className="px-5 py-2" />
+          <td className="px-5 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(pm.gross_total)}</td>
+          <td className="px-5 py-2" />
+          <td className="px-3 py-2" />
+        </tr>
+      ))}
+      {createPortal(
+        <PaymentDetailModal
+          open={!!detailPayment}
+          onClose={() => setDetailPayment(null)}
+          payment={detailPayment}
+          clientId={clientId}
+          entityName={entityName}
+        />,
+        document.body
+      )}
     </>
   )
 }
@@ -234,6 +305,12 @@ export default function PayablesPage() {
   const [importTocDoc, setImportTocDoc] = useState<TocPurchaseDoc | null>(null)
   const [importTocCatId, setImportTocCatId] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [tocCreate, setTocCreate] = useState(false)
+  const [tocDocType, setTocDocType] = useState('FC')
+  const [tocLines, setTocLines] = useState([{ ...emptyTocLine }])
+  const [taxExemptionCode, setTaxExemptionCode] = useState('M07')
+  const [vatIncludedPrices, setVatIncludedPrices] = useState(false)
+  const [retentionPct, setRetentionPct] = useState('')
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -281,9 +358,30 @@ export default function PayablesPage() {
   })
 
 
+  const selectedCategory = useMemo(
+    () => categories.find((c) => c.id === form.categoryId) ?? null,
+    [categories, form.categoryId],
+  )
+
+  const hasIseLines = tocCreate && tocLines.some((l) => l.tax_code === 'ISE')
+
+  const tocLinesTotal = useMemo(() => {
+    if (!tocCreate) return null
+    return tocLines.reduce((sum, l) => {
+      const qty = parseFloat(l.quantity) || 0
+      const price = parseFloat(l.unit_price) || 0
+      const vatPct = TAX_RATES[l.tax_code ?? 'NOR'] ?? 23
+      return sum + qty * price * (1 + vatPct / 100)
+    }, 0)
+  }, [tocCreate, tocLines])
+
   const create = useMutation({
     mutationFn: () => {
-      const body: Record<string, unknown> = { ...form, totalAmount: parseFloat(form.totalAmount) }
+      const body: Record<string, unknown> = {
+        ...form,
+        totalAmount: parseFloat(form.totalAmount) || 0,
+        entityNif: form.entityNif || undefined,
+      }
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
@@ -291,12 +389,36 @@ export default function PayablesPage() {
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
       }
+      if (selectedCategory?.launchToc && tocCreate && tocLines.some((l) => l.description && l.unit_price)) {
+        body.tocDocumentType = tocDocType
+        body.tocLines = tocLines
+          .filter((l) => l.description && l.unit_price)
+          .map((l) => ({
+            description: l.description,
+            quantity: parseFloat(l.quantity) || 1,
+            unit_price: parseFloat(l.unit_price),
+            tax_code: l.tax_code || 'NOR',
+          }))
+        if (hasIseLines && taxExemptionCode) {
+          body.taxExemptionCode = taxExemptionCode
+        }
+        if (vatIncludedPrices) body.vatIncludedPrices = true
+        if (retentionPct) body.retentionPct = parseFloat(retentionPct)
+      }
       return api.post(`/treasury/${selectedClientId}/payables`, body)
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['payables'] })
       qc.invalidateQueries({ queryKey: ['payables-kpis'] })
-      setShowNew(false); setForm(emptyForm); setRecForm(emptyRecurrence)
+      setShowNew(false)
+      setForm(emptyForm)
+      setRecForm(emptyRecurrence)
+      setTocCreate(false)
+      setTocDocType('FC')
+      setTocLines([{ ...emptyTocLine }])
+      setTaxExemptionCode('M07')
+      setVatIncludedPrices(false)
+      setRetentionPct('')
       toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Conta a pagar criada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -411,18 +533,39 @@ export default function PayablesPage() {
     (data?.items ?? []).map((p) => p.tocPurchasesDocId).filter(Boolean) as string[]
   )
 
-  // Linhas TOConline ainda não importadas
+  // Apenas faturas de compra (FC, DSP, NDF); sem rascunhos (0) nem anulados (4)
+  const PURCHASE_INVOICE_TYPES = new Set(['fc', 'dsp', 'ndf'])
   const tocOnly = (tocDocs ?? []).filter((d) => {
     if (importedIds.has(String(d.id))) return false
+    const t = (d.document_type ?? '').toLowerCase()
+    if (!PURCHASE_INVOICE_TYPES.has(t)) return false
+    const s = Number(d.status)
+    if (s === 0 || s === 4) return false
     if (statusFilter) {
-      const s = Number(d.status)
       if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
       if (statusFilter === 'PARTIAL' && s !== 2) return false
       if (statusFilter === 'SETTLED' && s !== 3) return false
-      if (statusFilter === 'VOID' && s !== 4) return false
+      if (statusFilter === 'VOID') return false
     }
     return true
   })
+
+  // Mapa NCF → faturas-pai (para mostrar notas de crédito dentro da fatura associada)
+  const tocNcMap = useMemo(() => {
+    const map = new Map<string, TocPurchaseDoc[]>()
+    for (const d of tocDocs ?? []) {
+      if ((d.document_type ?? '').toLowerCase() !== 'ncf') continue
+      const pids = Array.isArray(d.parent_documents_ids)
+        ? (d.parent_documents_ids as unknown[])
+        : d.parent_documents_ids != null ? [d.parent_documents_ids] : []
+      for (const pid of pids) {
+        const key = String(pid)
+        if (!map.has(key)) map.set(key, [])
+        map.get(key)!.push(d)
+      }
+    }
+    return map
+  }, [tocDocs])
 
   const rows: Row[] = [
     ...(data?.items ?? []).map((p) => ({ _src: 'local' as const, p })),
@@ -492,7 +635,7 @@ export default function PayablesPage() {
           <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
             <option value="">Todos os estados</option>
             <option value="OPEN">Emitido / Em aberto</option>
-            <option value="PARTIAL">Parcialmente pago</option>
+            <option value="PARTIAL">Parcialmente liquidado</option>
             <option value="SETTLED">Liquidado</option>
             <option value="VOID">Anulado</option>
           </select>
@@ -679,19 +822,21 @@ export default function PayablesPage() {
                 const key = `t-${docId}`
                 const isExpanded = expandedIds.has(key)
                 const paymentCount = Array.isArray(d.payments_ids) ? (d.payments_ids as unknown[]).length : 0
+                const ncs = tocNcMap.get(docId) ?? []
+                const expandCount = paymentCount + ncs.length
                 return (
                   <Fragment key={key}>
                     <tr className="hover:bg-blue-50 bg-blue-50/30 group">
                       <td className="px-5 py-3">
                         <div className="flex items-start gap-1.5">
-                          {paymentCount > 0 ? (
+                          {expandCount > 0 ? (
                             <button
                               onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
                               className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
-                              title={isExpanded ? 'Ocultar pagamentos' : 'Ver pagamentos'}
+                              title={isExpanded ? 'Ocultar detalhe' : 'Ver pagamentos e notas de crédito'}
                             >
                               {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                              <span className="text-xs font-semibold leading-none">{paymentCount}</span>
+                              <span className="text-xs font-semibold leading-none">{expandCount}</span>
                             </button>
                           ) : (
                             <span className="w-4 flex-shrink-0" />
@@ -724,11 +869,35 @@ export default function PayablesPage() {
                       </td>
                     </tr>
                     {isExpanded && (
-                      <PaymentSubRows
-                        clientId={selectedClientId!}
-                        tocDocId={docId}
-                        entityName={supplier}
-                      />
+                      <>
+                        {ncs.map((nc) => (
+                          <tr key={`nc-${nc.id}`} className="bg-amber-50/40 border-b border-amber-100/80">
+                            <td className="pl-10 pr-3 py-2">
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-[10px] font-bold uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-700 flex-shrink-0">NC</span>
+                                <div>
+                                  <div className="text-gray-700 font-medium">{nc.document_no}</div>
+                                  <div className="text-gray-400">{nc.date ? formatDate(nc.date) : '—'}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-5 py-2 text-xs text-gray-500">{supplier}</td>
+                            <td className="px-5 py-2" />
+                            <td className="px-5 py-2 text-xs text-gray-400">{(nc.due_date as string | undefined) ? formatDate(nc.due_date as string) : '—'}</td>
+                            <td className="px-5 py-2 text-right text-xs text-amber-700 font-medium">−{formatCurrency(nc.gross_total)}</td>
+                            <td className="px-5 py-2" />
+                            <td className="px-5 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
+                            <td className="px-3 py-2" />
+                          </tr>
+                        ))}
+                        {paymentCount > 0 && (
+                          <PaymentSubRows
+                            clientId={selectedClientId!}
+                            tocDocId={docId}
+                            entityName={supplier}
+                          />
+                        )}
+                      </>
                     )}
                   </Fragment>
                 )
@@ -940,22 +1109,201 @@ export default function PayablesPage() {
         </div>
       </Modal>
 
-      <Modal open={showNew} onClose={() => setShowNew(false)} title="Nova Conta a Pagar" size="lg">
+      <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} title="Nova Conta a Pagar" size="lg">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <label className="label">Categoria</label>
-            <select className="input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
+            <select className="input" value={form.categoryId} onChange={(e) => { setForm({ ...form, categoryId: e.target.value }); setTocCreate(false) }}>
               <option value="">Selecionar...</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
             </select>
           </div>
-          <div className="col-span-2"><label className="label">Fornecedor / Entidade</label><input className="input" value={form.entityName} onChange={(e) => setForm({ ...form, entityName: e.target.value })} /></div>
-          <div><label className="label">Nº Documento</label><input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FC2024/001" /></div>
-          <div><label className="label">Valor (€)</label><input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} /></div>
+          <div className="col-span-2">
+            <label className="label">Fornecedor / Entidade</label>
+            <input className="input" value={form.entityName} onChange={(e) => setForm({ ...form, entityName: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">NIF Fornecedor <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <input className="input" value={form.entityNif} onChange={(e) => setForm({ ...form, entityNif: e.target.value })} placeholder="123456789" />
+          </div>
+          <div>
+            <label className="label">
+              Nº Documento
+              {tocCreate && <span className="ml-1 text-xs text-gray-400 font-normal">(preenchido pelo TOConline)</span>}
+            </label>
+            <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder={tocCreate ? 'automático' : 'FC2024/001'} disabled={tocCreate} />
+          </div>
+          <div>
+            <label className="label">
+              Valor (€)
+              {tocCreate && tocLinesTotal !== null && <span className="ml-1 text-xs text-gray-400 font-normal">estimado: {tocLinesTotal.toFixed(2)}</span>}
+            </label>
+            <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} disabled={tocCreate} placeholder={tocCreate ? 'calculado das linhas' : ''} />
+          </div>
           <div><label className="label">Data Documento</label><input type="date" className="input" value={form.documentDate} onChange={(e) => setForm({ ...form, documentDate: e.target.value })} /></div>
           <div><label className="label">Data Vencimento</label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} /></div>
-          <div className="col-span-2"><label className="label">Descrição</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+          <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
         </div>
+
+        {selectedCategory?.launchToc && (
+          <div className="mt-4 border-t border-blue-100 pt-4 space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="rounded border-gray-300 text-blue-600"
+                checked={tocCreate}
+                onChange={(e) => {
+                  setTocCreate(e.target.checked)
+                  if (!e.target.checked) { setTocLines([{ ...emptyTocLine }]) }
+                }}
+              />
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                <SendToBack className="w-4 h-4 text-blue-500" /> Criar também no TOConline
+              </span>
+            </label>
+
+            {tocCreate && (
+              <div className="pl-6 space-y-3">
+                <div>
+                  <label className="label">Tipo de documento</label>
+                  <select className="input w-auto" value={tocDocType} onChange={(e) => setTocDocType(e.target.value)}>
+                    <option value="FC">FC — Fatura de Compra</option>
+                    <option value="DSP">DSP — Fatura de Despesa</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="label mb-0">Linhas do documento</label>
+                    <button
+                      type="button"
+                      onClick={() => setTocLines((prev) => [...prev, { ...emptyTocLine }])}
+                      className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" /> Adicionar linha
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {tocLines.map((line, i) => (
+                      <div key={i} className="grid grid-cols-12 gap-2 items-start p-2 bg-blue-50/40 rounded-lg border border-blue-100">
+                        <div className="col-span-5">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Descrição</div>}
+                          <input
+                            className="input text-sm py-1"
+                            placeholder="Descrição do serviço/produto"
+                            value={line.description}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, description: e.target.value } : l))}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Qtd.</div>}
+                          <input
+                            type="number"
+                            className="input text-sm py-1"
+                            min="0.001"
+                            step="1"
+                            value={line.quantity}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, quantity: e.target.value } : l))}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Preço unit.</div>}
+                          <input
+                            type="number"
+                            className="input text-sm py-1"
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={line.unit_price}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, unit_price: e.target.value } : l))}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">IVA</div>}
+                          <select
+                            className="input text-sm py-1"
+                            value={line.tax_code}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, tax_code: e.target.value } : l))}
+                          >
+                            <option value="NOR">NOR — 23%</option>
+                            <option value="INT">INT — 13%</option>
+                            <option value="RED">RED — 6%</option>
+                            <option value="ISE">ISE — Isento</option>
+                          </select>
+                        </div>
+                        <div className="col-span-1 flex items-end justify-center pb-0.5">
+                          {i === 0 && <div className="text-[10px] text-transparent uppercase mb-1">Del</div>}
+                          {tocLines.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setTocLines((prev) => prev.filter((_, idx) => idx !== i))}
+                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {tocLinesTotal !== null && tocLinesTotal > 0 && (
+                    <div className="mt-2 text-right text-sm text-blue-700 font-semibold">
+                      Total c/IVA: {tocLinesTotal.toFixed(2)} €
+                    </div>
+                  )}
+                  {hasIseLines && (
+                    <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+                      <p className="text-xs text-amber-700 font-medium">Linha isenta de IVA — motivo de isenção obrigatório</p>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="input text-sm py-1 flex-1"
+                          value={taxExemptionCode}
+                          onChange={(e) => setTaxExemptionCode(e.target.value)}
+                        >
+                          <option value="M07">M07 — Artigo 9.º do CIVA</option>
+                          <option value="M08">M08 — Artigo 14.º do CIVA</option>
+                          <option value="M09">M09 — Artigo 15.º do CIVA</option>
+                          <option value="M10">M10 — Regime especial de isenção (Art. 53.º)</option>
+                          <option value="M11">M11 — Regime especial dos tabaceiros</option>
+                          <option value="M12">M12 — Regime de IVA de caixa</option>
+                          <option value="M16">M16 — Artigo 14.º do RITI</option>
+                          <option value="M19">M19 — Outras isenções</option>
+                          <option value="M20">M20 — IVA — regime forfetário</option>
+                          <option value="M99">M99 — Não sujeito; não tributado</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex flex-wrap gap-4 items-start">
+                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-blue-600"
+                        checked={vatIncludedPrices}
+                        onChange={(e) => setVatIncludedPrices(e.target.checked)}
+                      />
+                      Preços com IVA incluído
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm text-gray-700 whitespace-nowrap">Retenção na fonte (%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.5"
+                        className="input text-sm py-1 w-20"
+                        placeholder="ex: 25"
+                        value={retentionPct}
+                        onChange={(e) => setRetentionPct(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-4 border-t border-gray-100 pt-4 space-y-3">
           <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -1005,10 +1353,17 @@ export default function PayablesPage() {
           )}
         </div>
 
+        {create.isError && (
+          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
+        )}
         <div className="flex gap-3 mt-6">
-          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence) }} className="btn-secondary flex-1">Cancelar</button>
-          <button onClick={() => create.mutate()} className="btn-primary flex-1" disabled={create.isPending || !form.categoryId || !form.entityName || !form.reference || !form.totalAmount}>
-            {create.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
+          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} className="btn-secondary flex-1">Cancelar</button>
+          <button
+            onClick={() => create.mutate()}
+            className="btn-primary flex-1"
+            disabled={create.isPending || !form.categoryId || !form.entityName || (!tocCreate && (!form.reference || !form.totalAmount)) || !form.documentDate || !form.dueDate || (tocCreate && !tocLines.some((l) => l.description && l.unit_price))}
+          >
+            {create.isPending ? (tocCreate ? 'A criar no TOConline...' : 'A guardar...') : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
         </div>
       </Modal>

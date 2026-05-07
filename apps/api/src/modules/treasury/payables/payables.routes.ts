@@ -1,6 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { TreasuryPayablesService } from './payables.service.js'
+import { ToconlineService } from '../../toconline/toconline.service.js'
 import type { TreasuryDocStatus, TreasuryDocOrigin } from '@prisma/client'
+
+interface TocDocLine {
+  description: string
+  quantity: number
+  unit_price: number
+  tax_code: 'NOR' | 'INT' | 'RED' | 'ISE'
+}
 
 export async function payablesRoutes(fastify: FastifyInstance) {
   const svc = new TreasuryPayablesService(fastify.prisma)
@@ -69,8 +77,61 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const body = request.body as Parameters<TreasuryPayablesService['create']>[2]
-    return reply.status(201).send(await svc.create(clientId, request.user.sub, body))
+    const body = request.body as Parameters<TreasuryPayablesService['create']>[2] & {
+      tocLines?: TocDocLine[]
+      tocDocumentType?: string
+      taxExemptionCode?: string
+      vatIncludedPrices?: boolean
+      retentionPct?: number
+    }
+
+    let tocPurchasesDocId = body.tocPurchasesDocId
+    let reference = body.reference
+
+    if (body.tocLines && body.tocLines.length > 0) {
+      const tocSvc = new ToconlineService(fastify.prisma)
+
+      // tax_exemption_reason_id é OBRIGATÓRIO quando existe linha ISE
+      let taxExemptionReasonId: number | undefined
+      const hasIse = body.tocLines.some((l) => l.tax_code === 'ISE')
+      if (hasIse && body.taxExemptionCode) {
+        taxExemptionReasonId = await tocSvc.getTaxExemptionReasonId(clientId, body.taxExemptionCode)
+      }
+
+      const tocDoc = await tocSvc.createPurchaseDocument(clientId, {
+        document_type: body.tocDocumentType ?? 'FC',
+        date: body.documentDate,
+        due_date: body.dueDate,
+        supplier_business_name: body.entityName,
+        ...(body.entityNif ? { supplier_tax_registration_number: body.entityNif } : {}),
+        ...(body.description ? { notes: body.description } : {}),
+        ...(body.reference ? { external_reference: body.reference } : {}),
+        ...(taxExemptionReasonId ? { tax_exemption_reason_id: taxExemptionReasonId } : {}),
+        ...(body.vatIncludedPrices ? { vat_included_prices: true } : {}),
+        ...(body.retentionPct != null && body.retentionPct > 0 ? { retention_percentage: body.retentionPct } : {}),
+        lines: body.tocLines.map((l) => ({
+          description: l.description,
+          quantity: l.quantity,
+          unit_price: l.unit_price,
+          tax_code: l.tax_code,
+        })),
+      }) as Record<string, unknown>
+
+      const dataObj = tocDoc?.data as Record<string, unknown> | undefined
+      const attrs = dataObj?.attributes as Record<string, unknown> | undefined
+      tocPurchasesDocId = String(dataObj?.id ?? tocDoc?.id ?? '')
+      const docNo = String(attrs?.document_no ?? tocDoc?.document_no ?? '')
+      if (docNo) reference = docNo
+
+      const grossTotal = Number(attrs?.gross_total ?? tocDoc?.gross_total)
+      if (grossTotal > 0) body.totalAmount = grossTotal
+    }
+
+    return reply.status(201).send(await svc.create(clientId, request.user.sub, {
+      ...body,
+      reference: reference || body.reference,
+      tocPurchasesDocId,
+    }))
   })
 
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {

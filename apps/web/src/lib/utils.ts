@@ -34,8 +34,8 @@ export function formatDateRelative(date: string | Date): string {
 
 export function tocStatusLabel(status: unknown): string {
   const map: Record<string | number, string> = {
-    0: 'Rascunho', 1: 'Emitido', 2: 'Parcialmente pago', 3: 'Liquidado', 4: 'Anulado', 5: 'Comunicado',
-    draft: 'Rascunho', issued: 'Emitido', partial: 'Parcialmente pago',
+    0: 'Rascunho', 1: 'Emitido', 2: 'Parcialmente liquidado', 3: 'Liquidado', 4: 'Anulado', 5: 'Comunicado',
+    draft: 'Rascunho', issued: 'Emitido', partial: 'Parcialmente liquidado',
     settled: 'Liquidado', paid: 'Pago', cancelled: 'Anulado', voided: 'Anulado',
   }
   if (status == null) return '—'
@@ -60,7 +60,7 @@ export function tocStatusVariant(status: unknown): 'green' | 'yellow' | 'red' | 
 
 export function statusLabel(status: string): string {
   const map: Record<string, string> = {
-    OPEN: 'Aberto', PARTIAL: 'Parcial', SETTLED: 'Liquidado', VOID: 'Anulado',
+    OPEN: 'Emitido', PARTIAL: 'Parcialmente liquidado', SETTLED: 'Liquidado', VOID: 'Anulado',
     UNCLASSIFIED: 'Por classificar', CLASSIFIED: 'Classificado', RECONCILED: 'Reconciliado',
     DRAFT: 'Rascunho', CONFIRMED: 'Confirmado', REVERSED: 'Estornado',
   }

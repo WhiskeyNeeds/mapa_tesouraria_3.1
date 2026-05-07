@@ -54,7 +54,16 @@
       "Skill(update-config)",
       "Skill(update-config:*)",
       "Bash(Get-ChildItem -Path \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\" -Directory)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "Bash(grep -E \"\\\\.ts$\")",
+      "PowerShell(psql \"postgresql://postgres:postgres@localhost:5432/mapa_tesouraria_3.1\" -c \"\\\\dt\" 2>&1)",
+      "PowerShell(Invoke-WebRequest -Uri \"http://localhost:3001/health\" -UseBasicParsing -TimeoutSec 3 2>&1)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\" -Force)",
+      "Bash(Select-Object -Property Name, PSIsContainer)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Projetos\\\\Estagio\\\\mapa_tesouraria_3.1\\\\apps\\\\web\\\\src\" -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "Bash(node seed-test-reconciliation.mjs)"
     ],
     "additionalDirectories": [
       "C:\\Users\\ruise\\.claude"

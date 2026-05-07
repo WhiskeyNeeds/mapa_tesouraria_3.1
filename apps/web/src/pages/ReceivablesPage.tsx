@@ -1,4 +1,5 @@
 import { Fragment, useState, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -7,7 +8,7 @@ import { formatCurrency, formatDate, statusLabel, statusVariant, tocStatusLabel,
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, SendToBack, Printer, Mail, ChevronLeft } from 'lucide-react'
 
 interface TocSalesDoc {
   id: number
@@ -35,6 +36,8 @@ interface TocReceipt {
   document_no: string
   date: string
   gross_total: number
+  net_total?: number
+  receipt_series?: string
   [key: string]: unknown
 }
 
@@ -42,11 +45,16 @@ interface ReceiptLine {
   receivable_id: number | string
   received_value: number
   gross_total: number
+  net_total?: number
   settlement_percentage?: number
+  settlement_amount?: number
+  retention_total?: number
   document_no?: string
   _doc_date?: string
   _doc_due_date?: string
   _doc_gross_total?: number
+  _doc_pending_total?: number
+  _doc_retention?: number
   [key: string]: unknown
 }
 
@@ -61,7 +69,7 @@ interface Receivable {
 interface Category { id: string; name: string; type: string; launchToc: boolean }
 
 const emptyForm = {
-  categoryId: '', entityName: '', reference: '', description: '',
+  categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
   documentDate: '', dueDate: '', totalAmount: '', currency: 'EUR',
 }
 const emptyRecurrence = {
@@ -71,82 +79,156 @@ const emptyRecurrence = {
   endDate: '',
   occurrences: '',
 }
+const emptyTocLine = { item_type: 'Service', description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
+const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
 
 type Row = { _src: 'local'; r: Receivable } | { _src: 'toc'; d: TocSalesDoc }
 
-function ReceiptDocLines({ clientId, receiptId }: { clientId: string; receiptId: string }) {
+function ReceiptDetailModal({
+  open, onClose, receipt, clientId, entityName,
+}: {
+  open: boolean
+  onClose: () => void
+  receipt: TocReceipt | null
+  clientId: string
+  entityName: string
+}) {
   const { data: lines = [], isLoading } = useQuery<ReceiptLine[]>({
-    queryKey: ['toc-receipt-lines', clientId, receiptId],
-    queryFn: () => api.get(`/toconline/${clientId}/sales-receipts/${receiptId}/lines`),
+    queryKey: ['toc-receipt-lines', clientId, String(receipt?.id ?? '')],
+    queryFn: () => api.get(`/toconline/${clientId}/sales-receipts/${receipt!.id}/lines`),
+    enabled: open && !!receipt,
   })
 
-  if (isLoading) {
-    return (
-      <tr>
-        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
-          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar...
-        </td>
-      </tr>
-    )
-  }
+  if (!open || !receipt) return null
 
-  if (!lines.length) {
-    return (
-      <tr>
-        <td colSpan={8} className="pl-20 py-1.5 text-xs text-gray-400 bg-blue-50/20 border-b border-gray-100">
-          Sem documentos associados
-        </td>
-      </tr>
-    )
-  }
+  // IVA do recibo = gross_total − net_total (tax_payable não existe neste objeto)
+  const taxPayable = Number(receipt.gross_total ?? 0) - Number(receipt.net_total ?? 0)
+  const series = receipt.receipt_series ?? receipt.document_no?.match(/[A-Z]+\s+(\d+)\//)?.[1] ?? ''
 
   return (
-    <>
-      {lines.map((line, i) => (
-        <tr key={i} className="bg-blue-50/20 border-b border-gray-100/60">
-          <td className="pl-16 pr-3 py-1.5">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="w-1 h-1 rounded-full bg-blue-300 flex-shrink-0" />
-              <div>
-                <div className="text-gray-700 font-medium">{line.document_no ?? String(line.receivable_id)}</div>
-                {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
-              </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl animate-scale-in overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-3 bg-teal-600">
+          <h2 className="text-sm font-semibold text-white truncate pr-4">
+            {receipt.document_no} - {entityName}
+          </h2>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-teal-200 hover:text-white hover:bg-teal-700 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex items-start gap-6 px-6 py-4 border-b border-gray-100">
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-gray-400 mb-0.5">Data de recebimento</div>
+            <div className="text-sm font-medium text-gray-700">{formatDate(receipt.date)}</div>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-gray-400 mb-0.5">Série de Recibo</div>
+            <div className="text-sm font-medium text-gray-700">{series || '—'}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-gray-400 mb-0.5">Total de Iva</div>
+            <div className="text-xl font-bold text-gray-800">{formatCurrency(taxPayable)}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-gray-400 mb-0.5">Total recebido</div>
+            <div className="text-xl font-bold text-gray-800">{formatCurrency(receipt.gross_total)}</div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 max-h-[calc(100vh-22rem)] overflow-y-auto">
+          <h3 className="text-sm font-semibold text-teal-600 mb-3">
+            Documento(s) liquidados ({isLoading ? '…' : lines.length})
+          </h3>
+          {isLoading ? (
+            <div className="flex items-center gap-2 py-8 text-sm text-gray-400 justify-center">
+              <RefreshCw className="w-4 h-4 animate-spin" />A carregar documentos...
             </div>
-          </td>
-          <td className="px-5 py-1.5" />
-          <td className="px-5 py-1.5 text-xs text-gray-400">
-            {(() => {
-              const docTotal = Number(line._doc_gross_total ?? line.gross_total)
-              if (!docTotal) return ''
-              const pct = (line.received_value / docTotal) * 100
-              return `${pct.toFixed(0)}%`
-            })()}
-          </td>
-          <td className="px-5 py-1.5 text-xs text-gray-400 whitespace-nowrap">
-            {line._doc_due_date ? formatDate(line._doc_due_date) : '—'}
-          </td>
-          <td className="px-5 py-1.5 text-right text-xs text-gray-500">
-            {line._doc_gross_total != null ? formatCurrency(line._doc_gross_total) : '—'}
-          </td>
-          <td className="px-5 py-1.5 text-right text-xs text-blue-700 font-semibold">{formatCurrency(line.received_value)}</td>
-          <td colSpan={2} className="px-5 py-1.5" />
-        </tr>
-      ))}
-    </>
+          ) : lines.length === 0 ? (
+            <div className="py-8 text-sm text-gray-400 text-center">Sem documentos associados</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-teal-600 text-white">
+                    <th className="px-3 py-2 text-left font-medium">Documento</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor total</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor pendente</th>
+                    <th className="px-3 py-2 text-right font-medium">Retenção no pag.</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor retido</th>
+                    <th className="px-3 py-2 text-right font-medium">% desc. financ.</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor desconto</th>
+                    <th className="px-3 py-2 text-right font-medium">Valor recebido</th>
+                    <th className="px-3 py-2 text-right font-medium">IVA</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((line, i) => {
+                    const retentionPct = Number(line._doc_retention ?? 0)
+                    const retentionValue = Number(line.retention_total ?? 0)
+                    const discountPct = Number(line.settlement_percentage ?? 0)
+                    const discountValue = Number(line.settlement_amount ?? 0)
+                    // IVA da linha = valor recebido − base tributável recebida
+                    const lineTax = Number(line.received_value ?? 0) - Number(line.net_total ?? 0)
+                    return (
+                      <tr key={i} className={i % 2 === 0 ? 'bg-teal-50/40' : 'bg-white'}>
+                        <td className="px-3 py-2 border-b border-gray-100">
+                          <div className="font-medium text-gray-700">{line.document_no ?? String(line.receivable_id)}</div>
+                          {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
+                        </td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">
+                          {line._doc_gross_total != null ? formatCurrency(line._doc_gross_total) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">
+                          {line._doc_pending_total != null ? formatCurrency(line._doc_pending_total) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{retentionPct} %</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{formatCurrency(retentionValue)}</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{discountPct} %</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{formatCurrency(discountValue)}</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 font-semibold text-gray-700">{formatCurrency(line.received_value)}</td>
+                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{lineTax ? formatCurrency(lineTax) : '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between px-6 py-3 border-t border-gray-100">
+          <div className="flex items-center gap-2">
+            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-600">
+              <Printer className="w-3.5 h-3.5" />Imprimir
+            </button>
+            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-600">
+              <Mail className="w-3.5 h-3.5" />Enviar por email
+            </button>
+            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 rounded-lg hover:bg-red-50 transition-colors text-red-500">
+              <XCircle className="w-3.5 h-3.5" />Anular
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="w-8 h-8 flex items-center justify-center border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-400">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button className="px-4 py-1.5 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors uppercase tracking-wide">
+              Opções de Pagamento
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
 function ReceiptSubRows({ clientId, tocDocId, entityName }: { clientId: string; tocDocId: string; entityName: string }) {
-  const [expandedReceipts, setExpandedReceipts] = useState<Set<string>>(new Set())
-
-  function toggleReceipt(id: string) {
-    setExpandedReceipts((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const [detailReceipt, setDetailReceipt] = useState<TocReceipt | null>(null)
 
   const { data: receipts = [], isLoading } = useQuery<TocReceipt[]>({
     queryKey: ['toc-sales-receipts', clientId, tocDocId],
@@ -175,35 +257,37 @@ function ReceiptSubRows({ clientId, tocDocId, entityName }: { clientId: string; 
 
   return (
     <>
-      {receipts.map((rc) => {
-        const rcId = String(rc.id)
-        const isExpanded = expandedReceipts.has(rcId)
-        return (
-          <Fragment key={rcId}>
-            <tr
-              className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-gray-100/60"
-              onClick={() => toggleReceipt(rcId)}
-            >
-              <td className="pl-10 pr-3 py-2">
-                <div className="flex items-center gap-2 text-xs">
-                  {isExpanded
-                    ? <ChevronDown className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                    : <ChevronRight className="w-3 h-3 text-gray-400 flex-shrink-0" />}
-                  <span className="text-gray-700 font-medium">{rc.document_no}</span>
-                </div>
-              </td>
-              <td className="px-5 py-2 text-xs text-gray-500">{entityName}</td>
-              <td className="px-5 py-2" />
-              <td className="px-5 py-2 text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</td>
-              <td className="px-5 py-2" />
-              <td className="px-5 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(rc.gross_total)}</td>
-              <td className="px-5 py-2" />
-              <td className="px-3 py-2" />
-            </tr>
-            {isExpanded && <ReceiptDocLines clientId={clientId} receiptId={rcId} />}
-          </Fragment>
-        )
-      })}
+      {receipts.map((rc) => (
+        <tr
+          key={String(rc.id)}
+          className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-teal-50/40"
+          onClick={() => setDetailReceipt(rc)}
+        >
+          <td className="pl-10 pr-3 py-2">
+            <div className="flex items-center gap-2 text-xs">
+              <ChevronRight className="w-3 h-3 text-teal-400 flex-shrink-0" />
+              <span className="text-gray-700 font-medium">{rc.document_no}</span>
+            </div>
+          </td>
+          <td className="px-5 py-2 text-xs text-gray-500">{entityName}</td>
+          <td className="px-5 py-2" />
+          <td className="px-5 py-2 text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</td>
+          <td className="px-5 py-2" />
+          <td className="px-5 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(rc.gross_total)}</td>
+          <td className="px-5 py-2" />
+          <td className="px-3 py-2" />
+        </tr>
+      ))}
+      {createPortal(
+        <ReceiptDetailModal
+          open={!!detailReceipt}
+          onClose={() => setDetailReceipt(null)}
+          receipt={detailReceipt}
+          clientId={clientId}
+          entityName={entityName}
+        />,
+        document.body
+      )}
     </>
   )
 }
@@ -234,6 +318,12 @@ export default function ReceivablesPage() {
   const [importTocDoc, setImportTocDoc] = useState<TocSalesDoc | null>(null)
   const [importTocCatId, setImportTocCatId] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [tocCreate, setTocCreate] = useState(false)
+  const [tocDocType, setTocDocType] = useState('FT')
+  const [tocLines, setTocLines] = useState([{ ...emptyTocLine }])
+  const [taxExemptionCode, setTaxExemptionCode] = useState('M07')
+  const [vatIncludedPrices, setVatIncludedPrices] = useState(false)
+  const [retentionPct, setRetentionPct] = useState('')
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -281,9 +371,30 @@ export default function ReceivablesPage() {
   })
 
 
+  const selectedCategory = useMemo(
+    () => categories.find((c) => c.id === form.categoryId) ?? null,
+    [categories, form.categoryId],
+  )
+
+  const hasIseLines = tocCreate && tocLines.some((l) => l.tax_code === 'ISE')
+
+  const tocLinesTotal = useMemo(() => {
+    if (!tocCreate) return null
+    return tocLines.reduce((sum, l) => {
+      const qty = parseFloat(l.quantity) || 0
+      const price = parseFloat(l.unit_price) || 0
+      const vatPct = TAX_RATES[l.tax_code ?? 'NOR'] ?? 23
+      return sum + qty * price * (1 + vatPct / 100)
+    }, 0)
+  }, [tocCreate, tocLines])
+
   const create = useMutation({
     mutationFn: () => {
-      const body: Record<string, unknown> = { ...form, totalAmount: parseFloat(form.totalAmount) }
+      const body: Record<string, unknown> = {
+        ...form,
+        totalAmount: parseFloat(form.totalAmount) || 0,
+        entityNif: form.entityNif || undefined,
+      }
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
@@ -291,12 +402,37 @@ export default function ReceivablesPage() {
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
       }
+      if (selectedCategory?.launchToc && tocCreate && tocLines.some((l) => l.description && l.unit_price)) {
+        body.tocDocumentType = tocDocType
+        body.tocLines = tocLines
+          .filter((l) => l.description && l.unit_price)
+          .map((l) => ({
+            item_type: l.item_type || 'Service',
+            description: l.description,
+            quantity: parseFloat(l.quantity) || 1,
+            unit_price: parseFloat(l.unit_price),
+            tax_code: l.tax_code || 'NOR',
+          }))
+        if (hasIseLines && taxExemptionCode) {
+          body.taxExemptionCode = taxExemptionCode
+        }
+        if (vatIncludedPrices) body.vatIncludedPrices = true
+        if (retentionPct) body.retentionPct = parseFloat(retentionPct)
+      }
       return api.post(`/treasury/${selectedClientId}/receivables`, body)
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['receivables'] })
       qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
-      setShowNew(false); setForm(emptyForm); setRecForm(emptyRecurrence)
+      setShowNew(false)
+      setForm(emptyForm)
+      setRecForm(emptyRecurrence)
+      setTocCreate(false)
+      setTocDocType('FT')
+      setTocLines([{ ...emptyTocLine }])
+      setTaxExemptionCode('M07')
+      setVatIncludedPrices(false)
+      setRetentionPct('')
       toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Conta a receber criada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -411,20 +547,39 @@ export default function ReceivablesPage() {
     (data?.items ?? []).map((r) => r.tocSalesDocId).filter(Boolean) as string[]
   )
 
-  // Linhas TOConline ainda não importadas, excluindo Orçamentos e outros não-vendas
+  // Apenas faturas de venda (FT, FS, FR); sem rascunhos (0) nem anulados (4)
+  const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
   const tocOnly = (tocDocs ?? []).filter((d) => {
     if (importedIds.has(String(d.id))) return false
     const t = (d.document_type ?? '').toLowerCase()
-    if (t.includes('orçamento') || t.includes('orcamento') || t === 'orc' || t.includes('quotation') || t.includes('budget') || t.includes('proforma')) return false
+    if (!SALES_INVOICE_TYPES.has(t)) return false
+    const s = Number(d.status)
+    if (s === 0 || s === 4) return false
     if (statusFilter) {
-      const s = Number(d.status)
       if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
       if (statusFilter === 'PARTIAL' && s !== 2) return false
       if (statusFilter === 'SETTLED' && s !== 3) return false
-      if (statusFilter === 'VOID' && s !== 4) return false
+      if (statusFilter === 'VOID') return false
     }
     return true
   })
+
+  // Mapa NC → faturas-pai (para mostrar NCs dentro da fatura associada)
+  const tocNcMap = useMemo(() => {
+    const map = new Map<string, TocSalesDoc[]>()
+    for (const d of tocDocs ?? []) {
+      if ((d.document_type ?? '').toLowerCase() !== 'nc') continue
+      const pids = Array.isArray(d.parent_documents_ids)
+        ? (d.parent_documents_ids as unknown[])
+        : d.parent_documents_ids != null ? [d.parent_documents_ids] : []
+      for (const pid of pids) {
+        const key = String(pid)
+        if (!map.has(key)) map.set(key, [])
+        map.get(key)!.push(d)
+      }
+    }
+    return map
+  }, [tocDocs])
 
   const rows: Row[] = [
     ...(data?.items ?? []).map((r) => ({ _src: 'local' as const, r })),
@@ -494,7 +649,7 @@ export default function ReceivablesPage() {
           <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
             <option value="">Todos os estados</option>
             <option value="OPEN">Emitido / Em aberto</option>
-            <option value="PARTIAL">Parcialmente pago</option>
+            <option value="PARTIAL">Parcialmente liquidado</option>
             <option value="SETTLED">Liquidado</option>
             <option value="VOID">Anulado</option>
           </select>
@@ -681,19 +836,21 @@ export default function ReceivablesPage() {
                 const key = `t-${docId}`
                 const isExpanded = expandedIds.has(key)
                 const receiptCount = Array.isArray(d.receipts_ids) ? (d.receipts_ids as unknown[]).length : 0
+                const ncs = tocNcMap.get(docId) ?? []
+                const expandCount = receiptCount + ncs.length
                 return (
                   <Fragment key={key}>
                     <tr className="hover:bg-green-50 bg-green-50/30 group">
                       <td className="px-5 py-3">
                         <div className="flex items-start gap-1.5">
-                          {receiptCount > 0 ? (
+                          {expandCount > 0 ? (
                             <button
                               onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
                               className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
-                              title={isExpanded ? 'Ocultar recibos' : 'Ver recibos'}
+                              title={isExpanded ? 'Ocultar detalhe' : 'Ver recibos e notas de crédito'}
                             >
                               {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                              <span className="text-xs font-semibold leading-none">{receiptCount}</span>
+                              <span className="text-xs font-semibold leading-none">{expandCount}</span>
                             </button>
                           ) : (
                             <span className="w-4 flex-shrink-0" />
@@ -726,11 +883,35 @@ export default function ReceivablesPage() {
                       </td>
                     </tr>
                     {isExpanded && (
-                      <ReceiptSubRows
-                        clientId={selectedClientId!}
-                        tocDocId={docId}
-                        entityName={customer}
-                      />
+                      <>
+                        {ncs.map((nc) => (
+                          <tr key={`nc-${nc.id}`} className="bg-amber-50/40 border-b border-amber-100/80">
+                            <td className="pl-10 pr-3 py-2">
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-[10px] font-bold uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-700 flex-shrink-0">NC</span>
+                                <div>
+                                  <div className="text-gray-700 font-medium">{nc.document_no}</div>
+                                  <div className="text-gray-400">{nc.date ? formatDate(nc.date) : '—'}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-5 py-2 text-xs text-gray-500">{customer}</td>
+                            <td className="px-5 py-2" />
+                            <td className="px-5 py-2 text-xs text-gray-400">{(nc.due_date as string | undefined) ? formatDate(nc.due_date as string) : '—'}</td>
+                            <td className="px-5 py-2 text-right text-xs text-amber-700 font-medium">−{formatCurrency(nc.gross_total)}</td>
+                            <td className="px-5 py-2" />
+                            <td className="px-5 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
+                            <td className="px-3 py-2" />
+                          </tr>
+                        ))}
+                        {receiptCount > 0 && (
+                          <ReceiptSubRows
+                            clientId={selectedClientId!}
+                            tocDocId={docId}
+                            entityName={customer}
+                          />
+                        )}
+                      </>
                     )}
                   </Fragment>
                 )
@@ -942,22 +1123,211 @@ export default function ReceivablesPage() {
         </div>
       </Modal>
 
-      <Modal open={showNew} onClose={() => setShowNew(false)} title="Nova Conta a Receber" size="lg">
+      <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} title="Nova Conta a Receber" size="lg">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <label className="label">Categoria</label>
-            <select className="input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
+            <select className="input" value={form.categoryId} onChange={(e) => { setForm({ ...form, categoryId: e.target.value }); setTocCreate(false) }}>
               <option value="">Selecionar...</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
             </select>
           </div>
-          <div className="col-span-2"><label className="label">Cliente / Entidade</label><input className="input" value={form.entityName} onChange={(e) => setForm({ ...form, entityName: e.target.value })} /></div>
-          <div><label className="label">Nº Documento</label><input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FT2024/001" /></div>
-          <div><label className="label">Valor (€)</label><input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} /></div>
+          <div className="col-span-2">
+            <label className="label">Cliente / Entidade</label>
+            <input className="input" value={form.entityName} onChange={(e) => setForm({ ...form, entityName: e.target.value })} />
+          </div>
+          <div>
+            <label className="label">NIF Cliente <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <input className="input" value={form.entityNif} onChange={(e) => setForm({ ...form, entityNif: e.target.value })} placeholder="123456789" />
+          </div>
+          <div>
+            <label className="label">
+              Nº Documento
+              {tocCreate && <span className="ml-1 text-xs text-gray-400 font-normal">(preenchido pelo TOConline)</span>}
+            </label>
+            <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder={tocCreate ? 'automático' : 'FT2024/001'} disabled={tocCreate} />
+          </div>
+          <div>
+            <label className="label">
+              Valor (€)
+              {tocCreate && tocLinesTotal !== null && <span className="ml-1 text-xs text-gray-400 font-normal">estimado: {tocLinesTotal.toFixed(2)}</span>}
+            </label>
+            <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} disabled={tocCreate} placeholder={tocCreate ? 'calculado das linhas' : ''} />
+          </div>
           <div><label className="label">Data Documento</label><input type="date" className="input" value={form.documentDate} onChange={(e) => setForm({ ...form, documentDate: e.target.value })} /></div>
           <div><label className="label">Data Vencimento</label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} /></div>
-          <div className="col-span-2"><label className="label">Descrição</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+          <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
         </div>
+
+        {selectedCategory?.launchToc && (
+          <div className="mt-4 border-t border-green-100 pt-4 space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="rounded border-gray-300 text-green-600"
+                checked={tocCreate}
+                onChange={(e) => {
+                  setTocCreate(e.target.checked)
+                  if (!e.target.checked) { setTocLines([{ ...emptyTocLine }]) }
+                }}
+              />
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                <SendToBack className="w-4 h-4 text-green-500" /> Criar também no TOConline
+              </span>
+            </label>
+
+            {tocCreate && (
+              <div className="pl-6 space-y-3">
+                <div>
+                  <label className="label">Tipo de documento</label>
+                  <select className="input w-auto" value={tocDocType} onChange={(e) => setTocDocType(e.target.value)}>
+                    <option value="FT">FT — Fatura</option>
+                    <option value="FS">FS — Fatura Simplificada</option>
+                    <option value="FR">FR — Fatura-Recibo</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="label mb-0">Linhas do documento</label>
+                    <button
+                      type="button"
+                      onClick={() => setTocLines((prev) => [...prev, { ...emptyTocLine }])}
+                      className="text-xs text-green-600 hover:text-green-800 flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" /> Adicionar linha
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {tocLines.map((line, i) => (
+                      <div key={i} className="grid grid-cols-12 gap-2 items-start p-2 bg-green-50/40 rounded-lg border border-green-100">
+                        <div className="col-span-2">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Tipo</div>}
+                          <select
+                            className="input text-sm py-1"
+                            value={line.item_type}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, item_type: e.target.value } : l))}
+                          >
+                            <option value="Service">Serviço</option>
+                            <option value="Product">Produto</option>
+                          </select>
+                        </div>
+                        <div className="col-span-4">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Descrição</div>}
+                          <input
+                            className="input text-sm py-1"
+                            placeholder="Descrição"
+                            value={line.description}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, description: e.target.value } : l))}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Qtd.</div>}
+                          <input
+                            type="number"
+                            className="input text-sm py-1"
+                            min="0.001"
+                            step="1"
+                            value={line.quantity}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, quantity: e.target.value } : l))}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Preço unit.</div>}
+                          <input
+                            type="number"
+                            className="input text-sm py-1"
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={line.unit_price}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, unit_price: e.target.value } : l))}
+                          />
+                        </div>
+                        <div className="col-span-1">
+                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">IVA</div>}
+                          <select
+                            className="input text-sm py-1"
+                            value={line.tax_code}
+                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, tax_code: e.target.value } : l))}
+                          >
+                            <option value="NOR">NOR 23%</option>
+                            <option value="INT">INT 13%</option>
+                            <option value="RED">RED 6%</option>
+                            <option value="ISE">ISE 0%</option>
+                          </select>
+                        </div>
+                        <div className="col-span-1 flex items-end justify-center pb-0.5">
+                          {i === 0 && <div className="text-[10px] text-transparent uppercase mb-1">Del</div>}
+                          {tocLines.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setTocLines((prev) => prev.filter((_, idx) => idx !== i))}
+                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {tocLinesTotal !== null && tocLinesTotal > 0 && (
+                    <div className="mt-2 text-right text-sm text-green-700 font-semibold">
+                      Total c/IVA: {tocLinesTotal.toFixed(2)} €
+                    </div>
+                  )}
+                  {hasIseLines && (
+                    <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+                      <p className="text-xs text-amber-700 font-medium">Linha isenta de IVA — motivo de isenção obrigatório</p>
+                      <select
+                        className="input text-sm py-1 w-full"
+                        value={taxExemptionCode}
+                        onChange={(e) => setTaxExemptionCode(e.target.value)}
+                      >
+                        <option value="M07">M07 — Artigo 9.º do CIVA</option>
+                        <option value="M08">M08 — Artigo 14.º do CIVA</option>
+                        <option value="M09">M09 — Artigo 15.º do CIVA</option>
+                        <option value="M10">M10 — Regime especial de isenção (Art. 53.º)</option>
+                        <option value="M11">M11 — Regime especial dos tabaceiros</option>
+                        <option value="M12">M12 — Regime de IVA de caixa</option>
+                        <option value="M16">M16 — Artigo 14.º do RITI</option>
+                        <option value="M19">M19 — Outras isenções</option>
+                        <option value="M20">M20 — IVA — regime forfetário</option>
+                        <option value="M99">M99 — Não sujeito; não tributado</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex flex-wrap gap-4 items-start">
+                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-green-600"
+                        checked={vatIncludedPrices}
+                        onChange={(e) => setVatIncludedPrices(e.target.checked)}
+                      />
+                      Preços com IVA incluído
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm text-gray-700 whitespace-nowrap">Retenção na fonte (%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.5"
+                        className="input text-sm py-1 w-20"
+                        placeholder="ex: 25"
+                        value={retentionPct}
+                        onChange={(e) => setRetentionPct(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-4 border-t border-gray-100 pt-4 space-y-3">
           <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -1007,10 +1377,17 @@ export default function ReceivablesPage() {
           )}
         </div>
 
+        {create.isError && (
+          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
+        )}
         <div className="flex gap-3 mt-6">
-          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence) }} className="btn-secondary flex-1">Cancelar</button>
-          <button onClick={() => create.mutate()} className="btn-primary flex-1" disabled={create.isPending || !form.categoryId || !form.entityName || !form.reference || !form.totalAmount}>
-            {create.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
+          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} className="btn-secondary flex-1">Cancelar</button>
+          <button
+            onClick={() => create.mutate()}
+            className="btn-primary flex-1"
+            disabled={create.isPending || !form.categoryId || !form.entityName || (!tocCreate && (!form.reference || !form.totalAmount)) || !form.documentDate || !form.dueDate || (tocCreate && !tocLines.some((l) => l.description && l.unit_price))}
+          >
+            {create.isPending ? (tocCreate ? 'A criar no TOConline...' : 'A guardar...') : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
         </div>
       </Modal>

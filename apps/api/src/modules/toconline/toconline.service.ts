@@ -392,6 +392,8 @@ export class ToconlineService {
             _doc_date: docAttrs.date,
             _doc_due_date: docAttrs.due_date,
             _doc_gross_total: docAttrs.gross_total,
+            _doc_pending_total: docAttrs.pending_total,
+            _doc_retention: docAttrs.retention,
           }
         } catch {
           return line
@@ -438,6 +440,8 @@ export class ToconlineService {
             _doc_date: docAttrs.date,
             _doc_due_date: docAttrs.due_date,
             _doc_gross_total: docAttrs.gross_total,
+            _doc_pending_total: docAttrs.pending_total,
+            _doc_external_reference: docAttrs.external_reference,
           }
         } catch {
           return line
@@ -470,6 +474,18 @@ export class ToconlineService {
       }
     }
     return []
+  }
+
+  async getTaxExemptionReasonId(clientId: string, code: string): Promise<number | undefined> {
+    try {
+      const raw = await this.apiGet<unknown>(clientId, `/api/tax_exemption_reasons?filter[code]=${encodeURIComponent(code)}`)
+      const items = this.unwrapArray(raw)
+      if (!items.length) return undefined
+      const id = Number(items[0].id)
+      return isNaN(id) ? undefined : id
+    } catch {
+      return undefined
+    }
   }
 
   async createSalesDocument(clientId: string, payload: unknown) {

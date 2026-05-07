@@ -44,12 +44,12 @@ export default function CompanySelectorPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 to-blue-100 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)' }}>
+      <div className="bg-white rounded-2xl shadow-modal w-full max-w-md p-8">
         <div className="text-center mb-6">
-          <div className="w-12 h-12 bg-primary-600 rounded-xl flex items-center justify-center text-white font-bold text-xl mx-auto mb-4">T</div>
-          <h1 className="text-2xl font-bold text-gray-900">Selecionar empresa</h1>
-          <p className="text-gray-500 text-sm mt-1">Escolha a empresa com que quer trabalhar</p>
+          <div className="w-10 h-10 bg-primary-500 rounded-xl flex items-center justify-center text-white font-bold text-base mx-auto mb-4 shadow-sm">T</div>
+          <h1 className="text-xl font-bold text-gray-900">Selecionar empresa</h1>
+          <p className="text-gray-400 text-sm mt-1">Escolha a empresa com que quer trabalhar</p>
         </div>
 
         {isLoading ? (
@@ -61,10 +61,10 @@ export default function CompanySelectorPage() {
                 key={c.id}
                 onClick={() => selectClient(c.id)}
                 disabled={!c.isActive}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-gray-100 hover:border-primary-300 hover:bg-primary-50/50 transition-all duration-150 text-left disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
               >
-                <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <Building2 className="w-5 h-5 text-primary-600" />
+                <div className="w-9 h-9 bg-slate-50 border border-gray-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Building2 className="w-4 h-4 text-gray-500" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-gray-900 truncate">{c.name}</div>

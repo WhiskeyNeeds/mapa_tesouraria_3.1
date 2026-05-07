@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { getUser, clearTokens, type JwtUser } from '@/lib/auth'
+
+const INACTIVITY_MS = 15 * 60 * 1000
 
 interface AuthContextValue {
   user: JwtUser | null
@@ -19,6 +21,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [selectedClientId, setSelectedClientIdState] = useState<string | null>(
     localStorage.getItem('selected_client_id')
   )
+  const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refetch = useCallback(() => {
     const u = getUser()
@@ -44,6 +47,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSelectedClientIdState(null)
     window.location.href = '/auth/login'
   }, [])
+
+  useEffect(() => {
+    const resetTimer = () => {
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current)
+      inactivityTimer.current = setTimeout(() => logout(), INACTIVITY_MS)
+    }
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'] as const
+    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }))
+    resetTimer()
+
+    return () => {
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current)
+      events.forEach((e) => window.removeEventListener(e, resetTimer))
+    }
+  }, [logout])
 
   return (
     <AuthContext.Provider value={{ user, isLoading, selectedClientId, setSelectedClientId, clearSelectedClientId, logout, refetch }}>
