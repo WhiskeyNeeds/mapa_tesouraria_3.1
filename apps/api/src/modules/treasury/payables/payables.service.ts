@@ -67,7 +67,7 @@ export class TreasuryPayablesService {
   }
 
   async create(clientId: string, userId: string, data: {
-    categoryId: string
+    categoryId?: string
     entityName: string
     entityNif?: string
     tocSupplierId?: string
@@ -81,8 +81,11 @@ export class TreasuryPayablesService {
     recurrenceId?: string
     recurrence?: { frequency: TreasuryRecurrenceFrequency; endDate?: string; occurrences?: number }
   }) {
-    const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
-    if (!category) throw httpError(404, 'Category not found')
+    let category = null
+    if (data.categoryId) {
+      category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
+      if (!category) throw httpError(404, 'Category not found')
+    }
 
     if (data.tocPurchasesDocId) {
       const existing = await this.prisma.treasuryPayable.findFirst({
@@ -112,7 +115,7 @@ export class TreasuryPayablesService {
       data: {
         clientId,
         createdById: userId,
-        origin: category.launchToc ? 'TOCONLINE' : 'LOCAL',
+        origin: category?.launchToc ? 'TOCONLINE' : 'LOCAL',
         totalAmount: data.totalAmount,
         pendingAmount: data.totalAmount,
         documentDate: new Date(data.documentDate),

@@ -372,7 +372,7 @@ model TreasuryBankMovement {
 model TreasuryReceivable {
   id         String @id @default(cuid())
   clientId   String
-  categoryId String
+  categoryId String?
 
   entityName    String  @db.VarChar(200)
   entityNif     String? @db.VarChar(20)
@@ -404,7 +404,7 @@ model TreasuryReceivable {
   deletedAt   DateTime?
 
   client              Client                            @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  category            TreasuryCategory                  @relation(fields: [categoryId], references: [id])
+  category            TreasuryCategory?                 @relation(fields: [categoryId], references: [id])
   recurrence          TreasuryRecurrence?               @relation(fields: [recurrenceId], references: [id])
   parent              TreasuryReceivable?               @relation("ReceivableChildren", fields: [parentId], references: [id])
   children            TreasuryReceivable[]              @relation("ReceivableChildren")
@@ -422,7 +422,7 @@ model TreasuryReceivable {
 model TreasuryPayable {
   id         String @id @default(cuid())
   clientId   String
-  categoryId String
+  categoryId String?
 
   entityName    String  @db.VarChar(200)
   entityNif     String? @db.VarChar(20)
@@ -454,7 +454,7 @@ model TreasuryPayable {
   deletedAt   DateTime?
 
   client              Client                         @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  category            TreasuryCategory               @relation(fields: [categoryId], references: [id])
+  category            TreasuryCategory?              @relation(fields: [categoryId], references: [id])
   recurrence          TreasuryRecurrence?            @relation(fields: [recurrenceId], references: [id])
   parent              TreasuryPayable?               @relation("PayableChildren", fields: [parentId], references: [id])
   children            TreasuryPayable[]              @relation("PayableChildren")

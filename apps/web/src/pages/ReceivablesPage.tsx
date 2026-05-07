@@ -64,7 +64,7 @@ interface Receivable {
   description?: string | null
   tocSalesDocId?: string
   recurrenceId?: string | null
-  category: { id: string; name: string; color: string; launchToc: boolean }
+  category?: { id: string; name: string; color: string; launchToc: boolean } | null
 }
 interface Category { id: string; name: string; type: string; launchToc: boolean }
 
@@ -486,7 +486,7 @@ export default function ReceivablesPage() {
       if (!importTocDoc) return Promise.reject(new Error('No document'))
       const d = importTocDoc
       return api.post(`/treasury/${selectedClientId}/receivables`, {
-        categoryId: importTocCatId,
+        ...(importTocCatId ? { categoryId: importTocCatId } : {}),
         entityName: d.customer_business_name,
         entityNif: d.customer_tax_registration_number ?? undefined,
         tocCustomerId: d.customer_id ? String(d.customer_id) : undefined,
@@ -733,11 +733,13 @@ export default function ReceivablesPage() {
                       </td>
                         <td className="px-5 py-3 text-gray-700">{r.entityName}</td>
                         <td className="px-5 py-3">
-                          <span className="flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.category.color }} />
-                            <span className="text-gray-700 text-xs">{r.category.name}</span>
-                            {!r.category.launchToc && <span className="text-gray-400 text-xs">· local</span>}
-                          </span>
+                          {r.category ? (
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.category.color }} />
+                              <span className="text-gray-700 text-xs">{r.category.name}</span>
+                              {!r.category.launchToc && <span className="text-gray-400 text-xs">· local</span>}
+                            </span>
+                          ) : <span className="text-gray-300 text-xs">—</span>}
                         </td>
                         <td className="px-5 py-3 whitespace-nowrap">
                           {(() => {
@@ -772,7 +774,7 @@ export default function ReceivablesPage() {
                                 setEditId(r.id)
                                 setEditRow(r)
                                 setEditForm({
-                                  categoryId:   r.category.id,
+                                  categoryId:   r.category?.id ?? '',
                                   entityName:   r.entityName,
                                   reference:    r.reference,
                                   documentDate: r.documentDate.slice(0, 10),
@@ -1103,9 +1105,9 @@ export default function ReceivablesPage() {
             <div className="flex justify-between"><span className="text-gray-500">Valor</span><span className="font-semibold text-green-700">{formatCurrency(importTocDoc?.gross_total ?? 0)}</span></div>
           </div>
           <div>
-            <label className="label">Categoria local</label>
+            <label className="label">Categoria local <span className="text-gray-400 font-normal">(opcional)</span></label>
             <select className="input" value={importTocCatId} onChange={(e) => setImportTocCatId(e.target.value)} autoFocus>
-              <option value="">Selecionar...</option>
+              <option value="">Sem categoria</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
             </select>
           </div>
@@ -1114,7 +1116,7 @@ export default function ReceivablesPage() {
             <button
               onClick={() => importFromToc.mutate()}
               className="btn-primary flex-1"
-              disabled={importFromToc.isPending || !importTocCatId}
+              disabled={importFromToc.isPending}
             >
               {importFromToc.isPending ? 'A importar...' : 'Importar'}
             </button>
@@ -1385,7 +1387,7 @@ export default function ReceivablesPage() {
           <button
             onClick={() => create.mutate()}
             className="btn-primary flex-1"
-            disabled={create.isPending || !form.categoryId || !form.entityName || (!tocCreate && (!form.reference || !form.totalAmount)) || !form.documentDate || !form.dueDate || (tocCreate && !tocLines.some((l) => l.description && l.unit_price))}
+            disabled={create.isPending || !form.entityName || (!tocCreate && (!form.reference || !form.totalAmount)) || !form.documentDate || !form.dueDate || (tocCreate && !tocLines.some((l) => l.description && l.unit_price))}
           >
             {create.isPending ? (tocCreate ? 'A criar no TOConline...' : 'A guardar...') : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>

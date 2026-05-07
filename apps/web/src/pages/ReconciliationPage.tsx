@@ -16,15 +16,30 @@ interface Movement {
   id: string; date: string; amount: number; description: string; status: string
   bankAccount?: { id: string; name: string }; category?: { name: string }
 }
+interface TocRawDoc {
+  id: number; document_no: string; document_type?: string
+  date: string; due_date?: string
+  gross_total: number; pending_total: number; status: number
+  currency_iso_code?: string
+  customer_business_name?: string; customer_tax_registration_number?: string; customer_id?: number
+  supplier_business_name?: string; supplier_tax_registration_number?: string; supplier_id?: number
+  [key: string]: unknown
+}
 interface Document {
   id: string; reference: string; entityName: string; dueDate: string
   pendingAmount: number; totalAmount: number; status: string
-  category: { name: string; color: string; launchToc: boolean }
+  category?: { name: string; color: string; launchToc: boolean } | null
   type: 'receivable' | 'payable'
+  _src: 'local' | 'toc'
+  _tocRaw?: TocRawDoc
+  tocSalesDocId?: string | null
+  tocPurchasesDocId?: string | null
 }
 interface Allocation {
   type: 'receivable' | 'payable'; id: string; amount: number
   reference: string; entityName: string; pendingAmount: number
+  _src: 'local' | 'toc'
+  _tocRaw?: TocRawDoc
 }
 interface RecHistoryItem {
   id: string; status: string; isDryRun: boolean; totalMovements: number; totalAllocated: number
@@ -127,13 +142,27 @@ export default function ReconciliationPage() {
   })
   const { data: receivablesData } = useQuery({
     queryKey: ['receivables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[] }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL&limit=200`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
   })
   const { data: payablesData } = useQuery({
     queryKey: ['payables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[] }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL&limit=200`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
+  })
+  const { data: tocSalesData } = useQuery({
+    queryKey: ['toc-sales', selectedClientId],
+    queryFn: () => api.get<TocRawDoc[]>(`/toconline/${selectedClientId}/sales`),
+    enabled: !!selectedClientId,
+    retry: false,
+    throwOnError: false,
+  })
+  const { data: tocPurchasesData } = useQuery({
+    queryKey: ['toc-purchases', selectedClientId],
+    queryFn: () => api.get<TocRawDoc[]>(`/toconline/${selectedClientId}/purchases`),
+    enabled: !!selectedClientId,
+    retry: false,
+    throwOnError: false,
   })
   const { data: historyData } = useQuery({
     queryKey: ['reconciliations', selectedClientId, historyLimit],
@@ -142,11 +171,70 @@ export default function ReconciliationPage() {
   })
 
   // ── Raw lists ────────────────────────────────────────────────────────────────
-  const allMovements = movementsData?.items ?? []
+  const allMovements = (movementsData?.items ?? []).filter((m) => m.status !== 'RECONCILED')
+
+  // IDs already imported into local DB (to avoid showing them twice)
+  const importedSalesIds = useMemo(() => new Set(
+    (receivablesData?.items ?? []).map((r) => r.tocSalesDocId).filter(Boolean) as string[]
+  ), [receivablesData])
+  const importedPurchaseIds = useMemo(() => new Set(
+    (payablesData?.items ?? []).map((p) => p.tocPurchasesDocId).filter(Boolean) as string[]
+  ), [payablesData])
+
+  // TOConline-only docs not yet imported
+  const tocSalesOnly = useMemo(() => {
+    const SALES_TYPES = new Set(['ft', 'fs', 'fr'])
+    return (tocSalesData ?? []).filter((d) => {
+      if (importedSalesIds.has(String(d.id))) return false
+      const s = Number(d.status)
+      if (s === 0 || s === 3 || s === 4) return false
+      if (Number(d.pending_total) < 0.01) return false
+      return SALES_TYPES.has((d.document_type ?? '').toLowerCase())
+    })
+  }, [tocSalesData, importedSalesIds])
+
+  const tocPurchasesOnly = useMemo(() => {
+    const PURCHASE_TYPES = new Set(['fc', 'dsp', 'ndf'])
+    return (tocPurchasesData ?? []).filter((d) => {
+      if (importedPurchaseIds.has(String(d.id))) return false
+      const s = Number(d.status)
+      if (s === 0 || s === 3 || s === 4) return false
+      if (Number(d.pending_total) < 0.01) return false
+      return PURCHASE_TYPES.has((d.document_type ?? '').toLowerCase())
+    })
+  }, [tocPurchasesData, importedPurchaseIds])
+
   const allDocs: Document[] = useMemo(() => [
-    ...(receivablesData?.items ?? []).map((r) => ({ ...r, type: 'receivable' as const })),
-    ...(payablesData?.items ?? []).map((p) => ({ ...p, type: 'payable' as const })),
-  ], [receivablesData, payablesData])
+    ...(receivablesData?.items ?? []).map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
+    ...(payablesData?.items ?? []).map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
+    ...tocSalesOnly.map((d): Document => ({
+      id: `toc-${d.id}`,
+      reference: d.document_no,
+      entityName: d.customer_business_name ?? '—',
+      dueDate: d.due_date ?? d.date,
+      pendingAmount: d.pending_total,
+      totalAmount: d.gross_total,
+      status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
+      type: 'receivable',
+      _src: 'toc',
+      _tocRaw: d,
+    })),
+    ...tocPurchasesOnly.map((d): Document => ({
+      id: `toc-${d.id}`,
+      reference: d.document_no,
+      entityName: d.supplier_business_name ?? '—',
+      dueDate: d.due_date ?? d.date,
+      pendingAmount: d.pending_total,
+      totalAmount: d.gross_total,
+      status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
+      type: 'payable',
+      _src: 'toc',
+      _tocRaw: d,
+    })),
+  ], [receivablesData, payablesData, tocSalesOnly, tocPurchasesOnly])
+
+  const docsTruncated = (receivablesData?.total ?? 0) > (receivablesData?.items?.length ?? 0)
+    || (payablesData?.total ?? 0) > (payablesData?.items?.length ?? 0)
 
   // ── Unique bank accounts for filter dropdown ──────────────────────────────
   const bankAccounts = useMemo(() => {
@@ -232,6 +320,7 @@ export default function ReconciliationPage() {
       setAllocations((prev) => [...prev, {
         type: d.type, id: d.id, amount,
         reference: d.reference, entityName: d.entityName, pendingAmount: Number(d.pendingAmount),
+        _src: d._src, _tocRaw: d._tocRaw,
       }])
     }
   }
@@ -253,14 +342,48 @@ export default function ReconciliationPage() {
   })
 
   const confirmMutation = useMutation({
-    mutationFn: (payload?: { movementIds: string[]; allocations: { type: string; id: string; amount: number }[]; isDryRun: boolean }) =>
-      api.post(`/treasury/${selectedClientId}/reconciliations/confirm`, payload ?? {
+    mutationFn: async () => {
+      // For TOConline-only allocations, auto-import first to get a local DB id
+      const resolvedAllocations = await Promise.all(
+        allocations.map(async (a) => {
+          if (a._src !== 'toc' || !a._tocRaw) return { type: a.type, id: a.id, amount: a.amount }
+          const raw = a._tocRaw
+          const isRec = a.type === 'receivable'
+          const endpoint = `/treasury/${selectedClientId}/${isRec ? 'receivables' : 'payables'}`
+          const body = isRec ? {
+            entityName: raw.customer_business_name,
+            entityNif: raw.customer_tax_registration_number ?? undefined,
+            tocCustomerId: raw.customer_id ? String(raw.customer_id) : undefined,
+            tocSalesDocId: String(raw.id),
+            reference: raw.document_no,
+            documentDate: raw.date,
+            dueDate: raw.due_date ?? raw.date,
+            totalAmount: raw.pending_total,
+            currency: raw.currency_iso_code ?? 'EUR',
+          } : {
+            entityName: raw.supplier_business_name,
+            entityNif: raw.supplier_tax_registration_number ?? undefined,
+            tocSupplierId: raw.supplier_id ? String(raw.supplier_id) : undefined,
+            tocPurchasesDocId: String(raw.id),
+            reference: raw.document_no,
+            documentDate: raw.date,
+            dueDate: raw.due_date ?? raw.date,
+            totalAmount: raw.pending_total,
+            currency: raw.currency_iso_code ?? 'EUR',
+          }
+          const imported = await api.post<{ id: string }>(endpoint, body)
+          return { type: a.type, id: (imported as { id: string }).id, amount: a.amount }
+        })
+      )
+      return api.post(`/treasury/${selectedClientId}/reconciliations/confirm`, {
         movementIds: selectedMovements.map((m) => m.id),
-        allocations: allocations.map((a) => ({ type: a.type, id: a.id, amount: a.amount })),
+        allocations: resolvedAllocations,
         isDryRun,
-      }),
+      })
+    },
     onSuccess: () => {
-      ['movements-pending', 'receivables-pending', 'payables-pending', 'reconciliations', 'movements', 'receivables', 'payables']
+      ['movements-pending', 'receivables-pending', 'payables-pending', 'reconciliations',
+        'movements', 'receivables', 'payables', 'toc-sales', 'toc-purchases']
         .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
       clearAll(); setShowModal(false)
       toast.success(isDryRun ? 'Simulação concluída (dry-run).' : 'Reconciliação concluída com sucesso.')
@@ -269,19 +392,14 @@ export default function ReconciliationPage() {
   })
 
   // Quick match — confirm immediately without modal
-  function quickMatch() {
-    confirmMutation.mutate({
-      movementIds: selectedMovements.map((m) => m.id),
-      allocations: allocations.map((a) => ({ type: a.type, id: a.id, amount: a.amount })),
-      isDryRun,
-    })
-  }
+  function quickMatch() { confirmMutation.mutate() }
 
   const reverse = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
       api.post(`/treasury/${selectedClientId}/reconciliations/${id}/reverse`, { reason }),
     onSuccess: () => {
-      ['reconciliations', 'movements-pending', 'movements', 'receivables-pending', 'receivables', 'payables-pending', 'payables']
+      ['reconciliations', 'movements-pending', 'movements', 'receivables-pending', 'receivables',
+        'payables-pending', 'payables', 'toc-sales', 'toc-purchases']
         .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
       setReverseId(null); setReverseReason('')
       toast.success('Reconciliação revertida.')
@@ -296,9 +414,8 @@ export default function ReconciliationPage() {
     const selected = !!selectedMovements.find((x) => x.id === m.id)
     const isCredit = Number(m.amount) >= 0
     const amtCls = isCredit ? 'text-emerald-700' : 'text-red-700'
-    const isReconciled = m.status === 'RECONCILED'
-    const isBlocked = isReconciled || (currentDirection !== null && !selected &&
-      ((isCredit && currentDirection === 'EXPENSE') || (!isCredit && currentDirection === 'REVENUE')))
+    const isBlocked = !selected && currentDirection !== null &&
+      ((isCredit && currentDirection === 'EXPENSE') || (!isCredit && currentDirection === 'REVENUE'))
     return (
       <button
         onClick={() => toggleMovement(m)}
@@ -310,12 +427,7 @@ export default function ReconciliationPage() {
           ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
           : <Square className={`w-4 h-4 flex-shrink-0 ${isBlocked ? 'text-gray-200' : 'text-gray-300'}`} />}
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-900 truncate">{m.description}</span>
-            {isReconciled && (
-              <span className="inline-flex items-center text-[10px] font-semibold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">reconciliado</span>
-            )}
-          </div>
+          <span className="text-sm text-gray-900 truncate">{m.description}</span>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className="text-xs text-gray-400">{formatDate(m.date)}</span>
             {m.bankAccount && <><span className="text-gray-200">·</span><span className="text-xs text-gray-400 truncate">{m.bankAccount.name}</span></>}
@@ -347,18 +459,23 @@ export default function ReconciliationPage() {
         {selected
           ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
           : <Square className={`w-4 h-4 flex-shrink-0 ${isBlocked ? 'text-gray-200' : isSuggested ? 'text-amber-400' : 'text-gray-300'}`} />}
-        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: d.category.color }} />
+        {d.category
+          ? <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: d.category.color }} />
+          : <div className="w-2 h-2 rounded-full flex-shrink-0 bg-gray-200" />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm text-gray-900">{d.reference}</span>
             {d.status === 'PARTIAL' && <Badge variant="yellow">parc. liquidado</Badge>}
+            {d._src === 'toc' && (
+              <span className="inline-flex items-center text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-full">TOC</span>
+            )}
             {isSuggested && (
               <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
                 <Zap className="w-2.5 h-2.5" /> sugerido
               </span>
             )}
           </div>
-          <div className="text-xs text-gray-400 mt-0.5 truncate">{d.entityName} · {d.category.name}</div>
+          <div className="text-xs text-gray-400 mt-0.5 truncate">{d.entityName}{d.category ? ` · ${d.category.name}` : ''}</div>
         </div>
         <div className="text-right whitespace-nowrap flex-shrink-0">
           <div className={`text-sm font-semibold ${amtCls}`}>{formatCurrency(Number(d.pendingAmount))}</div>
@@ -578,6 +695,12 @@ export default function ReconciliationPage() {
 
           {/* Document list */}
           <div className="flex-1 overflow-y-auto" style={{ maxHeight: '420px' }}>
+            {docsTruncated && (
+              <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-700 flex items-center gap-1.5">
+                <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                Existem mais documentos do que os mostrados. Use filtros para os localizar.
+              </div>
+            )}
             {pendingReceivables.length > 0 && (
               <>
                 <SectionHeader label="↓ Contas a Receber" count={pendingReceivables.length} sign="credit" />
@@ -593,7 +716,7 @@ export default function ReconciliationPage() {
             {pendingDocs.length === 0 && (
               <div className="px-4 py-10 text-center text-gray-400 text-sm">
                 {allDocs.length === 0
-                  ? 'Sem documentos pendentes'
+                  ? 'Sem documentos pendentes (a receber ou a pagar) em aberto.'
                   : 'Nenhum resultado para os filtros aplicados'}
               </div>
             )}
@@ -857,7 +980,7 @@ export default function ReconciliationPage() {
                 {preview.isPending ? 'A analisar...' : 'Pré-visualizar'}
               </button>
             )}
-            <button onClick={() => confirmMutation.mutate(undefined)} className="btn-primary flex-1" disabled={!canConfirm || confirmMutation.isPending}>
+            <button onClick={() => confirmMutation.mutate()} className="btn-primary flex-1" disabled={!canConfirm || confirmMutation.isPending}>
               {confirmMutation.isPending ? 'A confirmar...' : 'Confirmar'}
             </button>
           </div>

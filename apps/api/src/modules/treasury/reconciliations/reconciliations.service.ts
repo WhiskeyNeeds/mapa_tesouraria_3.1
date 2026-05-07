@@ -83,7 +83,7 @@ export class TreasuryReconciliationsService {
       if (alloc.amount > Number(doc.pendingAmount)) throw httpError(400, `Allocation ${alloc.amount} exceeds pending ${doc.pendingAmount} for ${doc.reference}`)
 
       totalAllocated += alloc.amount
-      allocDetails.push({ ...alloc, doc, launchToc: (doc as { category: { launchToc: boolean } }).category.launchToc })
+      allocDetails.push({ ...alloc, doc, launchToc: (doc as { category?: { launchToc: boolean } | null }).category?.launchToc ?? false })
     }
 
     if (Math.abs(totalAllocated - Math.abs(totalMovements)) > 0.01) {
@@ -148,8 +148,8 @@ export class TreasuryReconciliationsService {
 
       for (const alloc of data.allocations) {
         const launchToc = alloc.type === 'receivable'
-          ? (await tx.treasuryReceivable.findUnique({ where: { id: alloc.id }, include: { category: true } }))?.category.launchToc
-          : (await tx.treasuryPayable.findUnique({ where: { id: alloc.id }, include: { category: true } }))?.category.launchToc
+          ? (await tx.treasuryReceivable.findUnique({ where: { id: alloc.id }, include: { category: true } }))?.category?.launchToc ?? false
+          : (await tx.treasuryPayable.findUnique({ where: { id: alloc.id }, include: { category: true } }))?.category?.launchToc ?? false
 
         if (alloc.type === 'receivable') {
           let tocReceiptId: string | undefined
