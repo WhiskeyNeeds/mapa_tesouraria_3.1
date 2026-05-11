@@ -78,7 +78,7 @@ export class TreasuryBankMovementsService {
 
   async list(clientId: string, filters: {
     bankAccountId?: string
-    status?: TreasuryMovementStatus
+    status?: TreasuryMovementStatus | TreasuryMovementStatus[]
     categoryId?: string
     dateFrom?: string
     dateTo?: string
@@ -90,12 +90,15 @@ export class TreasuryBankMovementsService {
     limit?: number
   }) {
     const { page = 1, limit = 50, bankAccountId, status, categoryId, dateFrom, dateTo, search, direction, sortBy = 'date', sortDir = 'desc' } = filters
+    const statusFilter = Array.isArray(status)
+      ? { status: { in: status } }
+      : status ? { status } : {}
     const where: Prisma.TreasuryBankMovementWhereInput = {
       clientId,
       deletedAt: null,
       bankAccount: { deletedAt: null, isActive: true },
       ...(bankAccountId ? { bankAccountId } : {}),
-      ...(status ? { status } : {}),
+      ...statusFilter,
       ...(categoryId ? { categoryId } : {}),
       ...(direction === 'income' ? { amount: { gt: 0 } } : direction === 'expense' ? { amount: { lt: 0 } } : {}),
       ...(search ? { normalizedDesc: { contains: this.normalize(search) } } : {}),

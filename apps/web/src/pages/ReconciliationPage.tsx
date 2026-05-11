@@ -14,6 +14,7 @@ import {
 
 interface Movement {
   id: string; date: string; amount: number; description: string; status: string
+  reconciledAmount?: number
   bankAccount?: { id: string; name: string }; category?: { name: string }
 }
 interface TocRawDoc {
@@ -137,17 +138,17 @@ export default function ReconciliationPage() {
 
   const { data: movementsData, refetch: refetchMovements } = useQuery({
     queryKey: ['movements-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Movement[] }>(`/treasury/${selectedClientId}/movements?limit=500&sortBy=date&sortDir=desc`),
+    queryFn: () => api.get<{ items: Movement[] }>(`/treasury/${selectedClientId}/movements?status=UNCLASSIFIED,CLASSIFIED,PARTIAL&limit=500&sortBy=date&sortDir=desc`),
     enabled: !!selectedClientId,
   })
   const { data: receivablesData } = useQuery({
     queryKey: ['receivables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL&limit=500&sortBy=dueDate&sortDir=asc`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
   })
   const { data: payablesData } = useQuery({
     queryKey: ['payables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL&limit=500&sortBy=dueDate&sortDir=asc`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
   })
   const { data: tocSalesData } = useQuery({
@@ -171,7 +172,7 @@ export default function ReconciliationPage() {
   })
 
   // ── Raw lists ────────────────────────────────────────────────────────────────
-  const allMovements = (movementsData?.items ?? []).filter((m) => m.status !== 'RECONCILED')
+  const allMovements = movementsData?.items ?? []
 
   // IDs already imported into local DB (to avoid showing them twice)
   const importedSalesIds = useMemo(() => new Set(
@@ -205,8 +206,8 @@ export default function ReconciliationPage() {
   }, [tocPurchasesData, importedPurchaseIds])
 
   const allDocs: Document[] = useMemo(() => [
-    ...(receivablesData?.items ?? []).map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
-    ...(payablesData?.items ?? []).map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
+    ...(receivablesData?.items ?? []).filter((r) => r.status !== 'SETTLED').map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
+    ...(payablesData?.items ?? []).filter((p) => p.status !== 'SETTLED').map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
     ...tocSalesOnly.map((d): Document => ({
       id: `toc-${d.id}`,
       reference: d.document_no,
@@ -284,13 +285,29 @@ export default function ReconciliationPage() {
   const pendingPayables     = useMemo(() => pendingDocs.filter((d) => d.type === 'payable'),        [pendingDocs])
 
   // ── Totals ────────────────────────────────────────────────────────────────
-  const totalMovements = selectedMovements.reduce((s, m) => s + Math.abs(Number(m.amount)), 0)
+  const totalMovements = selectedMovements.reduce((s, m) => {
+    const remaining = Math.abs(Number(m.amount)) - Math.max(0, Number(m.reconciledAmount ?? 0))
+    return s + remaining
+  }, 0)
   const totalAllocated = allocations.reduce((s, a) => s + a.amount, 0)
-  const diff = Math.abs(totalMovements - totalAllocated)
-  const canConfirm = selectedMovements.length > 0 && selectedDocs.length > 0 && diff < 0.01 && totalMovements > 0
+  // surplus > 0 when movement is only partially used (e.g. 50€ movement, 28.60€ invoice)
+  const movementSurplus = Math.max(0, totalMovements - totalAllocated)
+  // over-allocation is always invalid; movement surplus is allowed (movement becomes PARTIAL)
+  const canConfirm = selectedMovements.length > 0 && selectedDocs.length > 0
+    && totalAllocated > 0 && totalAllocated <= totalMovements + 0.01 && totalMovements > 0
 
-  // Quick match: 1 movement, 1 doc, amounts match exactly
+  // Quick match: exact 1:1, movement fully used, invoice fully covered
   const isQuickMatch = selectedMovements.length === 1 && selectedDocs.length === 1 && canConfirm
+    && allocations.length === 1 && Math.abs(allocations[0].amount - allocations[0].pendingAmount) < 0.01
+    && movementSurplus < 0.01
+
+  // Partial match: movement fully used but invoice only partially covered
+  const isPartialMatch = selectedMovements.length === 1 && selectedDocs.length === 1 && canConfirm
+    && allocations.length === 1 && allocations[0].amount < allocations[0].pendingAmount - 0.01
+    && movementSurplus < 0.01
+
+  // Remaining invoice balance after allocations
+  const totalPendingAfter = allocations.reduce((s, a) => s + Math.max(0, a.pendingAmount - a.amount), 0)
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   function toggleMovement(m: Movement) {
@@ -303,7 +320,22 @@ export default function ReconciliationPage() {
         const mDir = Number(m.amount) >= 0 ? 'REVENUE' : 'EXPENSE'
         if (mDir !== currentDirection) return
       }
-      setSelectedMovements((prev) => [...prev, m])
+      setSelectedMovements((prev) => {
+        const next = [...prev, m]
+        // Recompute allocation amounts with the updated totalMovements
+        const newTotMov = next.reduce((s, mv) =>
+          s + Math.abs(Number(mv.amount)) - Math.max(0, Number(mv.reconciledAmount ?? 0)), 0)
+        setAllocations((prevAllocs) => {
+          let spent = 0
+          return prevAllocs.map((a) => {
+            const available = Math.max(0, newTotMov - spent)
+            const newAmount = Math.min(a.pendingAmount, available)
+            spent += newAmount
+            return { ...a, amount: newAmount }
+          })
+        })
+        return next
+      })
     }
   }
 
@@ -416,6 +448,10 @@ export default function ReconciliationPage() {
     const amtCls = isCredit ? 'text-emerald-700' : 'text-red-700'
     const isBlocked = !selected && currentDirection !== null &&
       ((isCredit && currentDirection === 'EXPENSE') || (!isCredit && currentDirection === 'REVENUE'))
+    const isPartial = m.status === 'PARTIAL'
+    const fullAmt = Math.abs(Number(m.amount))
+    const reconciledAmt = Math.max(0, Number(m.reconciledAmount ?? 0))
+    const remainingAmt = fullAmt - reconciledAmt
     return (
       <button
         onClick={() => toggleMovement(m)}
@@ -427,15 +463,28 @@ export default function ReconciliationPage() {
           ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
           : <Square className={`w-4 h-4 flex-shrink-0 ${isBlocked ? 'text-gray-200' : 'text-gray-300'}`} />}
         <div className="min-w-0 flex-1">
-          <span className="text-sm text-gray-900 truncate">{m.description}</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-900 truncate">{m.description}</span>
+            {isPartial && <Badge variant="yellow">parc. reconciliado</Badge>}
+          </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className="text-xs text-gray-400">{formatDate(m.date)}</span>
             {m.bankAccount && <><span className="text-gray-200">·</span><span className="text-xs text-gray-400 truncate">{m.bankAccount.name}</span></>}
           </div>
+          {isPartial && (
+            <div className="text-[11px] text-amber-700 mt-0.5">
+              reconciliado {formatCurrency(reconciledAmt)} · disponível {formatCurrency(remainingAmt)}
+            </div>
+          )}
         </div>
-        <span className={`text-sm font-semibold whitespace-nowrap ${amtCls}`}>
-          {isCredit ? '+' : '−'}{formatCurrency(Math.abs(Number(m.amount)))}
-        </span>
+        <div className="text-right whitespace-nowrap flex-shrink-0">
+          <div className={`text-sm font-semibold ${amtCls}`}>
+            {isCredit ? '+' : '−'}{formatCurrency(isPartial ? remainingAmt : fullAmt)}
+          </div>
+          {isPartial && (
+            <div className="text-[11px] text-amber-600 font-medium">de {formatCurrency(fullAmt)}</div>
+          )}
+        </div>
       </button>
     )
   }
@@ -476,9 +525,17 @@ export default function ReconciliationPage() {
             )}
           </div>
           <div className="text-xs text-gray-400 mt-0.5 truncate">{d.entityName}{d.category ? ` · ${d.category.name}` : ''}</div>
+          {d.status === 'PARTIAL' && (
+            <div className="text-[11px] text-amber-700 mt-0.5">
+              pago {formatCurrency(Number(d.totalAmount) - Number(d.pendingAmount))} · restante {formatCurrency(Number(d.pendingAmount))} de {formatCurrency(Number(d.totalAmount))}
+            </div>
+          )}
         </div>
         <div className="text-right whitespace-nowrap flex-shrink-0">
           <div className={`text-sm font-semibold ${amtCls}`}>{formatCurrency(Number(d.pendingAmount))}</div>
+          {d.status === 'PARTIAL' && (
+            <div className="text-[11px] text-amber-600 font-medium">de {formatCurrency(Number(d.totalAmount))}</div>
+          )}
           <div className="text-xs text-gray-400">{formatDate(d.dueDate)}</div>
         </div>
       </button>
@@ -725,10 +782,12 @@ export default function ReconciliationPage() {
           {/* Footer with selection info */}
           {selectedDocs.length > 0 && (
             <div className="px-4 py-2.5 border-t border-gray-100 bg-primary-50/50 flex items-center justify-between text-xs">
-              <span className="text-primary-700 font-medium">{selectedDocs.length} selecionado(s) · {formatCurrency(totalAllocated)}</span>
-              {diff > 0.01
-                ? <span className="text-red-600 font-medium">Diferença: {formatCurrency(diff)}</span>
-                : <span className="text-emerald-600 font-medium">✓ Balanceado</span>}
+              <span className="text-primary-700 font-medium">{selectedDocs.length} selecionado(s) · {formatCurrency(selectedDocs.reduce((s, d) => s + Number(d.pendingAmount), 0))}</span>
+              {totalAllocated > totalMovements + 0.01
+                ? <span className="text-red-600 font-medium">Excede: {formatCurrency(totalAllocated - totalMovements)}</span>
+                : totalAllocated > 0 && movementSurplus > 0.01
+                ? <span className="text-amber-600 font-medium">Restará {formatCurrency(movementSurplus)} no movimento</span>
+                : totalAllocated > 0 && <span className="text-emerald-600 font-medium">✓ Balanceado</span>}
             </div>
           )}
         </div>
@@ -754,10 +813,18 @@ export default function ReconciliationPage() {
                 <span className="text-gray-500 hidden sm:block">
                   Mov.: <span className="font-semibold text-gray-900">{formatCurrency(totalMovements)}</span>
                 </span>
-                {diff > 0.01
-                  ? <span className="text-red-600 font-medium text-xs">Diferença: {formatCurrency(diff)}</span>
-                  : selectedDocs.length > 0 && <span className="text-emerald-600 font-medium text-xs">✓ Balanceado</span>}
+                {totalAllocated > totalMovements + 0.01
+                  ? <span className="text-red-600 font-medium text-xs">Excede: {formatCurrency(totalAllocated - totalMovements)}</span>
+                  : totalAllocated > 0 && movementSurplus > 0.01
+                  ? <span className="text-amber-600 font-medium text-xs">Restará {formatCurrency(movementSurplus)} no movimento</span>
+                  : totalAllocated > 0 && <span className="text-emerald-600 font-medium text-xs">✓ Balanceado</span>}
               </div>
+              {totalPendingAfter > 0.01 && totalAllocated > 0 && (
+                <div className="flex items-center gap-1 text-[11px] text-amber-700 font-medium mt-0.5">
+                  <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                  Ficará {formatCurrency(totalPendingAfter)} por liquidar {allocations.length === 1 ? 'neste documento' : 'nos documentos selecionados'}
+                </div>
+              )}
               {isDryRun && (
                 <div className="text-[10px] text-amber-600 font-medium mt-0.5">Modo dry-run activo</div>
               )}
@@ -781,8 +848,19 @@ export default function ReconciliationPage() {
                 </button>
               )}
 
+              {/* Partial match — 1:1 but movement doesn't fully cover the invoice */}
+              {isPartialMatch && (
+                <button
+                  onClick={() => { setPreviewData(null); setShowModal(true) }}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white transition-colors shadow-btn"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Liquidar parcialmente
+                </button>
+              )}
+
               {/* Full reconciliation modal */}
-              {selectedDocs.length > 0 && (
+              {selectedDocs.length > 0 && !isPartialMatch && (
                 <button
                   onClick={() => { setPreviewData(null); setShowModal(true) }}
                   className="btn-primary text-sm py-2"
@@ -807,10 +885,13 @@ export default function ReconciliationPage() {
             const isExpanded = expandedId === rec.id
             return (
               <div key={rec.id}>
-                <div className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
-                  <button onClick={() => setExpandedId(isExpanded ? null : rec.id)} className="text-gray-300 hover:text-gray-500 flex-shrink-0">
+                <div
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors cursor-pointer"
+                  onClick={() => setExpandedId(isExpanded ? null : rec.id)}
+                >
+                  <span className="text-gray-300 flex-shrink-0">
                     {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                  </button>
+                  </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant={statusVariant(rec.status)}>{statusLabel(rec.status)}</Badge>
@@ -833,7 +914,7 @@ export default function ReconciliationPage() {
                     <div className="text-sm font-semibold text-gray-900">{formatCurrency(rec.totalAllocated)}</div>
                     {rec.status === 'CONFIRMED' && (
                       <button
-                        onClick={() => { setReverseId(rec.id); setReverseReason('') }}
+                        onClick={(e) => { e.stopPropagation(); setReverseId(rec.id); setReverseReason('') }}
                         title="Reverter reconciliação"
                         className="p-1.5 text-gray-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
                       >
@@ -948,6 +1029,12 @@ export default function ReconciliationPage() {
                         setAllocations((prev) => prev.map((x, j) => j === i ? { ...x, amount: Math.min(v, x.pendingAmount) } : x))
                       }}
                     />
+                    {a.amount < a.pendingAmount - 0.01 && (
+                      <div className="flex items-center gap-1 mt-1.5 text-[11px] text-amber-700">
+                        <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                        Restará <strong>{formatCurrency(a.pendingAmount - a.amount)}</strong> por liquidar nesta fatura
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -955,9 +1042,21 @@ export default function ReconciliationPage() {
           </div>
 
           {/* Balance bar */}
-          <div className={`rounded-xl px-4 py-3 text-sm font-medium flex items-center justify-between ${diff < 0.01 ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+          <div className={`rounded-xl px-4 py-3 text-sm font-medium flex items-center justify-between ${
+            totalAllocated > totalMovements + 0.01
+              ? 'bg-red-50 text-red-800 border border-red-200'
+              : movementSurplus > 0.01
+              ? 'bg-amber-50 text-amber-800 border border-amber-200'
+              : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+          }`}>
             <span>Alocado: <strong>{formatCurrency(totalAllocated)}</strong> · Movimentos: <strong>{formatCurrency(totalMovements)}</strong></span>
-            <span>{diff < 0.01 ? '✓ Balanceado' : `Diferença: ${formatCurrency(diff)}`}</span>
+            <span>
+              {totalAllocated > totalMovements + 0.01
+                ? `Excede: ${formatCurrency(totalAllocated - totalMovements)}`
+                : totalAllocated > 0 && movementSurplus > 0.01
+                ? `Restará ${formatCurrency(movementSurplus)} no movimento`
+                : '✓ Balanceado'}
+            </span>
           </div>
 
           {previewData && (

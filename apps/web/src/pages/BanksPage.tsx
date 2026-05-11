@@ -7,7 +7,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatIbanInput, sanitizeIban, validateIban } from '@/lib/iban'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw } from 'lucide-react'
 
 const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander', 'NovoBanco'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
@@ -65,6 +65,134 @@ function BankAvatar({ bankName }: { bankName: string }) {
 
 interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean }
 interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { id: string; name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
+
+interface ReconciliationLink {
+  reconciliationId: string
+  movementId: string
+  amount: number
+  reconciliation: {
+    id: string
+    status: string
+    isDryRun: boolean
+    direction: string
+    receivables: Array<{
+      receivableId: string
+      amountAllocated: number
+      receivable: { id: string; reference: string; entityName: string }
+    }>
+    payables: Array<{
+      payableId: string
+      amountAllocated: number
+      payable: { id: string; reference: string; entityName: string }
+    }>
+  }
+}
+
+function MovementReconciliationsSubRows({ clientId, movementId, movementAmount, colSpan }: {
+  clientId: string
+  movementId: string
+  movementAmount: number
+  colSpan: number
+}) {
+  const { data: links = [], isLoading } = useQuery<ReconciliationLink[]>({
+    queryKey: ['movement-reconciliation-links', clientId, movementId],
+    queryFn: () => api.get(`/treasury/${clientId}/movements/${movementId}/reconciliations`),
+  })
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={colSpan} className="pl-14 py-2 text-xs text-gray-400 bg-primary-50/30 border-b border-gray-100">
+          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar documentos reconciliados...
+        </td>
+      </tr>
+    )
+  }
+
+  type DocRow = {
+    key: string
+    type: 'receivable' | 'payable'
+    reference: string
+    entityName: string
+    allocatedAmount: number
+    reconStatus: string
+    isDryRun: boolean
+  }
+
+  const rows: DocRow[] = links.flatMap((link) => [
+    ...link.reconciliation.receivables.map((r) => ({
+      key: `r-${link.reconciliationId}-${r.receivableId}`,
+      type: 'receivable' as const,
+      reference: r.receivable.reference,
+      entityName: r.receivable.entityName,
+      allocatedAmount: Number(r.amountAllocated),
+      reconStatus: link.reconciliation.status,
+      isDryRun: link.reconciliation.isDryRun,
+    })),
+    ...link.reconciliation.payables.map((p) => ({
+      key: `p-${link.reconciliationId}-${p.payableId}`,
+      type: 'payable' as const,
+      reference: p.payable.reference,
+      entityName: p.payable.entityName,
+      allocatedAmount: Number(p.amountAllocated),
+      reconStatus: link.reconciliation.status,
+      isDryRun: link.reconciliation.isDryRun,
+    })),
+  ])
+
+  const reconciledTotal = links
+    .filter((l) => l.reconciliation.status === 'CONFIRMED')
+    .reduce((s, l) => s + Math.abs(Number(l.amount)), 0)
+  const remaining = Math.abs(movementAmount) - reconciledTotal
+
+  if (!rows.length) {
+    return (
+      <tr>
+        <td colSpan={colSpan} className="pl-14 py-2 text-xs text-gray-400 bg-primary-50/30 border-b border-gray-100">
+          Sem documentos associados
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <>
+      {rows.map((row) => (
+        <tr key={row.key} className={`bg-primary-50/20 border-b border-gray-100/80 ${row.reconStatus === 'REVERSED' ? 'opacity-60' : ''}`}>
+          <td colSpan={colSpan} className="pl-10 pr-4 py-1.5">
+            <div className="flex items-center gap-2 text-xs">
+              <ChevronRight className="w-3 h-3 text-primary-400 flex-shrink-0" />
+              <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${
+                row.type === 'receivable' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {row.type === 'receivable' ? 'A Receber' : 'A Pagar'}
+              </span>
+              <span className="font-medium text-gray-700">{row.reference}</span>
+              <span className="text-gray-400 truncate">{row.entityName}</span>
+              {row.isDryRun && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 flex-shrink-0">Dry-run</span>
+              )}
+              {row.reconStatus === 'REVERSED' && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 flex-shrink-0">Revertida</span>
+              )}
+              <span className="ml-auto font-semibold text-gray-700 flex-shrink-0">{formatCurrency(row.allocatedAmount)}</span>
+            </div>
+          </td>
+        </tr>
+      ))}
+      <tr className="bg-primary-50/30 border-b border-gray-200">
+        <td colSpan={colSpan} className="pl-10 pr-4 py-1.5 text-xs text-gray-500">
+          <div className="flex items-center justify-end gap-1.5">
+            <span>Restante disponível no movimento:</span>
+            <span className={`font-semibold ${remaining > 0.01 ? 'text-amber-600' : 'text-green-600'}`}>
+              {formatCurrency(remaining)}
+            </span>
+          </div>
+        </td>
+      </tr>
+    </>
+  )
+}
 interface MovementsResponse { total: number; page: number; limit: number; items: Movement[] }
 interface Summary { totalIncome: number; totalExpense: number; countIncome: number; countExpense: number; byStatus: Record<string, number> }
 interface Category { id: string; name: string; type: string; color: string; isArchived: boolean }
@@ -104,6 +232,7 @@ export default function BanksPage() {
   const [newMovement, setNewMovement] = useState({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' as 'income' | 'expense' })
   const [editDescId, setEditDescId] = useState<string | null>(null)
   const [editDesc, setEditDesc] = useState('')
+  const [expandedMovementIds, setExpandedMovementIds] = useState<Set<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bankDropdownRef = useRef<HTMLDivElement>(null)
   const carouselRef = useRef<HTMLDivElement>(null)
@@ -331,6 +460,15 @@ export default function BanksPage() {
 
   function clearFilters() {
     setSearch(''); setDateFrom(''); setDateTo(''); setDirection(''); setStatusFilter(''); setCategoryFilter(''); setPage(1)
+  }
+
+  function toggleMovementExpand(id: string) {
+    setExpandedMovementIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -649,11 +787,14 @@ export default function BanksPage() {
               <tbody className="divide-y divide-gray-50">
                 {movements?.items.map((m) => {
                   const gap = gapMap.get(m.id)
+                  const isExpandable = m.status === 'PARTIAL' || m.status === 'RECONCILED'
+                  const isMovExpanded = expandedMovementIds.has(m.id)
+                  const colSpan = selectedAccount ? 6 : 7
                   return (
                     <Fragment key={m.id}>
                       {gap && (
                         <tr className="bg-amber-50 border-y border-amber-200">
-                          <td colSpan={selectedAccount ? 6 : 7} className="px-5 py-2">
+                          <td colSpan={colSpan} className="px-5 py-2">
                             <div className="flex items-center gap-2 text-xs text-amber-700">
                               <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
                               <span>
@@ -667,7 +808,23 @@ export default function BanksPage() {
                         </tr>
                       )}
                       <tr className={`hover:bg-gray-50 group ${gap ? 'bg-amber-50/40' : ''}`}>
-                        <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(m.date)}</td>
+                        <td className="px-5 py-3 text-gray-500 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            {isExpandable ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleMovementExpand(m.id)}
+                                className="text-gray-300 hover:text-primary-500 flex-shrink-0 transition-colors"
+                                title={isMovExpanded ? 'Ocultar documentos reconciliados' : 'Ver documentos reconciliados'}
+                              >
+                                {isMovExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                              </button>
+                            ) : (
+                              <span className="w-3.5 h-3.5 flex-shrink-0" />
+                            )}
+                            {formatDate(m.date)}
+                          </div>
+                        </td>
                         {!selectedAccount && (
                           <td className="px-5 py-3 whitespace-nowrap">
                             {m.bankAccount && (
@@ -758,6 +915,14 @@ export default function BanksPage() {
                           </div>
                         </td>
                       </tr>
+                      {isExpandable && isMovExpanded && (
+                        <MovementReconciliationsSubRows
+                          clientId={selectedClientId!}
+                          movementId={m.id}
+                          movementAmount={m.amount}
+                          colSpan={colSpan}
+                        />
+                      )}
                     </Fragment>
                   )
                 })}

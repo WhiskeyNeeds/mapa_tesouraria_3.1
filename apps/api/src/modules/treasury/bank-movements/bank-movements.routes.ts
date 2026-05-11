@@ -15,7 +15,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as {
       bankAccountId?: string
-      status?: TreasuryMovementStatus
+      status?: string
       categoryId?: string
       dateFrom?: string
       dateTo?: string
@@ -26,8 +26,12 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       page?: string
       limit?: string
     }
+    const statusValue = q.status?.includes(',')
+      ? (q.status.split(',') as TreasuryMovementStatus[])
+      : (q.status as TreasuryMovementStatus | undefined)
     return reply.send(await svc.list(clientId, {
       ...q,
+      status: statusValue,
       page: q.page ? parseInt(q.page) : undefined,
       limit: q.limit ? parseInt(q.limit) : undefined,
     }))
@@ -229,6 +233,37 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const { clientId } = request.params as { clientId: string }
     const { bankAccountId } = request.query as { bankAccountId?: string }
     return reply.send(await svc.checkBalanceConsistency(clientId, bankAccountId))
+  })
+
+  fastify.get(`${prefix}/:id/reconciliations`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const movement = await fastify.prisma.treasuryBankMovement.findFirst({
+      where: { id, clientId, deletedAt: null },
+      select: { id: true },
+    })
+    if (!movement) throw httpError(404, 'Movement not found')
+
+    const links = await fastify.prisma.treasuryReconciliationMovement.findMany({
+      where: { movementId: id },
+      include: {
+        reconciliation: {
+          include: {
+            receivables: {
+              include: {
+                receivable: { select: { id: true, reference: true, entityName: true } },
+              },
+            },
+            payables: {
+              include: {
+                payable: { select: { id: true, reference: true, entityName: true } },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    return reply.send(links)
   })
 
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {

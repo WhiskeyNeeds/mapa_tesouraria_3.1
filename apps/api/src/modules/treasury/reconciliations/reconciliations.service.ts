@@ -67,7 +67,12 @@ export class TreasuryReconciliationsService {
     const hasNegative = movements.some((m) => Number(m.amount) < 0)
     if (hasPositive && hasNegative) throw httpError(400, 'Não é possível misturar movimentos de entrada e saída na mesma reconciliação')
 
-    const totalMovements = movements.reduce((sum, m) => sum + Number(m.amount), 0)
+    const totalMovements = movements.reduce((sum, m) => {
+      const fullAmt = Number(m.amount)
+      const reconciled = Math.max(0, Number(m.reconciledAmount ?? 0))
+      const remaining = Math.abs(fullAmt) - reconciled
+      return sum + (fullAmt >= 0 ? remaining : -remaining)
+    }, 0)
     const direction: TreasuryCategoryType = totalMovements >= 0 ? 'REVENUE' : 'EXPENSE'
 
     // Validate allocations
@@ -86,8 +91,8 @@ export class TreasuryReconciliationsService {
       allocDetails.push({ ...alloc, doc, launchToc: (doc as { category?: { launchToc: boolean } | null }).category?.launchToc ?? false })
     }
 
-    if (Math.abs(totalAllocated - Math.abs(totalMovements)) > 0.01) {
-      throw httpError(400, `Allocated (${totalAllocated}) must equal movements total (${Math.abs(totalMovements)})`)
+    if (totalAllocated > Math.abs(totalMovements) + 0.01) {
+      throw httpError(400, `Allocated (${totalAllocated.toFixed(2)}) exceeds movements total (${Math.abs(totalMovements).toFixed(2)})`)
     }
 
     const tocActions = allocDetails.filter((a) => a.launchToc).map((a) => ({
@@ -122,20 +127,27 @@ export class TreasuryReconciliationsService {
         },
       })
 
-      // Link movements
+      // Link movements — allocate proportionally when totalAllocated < totalMovements
       for (const movId of data.movementIds) {
         const mov = await tx.treasuryBankMovement.findUnique({ where: { id: movId } })
         if (!mov) continue
 
+        const movFullAmt = Math.abs(Number(mov.amount))
+        const movRemaining = movFullAmt - Math.max(0, Number(mov.reconciledAmount ?? 0))
+        const movAllocated = Math.abs(preview.totalMovements) > 0
+          ? Math.round(preview.totalAllocated * (movRemaining / Math.abs(preview.totalMovements)) * 100) / 100
+          : movRemaining
+
         await tx.treasuryReconciliationMovement.create({
-          data: { reconciliationId: recon.id, movementId: movId, amount: Number(mov.amount) },
+          data: { reconciliationId: recon.id, movementId: movId, amount: movAllocated },
         })
         if (!isDryRun) {
+          const newReconciledAmount = Number(mov.reconciledAmount) + movAllocated
           await tx.treasuryBankMovement.update({
             where: { id: movId },
             data: {
-              reconciledAmount: { increment: Math.abs(Number(mov.amount)) },
-              status: 'RECONCILED',
+              reconciledAmount: newReconciledAmount,
+              status: newReconciledAmount >= movFullAmt - 0.01 ? 'RECONCILED' : 'PARTIAL',
             },
           })
         }
@@ -256,9 +268,15 @@ export class TreasuryReconciliationsService {
     return this.prisma.$transaction(async (tx) => {
       // Reverse movements
       for (const link of recon.movements) {
+        const mov = await tx.treasuryBankMovement.findUnique({ where: { id: link.movementId } })
+        if (!mov) continue
+        const newReconciledAmount = Math.max(0, Number(mov.reconciledAmount) - Math.abs(Number(link.amount)))
         await tx.treasuryBankMovement.update({
           where: { id: link.movementId },
-          data: { reconciledAmount: { decrement: Math.abs(Number(link.amount)) }, status: 'CLASSIFIED' },
+          data: {
+            reconciledAmount: newReconciledAmount,
+            status: newReconciledAmount <= 0.01 ? 'CLASSIFIED' : 'PARTIAL',
+          },
         })
       }
 
