@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import type { FastifyInstance } from 'fastify'
 import { TreasuryBankMovementsService } from './bank-movements.service.js'
-import { parseStatementFile } from './parsers/index.js'
+import { parseStatementFile, parsePDF } from './parsers/index.js'
 import type { SupportedBank } from './parsers/index.js'
 import type { TreasuryMovementStatus } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
@@ -129,6 +129,9 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     if (!bankAccountId) throw httpError(400, 'bankAccountId is required')
     if (!bank) throw httpError(400, 'bank is required (CGD | BCP | BPI | Bankinter | Santander | NovoBanco)')
 
+    const isPDF = originalFileName?.toLowerCase().endsWith('.pdf') ||
+      (fileBuffer.length >= 4 && fileBuffer.slice(0, 4).toString('ascii') === '%PDF')
+
     // File-level duplicate check (account-scoped)
     const fileSha256 = createHash('sha256').update(fileBuffer).digest('hex')
     const existingImport = await fastify.prisma.treasuryBankImport.findFirst({
@@ -166,9 +169,11 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       return reply.status(409).send({ error: `Este ficheiro${fileName} já foi importado na conta "${accountName}" em ${when}.` })
     }
 
-    let movements: ReturnType<typeof parseStatementFile>
+    let movements: Awaited<ReturnType<typeof parsePDF>>
     try {
-      movements = parseStatementFile(fileBuffer, bank as SupportedBank)
+      movements = isPDF
+        ? await parsePDF(fileBuffer, bank as SupportedBank)
+        : parseStatementFile(fileBuffer, bank as SupportedBank)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao processar ficheiro'
       return reply.status(422).send({ error: msg })

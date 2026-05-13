@@ -6,6 +6,9 @@ import { parseBPI } from './bpi.js'
 import { parseBankinter } from './bankinter.js'
 import { parseSantander } from './santander.js'
 import { parseNovoBanco } from './novobanco.js'
+import { parsePDF } from './pdf.js'
+
+export { parsePDF }
 
 export type SupportedBank = 'CGD' | 'BCP' | 'BPI' | 'Bankinter' | 'Santander' | 'NovoBanco'
 

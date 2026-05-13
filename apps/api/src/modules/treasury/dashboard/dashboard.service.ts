@@ -343,7 +343,7 @@ export class TreasuryDashboardService {
     }
   }
 
-  async getCashPositioning(clientId: string, weeksAhead = 6) {
+  async getCashPositioning(clientId: string, weeksAhead = 12) {
     const now = new Date()
     now.setHours(0, 0, 0, 0)
 
@@ -357,8 +357,8 @@ export class TreasuryDashboardService {
     const currentMon = new Date(now)
     currentMon.setDate(now.getDate() - daysToMon)
 
-    // Build week windows: 2 past + current + weeksAhead future
-    const weeksBack = 2
+    // Build week windows: 8 past + current + weeksAhead future
+    const weeksBack = 8
     const weekList: Array<{ start: Date; end: Date; isFuture: boolean; isCurrent: boolean; label: string }> = []
     for (let i = -weeksBack; i <= weeksAhead; i++) {
       const start = new Date(currentMon)

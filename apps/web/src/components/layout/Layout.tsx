@@ -53,18 +53,6 @@ export default function Layout() {
     refetchInterval: 5 * 60 * 1000,
   })
 
-  const { data: receivablesKpis } = useQuery<{ countOverdue: number }>({
-    queryKey: ['receivables-kpis', selectedClientId],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/receivables/kpis`),
-    enabled: !!selectedClientId,
-    staleTime: 60_000,
-  })
-  const { data: payablesKpis } = useQuery<{ countOverdue: number }>({
-    queryKey: ['payables-kpis', selectedClientId],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/payables/kpis`),
-    enabled: !!selectedClientId,
-    staleTime: 60_000,
-  })
 
   const selectedClient = clients.find((c) => c.id === selectedClientId)
 
@@ -93,10 +81,6 @@ export default function Layout() {
         {/* Nav */}
         <nav className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
           {nav.map((item) => {
-            const overdueCount =
-              item.to === '/contas-a-receber' ? receivablesKpis?.countOverdue
-              : item.to === '/contas-a-pagar' ? payablesKpis?.countOverdue
-              : undefined
             return (
               <NavLink
                 key={item.to}
@@ -128,11 +112,6 @@ export default function Layout() {
               >
                 <item.icon className="w-4.5 h-4.5 flex-shrink-0 w-[18px] h-[18px]" />
                 {sidebarOpen && <span className="flex-1 truncate">{item.label}</span>}
-                {sidebarOpen && !!overdueCount && (
-                  <span className="ml-auto text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 font-bold min-w-[18px] text-center leading-none">
-                    {overdueCount}
-                  </span>
-                )}
               </NavLink>
             )
           })}

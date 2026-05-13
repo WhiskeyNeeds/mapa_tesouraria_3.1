@@ -7,7 +7,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatIbanInput, sanitizeIban, validateIban } from '@/lib/iban'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, FileUp, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, FileText, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw } from 'lucide-react'
 
 const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander', 'NovoBanco'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
@@ -227,6 +227,7 @@ export default function BanksPage() {
   const [importBank, setImportBank] = useState<SupportedBank>('CGD')
   const [importAccountId, setImportAccountId] = useState<string>('')
   const [importFile, setImportFile] = useState<File | null>(null)
+  const [importPdfFile, setImportPdfFile] = useState<File | null>(null)
   const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
   const [showNewMovement, setShowNewMovement] = useState(false)
   const [newMovement, setNewMovement] = useState({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' as 'income' | 'expense' })
@@ -234,6 +235,7 @@ export default function BanksPage() {
   const [editDesc, setEditDesc] = useState('')
   const [expandedMovementIds, setExpandedMovementIds] = useState<Set<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const pdfFileInputRef = useRef<HTMLInputElement>(null)
   const bankDropdownRef = useRef<HTMLDivElement>(null)
   const carouselRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -1263,7 +1265,7 @@ export default function BanksPage() {
       </Modal>
 
       {/* Import modal */}
-      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} title="Importar Extrato Bancário" size="lg">
+      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} title="Importar Extrato Bancário" size="lg">
         {importResult ? (
           <div className="space-y-5">
             <div className="flex flex-col items-center gap-3 py-4">
@@ -1284,7 +1286,7 @@ export default function BanksPage() {
                 <div className="text-xs text-red-600 mt-1">Com erro</div>
               </div>
             </div>
-            <button onClick={() => { setShowImport(false); setImportFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} className="btn-primary w-full">Fechar</button>
+            <button onClick={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} className="btn-primary w-full">Fechar</button>
           </div>
         ) : (
           <div className="space-y-4">
@@ -1329,25 +1331,55 @@ export default function BanksPage() {
 
             <div>
               <label className="label">Ficheiro</label>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,.xls,.xlsx"
-                className="hidden"
-                onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className={`w-full border-2 border-dashed rounded-xl p-8 flex flex-col items-center gap-3 transition-colors ${importFile ? 'border-primary-400 bg-primary-50' : 'border-gray-200 hover:border-gray-300'}`}
-              >
-                <FileUp className={`w-8 h-8 ${importFile ? 'text-primary-500' : 'text-gray-400'}`} />
-                {importFile ? (
-                  <span className="text-sm font-medium text-primary-700">{importFile.name}</span>
-                ) : (
-                  <span className="text-sm text-gray-500">Clique para selecionar ficheiro CSV, XLS ou XLSX</span>
-                )}
-              </button>
+              <div className="grid grid-cols-2 gap-3">
+                {/* CSV / Excel */}
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.xls,.xlsx"
+                    className="hidden"
+                    onChange={(e) => { setImportFile(e.target.files?.[0] ?? null); setImportPdfFile(null) }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`w-full h-full border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-2 transition-colors ${importFile ? 'border-primary-400 bg-primary-50' : 'border-gray-200 hover:border-gray-300'}`}
+                  >
+                    <FileUp className={`w-7 h-7 ${importFile ? 'text-primary-500' : 'text-gray-400'}`} />
+                    <span className="text-xs font-medium text-gray-500">CSV / Excel</span>
+                    {importFile ? (
+                      <span className="text-xs font-semibold text-primary-700 text-center break-all">{importFile.name}</span>
+                    ) : (
+                      <span className="text-xs text-gray-400 text-center">Clique para selecionar<br/>.csv, .xls ou .xlsx</span>
+                    )}
+                  </button>
+                </div>
+
+                {/* PDF */}
+                <div>
+                  <input
+                    ref={pdfFileInputRef}
+                    type="file"
+                    accept=".pdf"
+                    className="hidden"
+                    onChange={(e) => { setImportPdfFile(e.target.files?.[0] ?? null); setImportFile(null) }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => pdfFileInputRef.current?.click()}
+                    className={`w-full h-full border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-2 transition-colors ${importPdfFile ? 'border-rose-400 bg-rose-50' : 'border-gray-200 hover:border-gray-300'}`}
+                  >
+                    <FileText className={`w-7 h-7 ${importPdfFile ? 'text-rose-500' : 'text-gray-400'}`} />
+                    <span className="text-xs font-medium text-gray-500">PDF</span>
+                    {importPdfFile ? (
+                      <span className="text-xs font-semibold text-rose-700 text-center break-all">{importPdfFile.name}</span>
+                    ) : (
+                      <span className="text-xs text-gray-400 text-center">Clique para selecionar<br/>extrato em PDF</span>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
 
             {uploadStatementMutation.isError && (
@@ -1357,19 +1389,21 @@ export default function BanksPage() {
             )}
 
             <div className="flex gap-3 pt-1">
-              <button onClick={() => { setShowImport(false); setImportFile(null); setImportAccountId('') }} className="btn-secondary flex-1">Cancelar</button>
+              <button onClick={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportAccountId('') }} className="btn-secondary flex-1">Cancelar</button>
               <button
                 onClick={() => {
+                  const file = importFile ?? importPdfFile
+                  if (!file) return
                   const bankName = BANK_CODE_TO_NAME[importBank]
                   const filtered = bankName ? accounts.filter((a) => a.bankName === bankName) : accounts
                   const targetId = (importAccountId && filtered.find((a) => a.id === importAccountId))
                     ? importAccountId
                     : filtered[0]?.id
-                  if (!importFile || !targetId) return
-                  uploadStatementMutation.mutate({ file: importFile, bank: importBank, bankAccountId: targetId })
+                  if (!targetId) return
+                  uploadStatementMutation.mutate({ file, bank: importBank, bankAccountId: targetId })
                 }}
                 className="btn-primary flex-1"
-                disabled={uploadStatementMutation.isPending || !importFile || (() => {
+                disabled={uploadStatementMutation.isPending || (!importFile && !importPdfFile) || (() => {
                   const bankName = BANK_CODE_TO_NAME[importBank]
                   const filtered = bankName ? accounts.filter((a) => a.bankName === bankName) : accounts
                   return filtered.length === 0

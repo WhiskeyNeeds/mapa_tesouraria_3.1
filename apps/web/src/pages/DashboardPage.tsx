@@ -8,9 +8,9 @@ import Badge from '@/components/ui/Badge'
 import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Legend, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine, ReferenceArea,
+  Bar, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine, ReferenceArea,
 } from 'recharts'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 
 interface UpcomingDue { entityName: string; reference: string; dueDate: string; pendingAmount: number }
@@ -139,77 +139,112 @@ interface ForecastDay { date: string; balance: number; income: number; expense: 
 const INDENT_PX = [40, 56, 72] // px-10, px-14, px-18
 
 interface ColDef {
-  key: string; label: string; monthIndices: number[]
+  key: string; label: string; colYear: number; monthIndices: number[]
   isFuture: boolean; isCurrent: boolean
 }
 
-function CashflowStatementTable({ data, year, onYearChange, cpData }: {
-  data: CashflowStatementData; year: number; onYearChange: (y: number) => void
-  cpData?: CashPositioningData
-}) {
+function CashflowStatementTable({ cpData }: { cpData?: CashPositioningData }) {
+  const { selectedClientId } = useAuth()
   const [inflowOpen, setInflowOpen] = useState(true)
   const [outflowOpen, setOutflowOpen] = useState(true)
   const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set())
   const [selectedColKey, setSelectedColKey] = useState<string | null>(null)
   const [hoveredColKey, setHoveredColKey] = useState<string | null>(null)
-  const [periodType, setPeriodType] = useState<'weekly' | 'monthly' | 'quarterly' | 'semester'>('monthly')
+  const [periodType, setPeriodType] = useState<'weekly' | 'monthly'>('monthly')
+  const [year, setYear] = useState(() => new Date().getFullYear())
+  const [monthOffset, setMonthOffset] = useState(0)
+  const [weekOffset, setWeekOffset] = useState(0)
+  const weekOffsetInitialized = useRef(false)
 
   const currentYear = new Date().getFullYear()
-  const currentMonth = year === currentYear ? new Date().getMonth() : -1
+  const currentMonth = new Date().getMonth()
   const activeColKey = hoveredColKey ?? selectedColKey
 
+  const { data: yearData } = useQuery<CashflowStatementData>({
+    queryKey: ['dashboard-cashflow-statement', selectedClientId, year],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cashflow-statement?year=${year}`),
+    enabled: !!selectedClientId,
+  })
+
+  const needsNextYear = monthOffset > 0
+  const { data: nextYearData } = useQuery<CashflowStatementData>({
+    queryKey: ['dashboard-cashflow-statement', selectedClientId, year + 1],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cashflow-statement?year=${year + 1}`),
+    enabled: !!selectedClientId && needsNextYear,
+  })
+
+  useEffect(() => {
+    if (!cpData || weekOffsetInitialized.current) return
+    weekOffsetInitialized.current = true
+    const currentIdx = cpData.weeks.findIndex((w) => w.isCurrent)
+    const targetIdx = currentIdx >= 0 ? Math.max(0, currentIdx - 3) : Math.max(0, cpData.weeks.length - 12)
+    setWeekOffset(Math.floor(targetIdx / 3) * 3)
+  }, [cpData])
+
+  const getYearData = (y: number) => y === year ? yearData : y === year + 1 ? nextYearData : undefined
+
   const cols: ColDef[] = useMemo(() => {
-    const isFuture = (i: number) => year === currentYear && i > currentMonth
-    if (periodType === 'monthly') {
-      return Array.from({ length: 12 }, (_, i) => ({
-        key: data.months[i].label,
-        label: data.months[i].label,
-        monthIndices: [i],
-        isFuture: isFuture(i),
-        isCurrent: i === currentMonth,
-      }))
-    }
-    if (periodType === 'quarterly') {
-      return [0, 1, 2, 3].map((q) => {
-        const indices = [q * 3, q * 3 + 1, q * 3 + 2]
-        return {
-          key: `T${q + 1}`,
-          label: `T${q + 1}`,
-          monthIndices: indices,
-          isFuture: indices.every(isFuture),
-          isCurrent: year === currentYear && indices.includes(currentMonth),
-        }
-      })
-    }
-    return [0, 1].map((s) => {
-      const indices = Array.from({ length: 6 }, (_, k) => s * 6 + k)
-      return {
-        key: `S${s + 1}`,
-        label: `S${s + 1}`,
-        monthIndices: indices,
-        isFuture: indices.every(isFuture),
-        isCurrent: year === currentYear && indices.includes(currentMonth),
-      }
+    return Array.from({ length: 12 }, (_, k) => {
+      const absMonth = monthOffset + k
+      const colYear = year + Math.floor(absMonth / 12)
+      const monthIdx = absMonth % 12
+      const isFuture = colYear > currentYear || (colYear === currentYear && monthIdx > currentMonth)
+      const isCurrent = colYear === currentYear && monthIdx === currentMonth
+      const label = MONTH_LABELS[monthIdx]
+      const displayLabel = colYear !== year ? `${label} '${String(colYear).slice(2)}` : label
+      return { key: `${colYear}-${monthIdx}`, label: displayLabel, colYear, monthIndices: [monthIdx], isFuture, isCurrent }
     })
-  }, [periodType, data, year, currentMonth, currentYear])
+  }, [year, monthOffset, currentYear, currentMonth])
 
-  const colIncome = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.incomeTotal[i], 0)
-  const colExpense = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.expenseTotal[i], 0)
-  const colStartBal = (col: ColDef) => data.startingBalances[col.monthIndices[0]]
-  const colEndBal = (col: ColDef) => data.endingBalances[col.monthIndices[col.monthIndices.length - 1]]
-  const colCatAmt = (col: ColDef, cat: CashflowStatCategory) => col.monthIndices.reduce((s, i) => s + (cat.monthly[i] ?? 0), 0)
-  const colUncatInc = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.uncategorizedIncome[i], 0)
-  const colUncatExp = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.uncategorizedExpense[i], 0)
+  const findCatInTree = (cats: CashflowStatCategory[], id: string): CashflowStatCategory | undefined => {
+    for (const c of cats) {
+      if (c.id === id) return c
+      const found = findCatInTree(c.children ?? [], id)
+      if (found) return found
+    }
+  }
 
-  const incomeCats = data.categories.filter((c) => c.type === 'REVENUE')
-  const expenseCats = data.categories.filter((c) => c.type === 'EXPENSE')
+  const colIncome = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.incomeTotal[i] ?? 0), 0) : 0 }
+  const colExpense = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.expenseTotal[i] ?? 0), 0) : 0 }
+  const colStartBal = (col: ColDef) => { const d = getYearData(col.colYear); return d ? (d.startingBalances[col.monthIndices[0]] ?? 0) : 0 }
+  const colEndBal = (col: ColDef) => { const d = getYearData(col.colYear); return d ? (d.endingBalances[col.monthIndices[col.monthIndices.length - 1]] ?? 0) : 0 }
+  const colCatAmt = (col: ColDef, cat: CashflowStatCategory) => {
+    const d = getYearData(col.colYear)
+    if (!d) return 0
+    const yearCat = findCatInTree(d.categories, cat.id)
+    return yearCat ? col.monthIndices.reduce((s, i) => s + (yearCat.monthly[i] ?? 0), 0) : 0
+  }
+  const colUncatInc = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.uncategorizedIncome[i] ?? 0), 0) : 0 }
+  const colUncatExp = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.uncategorizedExpense[i] ?? 0), 0) : 0 }
+
+  const incomeCats = (yearData?.categories ?? []).filter((c) => c.type === 'REVENUE')
+  const expenseCats = (yearData?.categories ?? []).filter((c) => c.type === 'EXPENSE')
   const totalIncome = cols.reduce((s, col) => s + colIncome(col), 0)
   const totalExpense = cols.reduce((s, col) => s + colExpense(col), 0)
   const netVariation = totalIncome - totalExpense
 
-  const navigateYear = (dir: -1 | 1) => { setSelectedColKey(null); onYearChange(year + dir) }
+  const navigateMonths = (dir: -1 | 1) => {
+    setSelectedColKey(null)
+    const newOffset = monthOffset + dir * 3
+    if (newOffset < 0) { setYear((y) => y - 1); setMonthOffset(9) }
+    else if (newOffset >= 12) { setYear((y) => y + 1); setMonthOffset(0) }
+    else setMonthOffset(newOffset)
+  }
+
+  const visibleWeeks = cpData?.weeks.slice(weekOffset, weekOffset + 12) ?? []
+  const navigateWeeks = (dir: -1 | 1) => { setSelectedColKey(null); setWeekOffset((w) => Math.max(0, w + dir * 3)) }
+  const isFirstWeekWindow = weekOffset === 0
+  const isLastWeekWindow = weekOffset + 12 >= (cpData?.weeks.length ?? 0)
+
+  const nextWindowYear = monthOffset === 9 ? year + 1 : year
+  const isLastMonthWindow = nextWindowYear > currentYear
+
+  const endYear = year + Math.floor((monthOffset + 11) / 12)
+  const endMonthIdx = (monthOffset + 11) % 12
+  const windowLabel = monthOffset === 0 ? `${year}` : `${MONTH_LABELS[monthOffset]} ${year} – ${MONTH_LABELS[endMonthIdx]} ${endYear}`
+
   const netFmt = (v: number) => v === 0 ? '—' : (v > 0 ? '+' : '') + formatCurrency(v)
-  const colMinW = periodType === 'semester' ? 'min-w-[150px]' : periodType === 'quarterly' ? 'min-w-[130px]' : 'min-w-[110px]'
+  const colMinW = 'min-w-[110px]'
 
   const hoverProps = (key: string) => ({
     onMouseEnter: () => setHoveredColKey(key),
@@ -224,7 +259,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
     balance: col.isFuture ? null : colEndBal(col),
   }))
 
-  const weeklyChartData = (cpData?.weeks ?? []).map((wk) => ({
+  const weeklyChartData = visibleWeeks.map((wk) => ({
     label: wk.label,
     income: wk.income,
     expense: wk.expense,
@@ -278,9 +313,16 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
     )
   }
 
+  const hasCatActivity = (cat: CashflowStatCategory): boolean => {
+    const total = cols.reduce((s, col) => s + colCatAmt(col, cat), 0)
+    if (total > 0) return true
+    return (cat.children ?? []).some(hasCatActivity)
+  }
+
   function renderCatRows(cats: CashflowStatCategory[], depth = 0): React.ReactNode {
     const indentPx = INDENT_PX[Math.min(depth, INDENT_PX.length - 1)]
     return cats.map((cat) => {
+      if (!hasCatActivity(cat)) return null
       const hasChildren = (cat.children?.length ?? 0) > 0
       const isOpen = !closedGroups.has(cat.id)
       const catTotal = cols.reduce((s, col) => s + colCatAmt(col, cat), 0)
@@ -298,7 +340,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
             {cols.map((col) => {
               const v = colCatAmt(col, cat)
               return (
-                <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? (hasChildren ? 'font-medium text-gray-700' : 'text-gray-700') : 'text-gray-300'}`} {...hoverProps(col.key)}>
+                <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? (hasChildren ? 'font-medium text-gray-700' : 'text-gray-700') : 'text-gray-300'}`} {...hoverProps(col.label)}>
                   {v > 0 && !col.isFuture ? formatCurrency(v) : '—'}
                 </td>
               )
@@ -318,7 +360,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
           <tr className="border-b border-gray-100 bg-gray-50">
             <th className="px-5 py-2 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 z-10 min-w-[220px]">Categoria</th>
             {cols.map((col) => (
-              <th key={col.key} className={`px-3 py-2 text-center text-xs font-medium whitespace-nowrap cursor-pointer select-none ${colMinW} ${activeColKey === col.key ? 'bg-blue-50 text-blue-700' : col.isCurrent ? 'text-gray-700' : col.isFuture ? 'text-gray-400' : 'text-gray-500'}`} {...hoverProps(col.key)}>
+              <th key={col.key} className={`px-3 py-2 text-center text-xs font-medium whitespace-nowrap cursor-pointer select-none ${colMinW} ${activeColKey === col.label ? 'bg-blue-50 text-blue-700' : col.isCurrent ? 'text-gray-700' : col.isFuture ? 'text-gray-400' : 'text-gray-500'}`} {...hoverProps(col.label)}>
                 {col.label}
               </th>
             ))}
@@ -332,7 +374,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
             <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>
             {cols.map((col) => {
               const v = colStartBal(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${col.isFuture ? 'text-gray-300' : 'text-gray-700'}`} {...hoverProps(col.key)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${col.isFuture ? 'text-gray-300' : 'text-gray-700'}`} {...hoverProps(col.label)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
             })}
             <td className="px-3 py-2 text-right text-xs text-gray-300">—</td>
           </tr>
@@ -346,7 +388,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
             </td>
             {cols.map((col) => {
               const v = colIncome(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-emerald-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-emerald-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
             })}
             <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{totalIncome > 0 ? formatCurrency(totalIncome) : '—'}</td>
           </tr>
@@ -354,7 +396,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
           {inflowOpen && cols.some((col) => colUncatInc(col) > 0) && (
             <tr className="bg-white hover:bg-gray-50/50">
               <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
-              {cols.map((col) => { const v = colUncatInc(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
+              {cols.map((col) => { const v = colUncatInc(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
               <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{(() => { const t = cols.reduce((s, col) => s + colUncatInc(col), 0); return t > 0 ? formatCurrency(t) : '—' })()}</td>
             </tr>
           )}
@@ -368,7 +410,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
             </td>
             {cols.map((col) => {
               const v = colExpense(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-red-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-red-700' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-red-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-red-700' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
             })}
             <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{totalExpense > 0 ? formatCurrency(totalExpense) : '—'}</td>
           </tr>
@@ -376,7 +418,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
           {outflowOpen && cols.some((col) => colUncatExp(col) > 0) && (
             <tr className="bg-white hover:bg-gray-50/50">
               <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
-              {cols.map((col) => { const v = colUncatExp(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
+              {cols.map((col) => { const v = colUncatExp(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
               <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{(() => { const t = cols.reduce((s, col) => s + colUncatExp(col), 0); return t > 0 ? formatCurrency(t) : '—' })()}</td>
             </tr>
           )}
@@ -385,7 +427,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
             <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-gray-50 z-10">Variação líquida</td>
             {cols.map((col) => {
               const net = colIncome(col) - colExpense(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${col.isFuture || net === 0 ? 'text-gray-300' : net > 0 ? 'text-emerald-700' : 'text-red-700'}`} {...hoverProps(col.key)}>{net !== 0 && !col.isFuture ? netFmt(net) : '—'}</td>
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${col.isFuture || net === 0 ? 'text-gray-300' : net > 0 ? 'text-emerald-700' : 'text-red-700'}`} {...hoverProps(col.label)}>{net !== 0 && !col.isFuture ? netFmt(net) : '—'}</td>
             })}
             <td className={`px-3 py-2 text-right text-xs font-semibold whitespace-nowrap ${netVariation === 0 ? 'text-gray-300' : netVariation > 0 ? 'text-emerald-700' : 'text-red-700'}`}>{netVariation !== 0 ? netFmt(netVariation) : '—'}</td>
           </tr>
@@ -394,7 +436,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
             <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
             {cols.map((col) => {
               const v = colEndBal(col)
-              return <td key={col.key} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50 text-blue-900' : col.isFuture ? 'text-gray-300' : v < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(col.key)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
+              return <td key={col.key} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50 text-blue-900' : col.isFuture ? 'text-gray-300' : v < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(col.label)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
             })}
             <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
           </tr>
@@ -405,14 +447,17 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
 
   const renderWeeklyView = () => {
     if (!cpData) return <div className="px-5 py-8 text-center text-xs text-gray-400">Dados semanais não disponíveis</div>
-    const weeks = cpData.weeks
+    const wkIncomeCats = cpData.categories.filter((c) => c.type === 'REVENUE')
+    const wkExpenseCats = cpData.categories.filter((c) => c.type === 'EXPENSE')
+    const wkTotalIncome = visibleWeeks.reduce((s, w) => s + w.income, 0)
+    const wkTotalExpense = visibleWeeks.reduce((s, w) => s + w.expense, 0)
     return (
       <div className="overflow-x-auto">
         <table className="w-full min-w-max border-collapse">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50">
-              <th className="px-5 py-2 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 z-10 min-w-[220px]" />
-              {weeks.map((wk) => (
+              <th className="px-5 py-2 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 z-10 min-w-[220px]">Categoria</th>
+              {visibleWeeks.map((wk) => (
                 <th key={wk.label} className={`px-3 py-2 text-center text-xs font-medium whitespace-nowrap cursor-pointer select-none min-w-[110px] ${activeColKey === wk.label ? 'bg-blue-50 text-blue-700' : wk.isCurrent ? 'text-blue-600' : wk.isFuture ? 'text-gray-400' : 'text-gray-500'}`} {...hoverProps(wk.label)}>
                   <div>{wk.label}</div>
                   <div className="text-gray-400 mt-0.5" style={{ fontSize: 9 }}>{wk.isCurrent ? 'atual' : wk.isFuture ? 'previsão' : 'realizado'}</div>
@@ -422,11 +467,11 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {renderChart(weeklyChartData, weeks.length, (k) => weeks[k].isFuture)}
+            {renderChart(weeklyChartData, visibleWeeks.length, (k) => visibleWeeks[k].isFuture)}
 
             <tr className="bg-white hover:bg-gray-50/50">
               <td className="px-5 py-2.5 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>
-              {weeks.map((wk) => (
+              {visibleWeeks.map((wk) => (
                 <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-medium cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${wk.openingBalance < 0 ? 'text-red-700' : wk.isCurrent ? 'text-blue-900' : wk.isFuture ? 'text-gray-500' : 'text-gray-800'}`} {...hoverProps(wk.label)}>
                   {formatCurrency(wk.openingBalance)}
                 </td>
@@ -434,29 +479,101 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
               <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
             </tr>
 
-            <tr className="bg-emerald-50">
-              <td className="px-5 py-2 sticky left-0 bg-emerald-50 z-10"><span className="text-xs font-semibold text-emerald-800">Entradas</span></td>
-              {weeks.map((wk) => (
+            <tr className="bg-emerald-50 hover:bg-emerald-100 cursor-pointer select-none" onClick={() => setInflowOpen((o) => !o)}>
+              <td className="px-5 py-2 sticky left-0 bg-emerald-50 z-10">
+                <div className="flex items-center gap-1.5">
+                  {inflowOpen ? <ChevronDown className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />}
+                  <span className="text-xs font-semibold text-emerald-800">Entradas</span>
+                </div>
+              </td>
+              {visibleWeeks.map((wk) => (
                 <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-emerald-100' : ''} ${wk.income > 0 ? wk.isFuture ? 'text-emerald-400' : 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
                   {wk.income > 0 ? formatCurrency(wk.income) : '—'}
                 </td>
               ))}
-              <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{formatCurrency(weeks.filter((w) => !w.isFuture).reduce((s, w) => s + w.income, 0))}</td>
+              <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{wkTotalIncome > 0 ? formatCurrency(wkTotalIncome) : '—'}</td>
             </tr>
+            {inflowOpen && wkIncomeCats.map((cat) => {
+              const catTotal = visibleWeeks.reduce((s, wk) => s + (wk.catIncome[cat.id] ?? 0), 0)
+              if (catTotal === 0) return null
+              return (
+                <tr key={cat.id} className="bg-white hover:bg-gray-50/50">
+                  <td className="py-1.5 sticky left-0 bg-white z-10 pr-4" style={{ paddingLeft: INDENT_PX[0] }}>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color ?? '#9ca3af' }} />
+                      <span className="text-xs truncate max-w-[160px] text-gray-600">{cat.name}</span>
+                    </div>
+                  </td>
+                  {visibleWeeks.map((wk) => {
+                    const v = wk.catIncome[cat.id] ?? 0
+                    return <td key={wk.label} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${v > 0 ? 'text-gray-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
+                  })}
+                  <td className="px-3 py-1.5 text-right text-xs text-gray-600 whitespace-nowrap">{catTotal > 0 ? formatCurrency(catTotal) : '—'}</td>
+                </tr>
+              )
+            })}
+            {inflowOpen && (() => {
+              const wkUncatInc = (wk: CashPositioningWeek) => Math.max(0, wk.income - wkIncomeCats.reduce((s, c) => s + (wk.catIncome[c.id] ?? 0), 0))
+              const totalUncat = visibleWeeks.reduce((s, wk) => s + wkUncatInc(wk), 0)
+              if (totalUncat <= 0) return null
+              return (
+                <tr className="bg-white hover:bg-gray-50/50">
+                  <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
+                  {visibleWeeks.map((wk) => { const v = wkUncatInc(wk); return <td key={wk.label} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${v > 0 ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(wk.label)}>{v > 0 ? formatCurrency(v) : '—'}</td> })}
+                  <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{formatCurrency(totalUncat)}</td>
+                </tr>
+              )
+            })()}
 
-            <tr className="bg-red-50">
-              <td className="px-5 py-2 sticky left-0 bg-red-50 z-10"><span className="text-xs font-semibold text-red-800">Saídas</span></td>
-              {weeks.map((wk) => (
+            <tr className="bg-red-50 hover:bg-red-100 cursor-pointer select-none" onClick={() => setOutflowOpen((o) => !o)}>
+              <td className="px-5 py-2 sticky left-0 bg-red-50 z-10">
+                <div className="flex items-center gap-1.5">
+                  {outflowOpen ? <ChevronDown className="w-3.5 h-3.5 text-red-600 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-red-600 flex-shrink-0" />}
+                  <span className="text-xs font-semibold text-red-800">Saídas</span>
+                </div>
+              </td>
+              {visibleWeeks.map((wk) => (
                 <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-red-100' : ''} ${wk.expense > 0 ? wk.isFuture ? 'text-red-400' : 'text-red-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
                   {wk.expense > 0 ? formatCurrency(wk.expense) : '—'}
                 </td>
               ))}
-              <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{formatCurrency(weeks.filter((w) => !w.isFuture).reduce((s, w) => s + w.expense, 0))}</td>
+              <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{wkTotalExpense > 0 ? formatCurrency(wkTotalExpense) : '—'}</td>
             </tr>
+            {outflowOpen && wkExpenseCats.map((cat) => {
+              const catTotal = visibleWeeks.reduce((s, wk) => s + (wk.catExpense[cat.id] ?? 0), 0)
+              if (catTotal === 0) return null
+              return (
+                <tr key={cat.id} className="bg-white hover:bg-gray-50/50">
+                  <td className="py-1.5 sticky left-0 bg-white z-10 pr-4" style={{ paddingLeft: INDENT_PX[0] }}>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color ?? '#9ca3af' }} />
+                      <span className="text-xs truncate max-w-[160px] text-gray-600">{cat.name}</span>
+                    </div>
+                  </td>
+                  {visibleWeeks.map((wk) => {
+                    const v = wk.catExpense[cat.id] ?? 0
+                    return <td key={wk.label} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${v > 0 ? 'text-gray-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
+                  })}
+                  <td className="px-3 py-1.5 text-right text-xs text-gray-600 whitespace-nowrap">{catTotal > 0 ? formatCurrency(catTotal) : '—'}</td>
+                </tr>
+              )
+            })}
+            {outflowOpen && (() => {
+              const wkUncatExp = (wk: CashPositioningWeek) => Math.max(0, wk.expense - wkExpenseCats.reduce((s, c) => s + (wk.catExpense[c.id] ?? 0), 0))
+              const totalUncat = visibleWeeks.reduce((s, wk) => s + wkUncatExp(wk), 0)
+              if (totalUncat <= 0) return null
+              return (
+                <tr className="bg-white hover:bg-gray-50/50">
+                  <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
+                  {visibleWeeks.map((wk) => { const v = wkUncatExp(wk); return <td key={wk.label} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${v > 0 ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(wk.label)}>{v > 0 ? formatCurrency(v) : '—'}</td> })}
+                  <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{formatCurrency(totalUncat)}</td>
+                </tr>
+              )
+            })()}
 
             <tr className="bg-gray-50 border-t border-gray-100">
               <td className="px-5 py-2 text-xs font-semibold text-gray-600 sticky left-0 bg-gray-50 z-10">Variação líquida</td>
-              {weeks.map((wk) => {
+              {visibleWeeks.map((wk) => {
                 const net = wk.income - wk.expense
                 return (
                   <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${net === 0 ? 'text-gray-300' : net > 0 ? wk.isFuture ? 'text-emerald-400' : 'text-emerald-700' : wk.isFuture ? 'text-red-400' : 'text-red-700'}`} {...hoverProps(wk.label)}>
@@ -469,7 +586,7 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
 
             <tr className="bg-white border-t-2 border-gray-300">
               <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
-              {weeks.map((wk) => (
+              {visibleWeeks.map((wk) => (
                 <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50 text-blue-900' : wk.closingBalance < 0 ? 'text-red-700' : wk.isFuture ? 'text-gray-500' : 'text-gray-900'}`} {...hoverProps(wk.label)}>
                   {formatCurrency(wk.closingBalance)}
                 </td>
@@ -491,18 +608,24 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
         </div>
         <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-            {(['weekly', 'monthly', 'quarterly', 'semester'] as const).map((t) => (
+            {(['weekly', 'monthly'] as const).map((t) => (
               <button key={t} onClick={() => { setPeriodType(t); setSelectedColKey(null); setHoveredColKey(null) }}
                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${periodType === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                {t === 'weekly' ? 'Semanal' : t === 'monthly' ? 'Mensal' : t === 'quarterly' ? 'Trimestral' : 'Semestral'}
+                {t === 'weekly' ? 'Semanal' : 'Mensal'}
               </button>
             ))}
           </div>
-          {periodType !== 'weekly' && (
+          {periodType === 'monthly' ? (
             <div className="flex items-center gap-1">
-              <button onClick={() => navigateYear(-1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">‹</button>
-              <span className="text-sm font-semibold text-gray-700 min-w-[60px] text-center">{year}</span>
-              <button onClick={() => navigateYear(1)} disabled={year >= currentYear} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">›</button>
+              <button onClick={() => navigateMonths(-1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">‹</button>
+              <span className="text-sm font-semibold text-gray-700 min-w-[160px] text-center">{windowLabel}</span>
+              <button onClick={() => navigateMonths(1)} disabled={isLastMonthWindow} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">›</button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              <button onClick={() => navigateWeeks(-1)} disabled={isFirstWeekWindow} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">‹</button>
+              <span className="text-sm font-semibold text-gray-700 min-w-[120px] text-center">Semanas</span>
+              <button onClick={() => navigateWeeks(1)} disabled={isLastWeekWindow} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">›</button>
             </div>
           )}
         </div>
@@ -515,19 +638,11 @@ function CashflowStatementTable({ data, year, onYearChange, cpData }: {
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
   const [days, setDays] = useState(30)
-  const currentYear = new Date().getFullYear()
-  const [cashFlowYear, setCashFlowYear] = useState(currentYear)
   const [forecastDays, setForecastDays] = useState(90)
 
   const { data, isLoading } = useQuery<DashboardData>({
     queryKey: ['dashboard', selectedClientId, days],
     queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/overview?days=${days}`),
-    enabled: !!selectedClientId,
-  })
-
-  const { data: monthlyData } = useQuery<{ year: number; months: Array<{ month: number; income: number; expense: number; net: number }> }>({
-    queryKey: ['dashboard-monthly', selectedClientId, cashFlowYear],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cash-flow?year=${cashFlowYear}`),
     enabled: !!selectedClientId,
   })
 
@@ -549,17 +664,9 @@ export default function DashboardPage() {
     enabled: !!selectedClientId,
   })
 
-  const [stmtYear, setStmtYear] = useState(currentYear)
-
-  const { data: cashflowStmt } = useQuery<CashflowStatementData>({
-    queryKey: ['dashboard-cashflow-statement', selectedClientId, stmtYear],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cashflow-statement?year=${stmtYear}`),
-    enabled: !!selectedClientId,
-  })
-
   const { data: cashPositioning } = useQuery<CashPositioningData>({
     queryKey: ['dashboard-cash-positioning', selectedClientId],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cash-positioning`),
+    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cash-positioning?weeks=12`),
     enabled: !!selectedClientId,
   })
 
@@ -581,15 +688,6 @@ export default function DashboardPage() {
     const workingCapital = data.kpis.totalBalance + data.kpis.toReceive - data.kpis.toPay
     return { totalIncome, totalExpense, netCashFlow, avgDailyExpense, avgDailyIncome, cashRunway, coverageRatio, dso, dpo, liquidezImediata, workingCapital }
   }, [data, days])
-
-  const yearStats = useMemo(() => {
-    if (!monthlyData) return null
-    const months = monthlyData.months.filter((m) => m.income > 0 || m.expense > 0)
-    const totalNet = monthlyData.months.reduce((s, m) => s + m.net, 0)
-    const bestMonth = months.reduce((best, m) => m.net > best.net ? m : best, months[0] ?? { month: 0, net: 0, income: 0, expense: 0 })
-    const worstMonth = months.reduce((worst, m) => m.net < worst.net ? m : worst, months[0] ?? { month: 0, net: 0, income: 0, expense: 0 })
-    return { totalNet, bestMonth, worstMonth }
-  }, [monthlyData])
 
   const forecastStats = useMemo(() => {
     if (!forecastData || forecastData.forecast.length === 0) return null
@@ -742,32 +840,6 @@ export default function DashboardPage() {
             <div className="flex items-center justify-center h-[200px] text-gray-400 text-sm">Sem movimentos no período</div>
           )}
 
-          {/* Mini income/expense bars below */}
-          {data.chartData.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-gray-500">Entradas vs Saídas</span>
-                {stats && (
-                  <div className="flex gap-4 text-xs">
-                    <span className="text-green-700 font-medium">↓ {formatCurrency(stats.totalIncome)}</span>
-                    <span className="text-red-700 font-medium">↑ {formatCurrency(stats.totalExpense)}</span>
-                    <span className={`font-semibold ${stats.netCashFlow >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      Líq: {stats.netCashFlow >= 0 ? '+' : ''}{formatCurrency(stats.netCashFlow)}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <ResponsiveContainer width="100%" height={80}>
-                <BarChart data={data.chartData} margin={{ left: 0, right: 8, top: 0, bottom: 0 }} barCategoryGap="20%">
-                  <XAxis hide dataKey="date" />
-                  <YAxis hide />
-                  <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} labelFormatter={(l: string) => formatDate(l)} />
-                  <Bar dataKey="income" fill="#10b981" name="Entradas" radius={[2, 2, 0, 0]} maxBarSize={12} />
-                  <Bar dataKey="expense" fill="#ef4444" name="Saídas" radius={[2, 2, 0, 0]} maxBarSize={12} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
         </div>
 
         {/* Bank accounts + derived stats */}
@@ -873,46 +945,219 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Monthly cash flow — ComposedChart with net line */}
-      {monthlyData && (
-        <div className="card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-sm font-semibold text-gray-700">Fluxo de Caixa Mensal</h2>
-              {yearStats && (
-                <div className="flex gap-4 text-xs text-gray-500 mt-0.5">
-                  <span>Líquido do ano: <span className={`font-semibold ${yearStats.totalNet >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(yearStats.totalNet)}</span></span>
-                  {yearStats.bestMonth.month > 0 && <span>Melhor: <span className="font-medium text-gray-700">{MONTH_LABELS[yearStats.bestMonth.month - 1]}</span></span>}
-                  {yearStats.worstMonth.month > 0 && yearStats.worstMonth.net < 0 && <span>Pior: <span className="font-medium text-gray-700">{MONTH_LABELS[yearStats.worstMonth.month - 1]}</span></span>}
+      {/* Ativos Líquidos */}
+      <div className="card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-700">Ativos Líquidos</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Distribuição de saldo por conta bancária</p>
+          </div>
+          <Link to="/bancos" className="text-xs text-primary-600 hover:text-primary-700 font-medium">Ver contas →</Link>
+        </div>
+
+        {/* Summary strip */}
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="bg-blue-50 rounded-lg px-3 py-2.5">
+            <div className="text-xs text-gray-500">Total</div>
+            <div className="text-sm font-bold text-gray-900 mt-0.5">{formatCurrency(kpis.totalBalance)}</div>
+          </div>
+          <div className="bg-emerald-50 rounded-lg px-3 py-2.5">
+            <div className="text-xs text-gray-500">Disponível</div>
+            <div className="text-sm font-bold text-emerald-700 mt-0.5">{formatCurrency(kpis.cashAvailable)}</div>
+            <div className="text-xs text-gray-400">após compromissos</div>
+          </div>
+          <div className="bg-orange-50 rounded-lg px-3 py-2.5">
+            <div className="text-xs text-gray-500">Comprometido</div>
+            <div className="text-sm font-bold text-orange-700 mt-0.5">{formatCurrency(Math.max(0, kpis.toPay))}</div>
+            <div className="text-xs text-gray-400">contas a pagar</div>
+          </div>
+        </div>
+
+        {/* Account bars */}
+        <div className="space-y-2.5">
+          {data.bankAccounts.map((acc) => {
+            const pct = kpis.totalBalance > 0 ? Math.max(0, (acc.currentBalance / kpis.totalBalance) * 100) : 0
+            const isNeg = acc.currentBalance < 0
+            const barColor = acc.lowBalanceWarning ? 'bg-orange-400' : isNeg ? 'bg-red-400' : 'bg-blue-500'
+            const badgeBg = acc.lowBalanceWarning ? 'bg-orange-100' : isNeg ? 'bg-red-100' : 'bg-blue-50'
+            const badgeText = acc.lowBalanceWarning ? 'text-orange-700' : isNeg ? 'text-red-600' : 'text-blue-700'
+            return (
+              <div key={acc.id} className={`rounded-xl p-3.5 border ${acc.lowBalanceWarning ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-100'}`}>
+                <div className="flex items-start justify-between mb-2.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-gray-900 flex items-center gap-1">
+                      {acc.name}
+                      {acc.lowBalanceWarning && <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-0.5">{acc.bankName} · ···{acc.ibanLast4}</div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                    <div className={`flex flex-col items-center px-2.5 py-1 rounded-lg ${badgeBg}`}>
+                      <span className={`text-base font-bold tabular-nums leading-tight ${badgeText}`}>{pct.toFixed(1)}%</span>
+                      <span className="text-gray-400" style={{ fontSize: 9 }}>contribuição</span>
+                    </div>
+                    <span className={`text-sm font-bold tabular-nums ${isNeg ? 'text-red-600' : acc.lowBalanceWarning ? 'text-orange-600' : 'text-gray-900'}`}>
+                      {formatCurrency(acc.currentBalance)}
+                    </span>
+                  </div>
+                </div>
+                <div className="h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+                </div>
+                {acc.lowBalanceWarning && acc.minBalance != null && (
+                  <div className="text-xs text-red-500 mt-1.5">Mínimo definido: {formatCurrency(acc.minBalance)}</div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Cashflow Statement Table */}
+      <CashflowStatementTable cpData={cashPositioning} />
+
+      {/* Painel de Controlo */}
+      <div className="card p-5">
+        <div className="mb-4">
+          <h2 className="text-sm font-semibold text-gray-700">Painel de Controlo</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Indicadores de saúde financeira</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+          {/* Saldo & Liquidez */}
+          <div className="rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Wallet className="w-4 h-4 text-blue-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-gray-700">Saldo & Liquidez</span>
+            </div>
+            <div className="text-2xl font-bold text-gray-900 tabular-nums">{formatCurrency(kpis.totalBalance)}</div>
+            <div className="text-xs text-gray-400 mt-0.5 mb-3">saldo total em bancos</div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500">Disponível</span>
+                <span className={`font-semibold tabular-nums ${kpis.cashAvailable >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(kpis.cashAvailable)}</span>
+              </div>
+              {stats?.liquidezImediata != null && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Liquidez imediata</span>
+                  <span className={`font-semibold ${stats.liquidezImediata >= 1 ? 'text-emerald-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-600'}`}>{stats.liquidezImediata.toFixed(2)}×</span>
+                </div>
+              )}
+              {stats?.cashRunway != null && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Autonomia de caixa</span>
+                  <span className={`font-semibold ${stats.cashRunway > 90 ? 'text-emerald-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-600'}`}>
+                    {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
+                  </span>
+                </div>
+              )}
+              {stats?.workingCapital != null && (
+                <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
+                  <span className="text-gray-500">Capital de trabalho</span>
+                  <span className={`font-semibold tabular-nums ${stats.workingCapital >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(stats.workingCapital)}</span>
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-1">
-              <button onClick={() => setCashFlowYear((y) => y - 1)} className="p-1 text-gray-400 hover:text-gray-700 rounded hover:bg-gray-100 transition-colors text-sm leading-none">‹</button>
-              <span className="text-sm font-medium text-gray-700 w-12 text-center">{cashFlowYear}</span>
-              <button onClick={() => setCashFlowYear((y) => y + 1)} disabled={cashFlowYear >= currentYear} className="p-1 text-gray-400 hover:text-gray-700 rounded hover:bg-gray-100 transition-colors text-sm leading-none disabled:opacity-30">›</button>
+          </div>
+
+          {/* Risco */}
+          {(() => {
+            const isHigh = (forecastStats?.daysUntilNegative != null) ||
+              (stats?.cashRunway != null && stats.cashRunway < 30) ||
+              (stats?.liquidezImediata != null && stats.liquidezImediata < 0.5)
+            const isMed = !isHigh && (
+              kpis.overduePayables > 0 ||
+              data.bankAccounts.some((a) => a.lowBalanceWarning) ||
+              (stats?.cashRunway != null && stats.cashRunway < 90) ||
+              (stats?.liquidezImediata != null && stats.liquidezImediata < 1)
+            )
+            const riskLabel = isHigh ? 'Alto' : isMed ? 'Médio' : 'Baixo'
+            const riskColor = isHigh ? 'text-red-600' : isMed ? 'text-amber-600' : 'text-emerald-600'
+            const riskBg = isHigh ? 'bg-red-50' : isMed ? 'bg-amber-50' : 'bg-emerald-50'
+            const dotColor = isHigh ? 'bg-red-500' : isMed ? 'bg-amber-400' : 'bg-emerald-400'
+            const factors: string[] = []
+            if (kpis.overdueReceivables > 0) factors.push(`${kpis.overdueReceivables} recebimento${kpis.overdueReceivables > 1 ? 's' : ''} vencido${kpis.overdueReceivables > 1 ? 's' : ''}`)
+            if (kpis.overduePayables > 0) factors.push(`${kpis.overduePayables} pagamento${kpis.overduePayables > 1 ? 's' : ''} vencido${kpis.overduePayables > 1 ? 's' : ''}`)
+            if (data.bankAccounts.some((a) => a.lowBalanceWarning)) factors.push('Saldo baixo em conta')
+            if (forecastStats?.daysUntilNegative != null) factors.push(`Saldo negativo em ${forecastStats.daysUntilNegative}d`)
+            if (stats?.cashRunway != null && stats.cashRunway < 30) factors.push(`Autonomia crítica (${stats.cashRunway}d)`)
+            return (
+              <div className="rounded-xl border border-gray-100 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                  <span className="text-xs font-semibold text-gray-700">Risco de Liquidez</span>
+                </div>
+                <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 mb-3 ${riskBg}`}>
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
+                  <span className={`text-sm font-bold ${riskColor}`}>{riskLabel}</span>
+                </div>
+                <div className="space-y-1.5">
+                  {factors.length === 0 ? (
+                    <div className="text-xs text-gray-400">Sem alertas ativos</div>
+                  ) : factors.map((f, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
+                      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-0.5 ${dotColor}`} />
+                      {f}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Operações a Vencer */}
+          <div className="rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <CalendarDays className="w-4 h-4 text-indigo-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-gray-700">Operações a Vencer</span>
+            </div>
+            <div className="text-2xl font-bold text-gray-900">{kpis.countReceivablesOpen + kpis.countPayablesOpen}</div>
+            <div className="text-xs text-gray-400 mt-0.5 mb-3">documentos em aberto</div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />A receber ({kpis.countReceivablesOpen})</span>
+                <span className="font-semibold tabular-nums text-emerald-700">{formatCurrency(kpis.toReceive)}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />A pagar ({kpis.countPayablesOpen})</span>
+                <span className="font-semibold tabular-nums text-red-600">{formatCurrency(kpis.toPay)}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
+                <span className="text-gray-500">Saldo líquido</span>
+                <span className={`font-semibold tabular-nums ${kpis.toReceive - kpis.toPay >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(kpis.toReceive - kpis.toPay)}</span>
+              </div>
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={monthlyData.months.map((m) => ({ ...m, label: MONTH_LABELS[m.month - 1] }))} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} width={38} />
-              <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} />
-              <Legend wrapperStyle={{ fontSize: 11 }} iconType="square" iconSize={8} />
-              <ReferenceLine y={0} stroke="#e5e7eb" strokeWidth={1} />
-              <Bar dataKey="income" fill="#10b981" name="Entradas" radius={[3, 3, 0, 0]} maxBarSize={28} />
-              <Bar dataKey="expense" fill="#ef4444" name="Saídas" radius={[3, 3, 0, 0]} maxBarSize={28} />
-              <Line type="monotone" dataKey="net" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3 }} name="Líquido" connectNulls={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
-      {/* Cashflow Statement Table */}
-      {cashflowStmt && (
-        <CashflowStatementTable data={cashflowStmt} year={stmtYear} onYearChange={setStmtYear} cpData={cashPositioning} />
-      )}
+          {/* Cobranças a Fazer */}
+          <div className={`rounded-xl border p-4 ${kpis.overdueReceivables > 0 ? 'border-amber-200 bg-amber-50/40' : 'border-gray-100'}`}>
+            <div className="flex items-center gap-2 mb-3">
+              <Clock className="w-4 h-4 text-orange-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-gray-700">Cobranças a Fazer</span>
+            </div>
+            <div className={`text-2xl font-bold ${kpis.overdueReceivables > 0 ? 'text-amber-700' : 'text-gray-900'}`}>{kpis.overdueReceivables}</div>
+            <div className="text-xs text-gray-500 mt-0.5 mb-3">
+              {kpis.overdueReceivables === 0 ? 'Nenhum vencimento em atraso' : `recebimento${kpis.overdueReceivables > 1 ? 's' : ''} vencido${kpis.overdueReceivables > 1 ? 's' : ''}`}
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500">Total a receber</span>
+                <span className="font-semibold tabular-nums text-gray-700">{formatCurrency(kpis.toReceive)}</span>
+              </div>
+              {kpis.overduePayables > 0 && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-red-500">Pagamentos vencidos</span>
+                  <span className="font-semibold text-red-600">{kpis.overduePayables}</span>
+                </div>
+              )}
+              <div className="pt-2 border-t border-gray-100 mt-1">
+                <Link to="/contas-a-receber" className="text-xs text-primary-600 hover:underline">Ver cobranças →</Link>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
 
       {/* Forecast section */}
       {forecastData && forecastData.forecast.length > 0 && (
@@ -1004,10 +1249,7 @@ export default function DashboardPage() {
                 width={38}
               />
               <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} labelFormatter={(l) => l} />
-              <Legend wrapperStyle={{ fontSize: 11 }} iconType="square" iconSize={8} />
               <ReferenceLine y={0} stroke="#fca5a5" strokeWidth={1.5} strokeDasharray="4 4" label={{ value: '0', position: 'right', fontSize: 9, fill: '#fca5a5' }} />
-              <Bar dataKey="income" fill="#10b981" fillOpacity={0.6} name="Entradas" maxBarSize={6} />
-              <Bar dataKey="expense" fill="#ef4444" fillOpacity={0.6} name="Saídas" maxBarSize={6} />
               <Area type="monotone" dataKey="balance" stroke="#3b82f6" fill="url(#forecastBalGrad)" strokeWidth={2} dot={false} name="Saldo Projetado" />
             </ComposedChart>
           </ResponsiveContainer>

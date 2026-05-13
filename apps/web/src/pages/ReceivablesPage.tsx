@@ -109,13 +109,13 @@ function ReceiptDetailModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl animate-scale-in overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-3 bg-teal-600">
+        <div className="flex items-center justify-between px-6 py-3 bg-slate-900">
           <h2 className="text-sm font-semibold text-white truncate pr-4">
             {receipt.document_no} - {entityName}
           </h2>
           <button
             onClick={onClose}
-            className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-teal-200 hover:text-white hover:bg-teal-700 transition-colors"
+            className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -141,7 +141,7 @@ function ReceiptDetailModal({
         </div>
 
         <div className="px-6 py-4 max-h-[calc(100vh-22rem)] overflow-y-auto">
-          <h3 className="text-sm font-semibold text-teal-600 mb-3">
+          <h3 className="text-sm font-semibold text-slate-900 mb-3">
             Documento(s) liquidados ({isLoading ? '…' : lines.length})
           </h3>
           {isLoading ? (
@@ -154,7 +154,7 @@ function ReceiptDetailModal({
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
                 <thead>
-                  <tr className="bg-teal-600 text-white">
+                  <tr className="bg-slate-900 text-white">
                     <th className="px-3 py-2 text-left font-medium">Documento</th>
                     <th className="px-3 py-2 text-right font-medium">Valor total</th>
                     <th className="px-3 py-2 text-right font-medium">Valor pendente</th>
@@ -175,7 +175,7 @@ function ReceiptDetailModal({
                     // IVA da linha = valor recebido − base tributável recebida
                     const lineTax = Number(line.received_value ?? 0) - Number(line.net_total ?? 0)
                     return (
-                      <tr key={i} className={i % 2 === 0 ? 'bg-teal-50/40' : 'bg-white'}>
+                      <tr key={i} className={i % 2 === 0 ? 'bg-slate-50/60' : 'bg-white'}>
                         <td className="px-3 py-2 border-b border-gray-100">
                           <div className="font-medium text-gray-700">{line.document_no ?? String(line.receivable_id)}</div>
                           {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
@@ -217,7 +217,7 @@ function ReceiptDetailModal({
             <button className="w-8 h-8 flex items-center justify-center border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-400">
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <button className="px-4 py-1.5 bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-teal-700 transition-colors uppercase tracking-wide">
+            <button className="px-4 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition-colors uppercase tracking-wide">
               Opções de Pagamento
             </button>
           </div>
@@ -260,7 +260,7 @@ function ReceiptSubRows({ clientId, tocDocId, entityName }: { clientId: string; 
       {receipts.map((rc) => (
         <tr
           key={String(rc.id)}
-          className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-teal-50/40"
+          className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-slate-50"
           onClick={() => setDetailReceipt(rc)}
         >
           <td className="pl-10 pr-3 py-2">
@@ -557,6 +557,7 @@ export default function ReceivablesPage() {
     if (s === 0 || s === 4) return false
     if (statusFilter) {
       if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
+      if (statusFilter === 'OPEN,PARTIAL' && s !== 1 && s !== 2 && s !== 5) return false
       if (statusFilter === 'PARTIAL' && s !== 2) return false
       if (statusFilter === 'SETTLED' && s !== 3) return false
       if (statusFilter === 'VOID') return false
@@ -591,15 +592,19 @@ export default function ReceivablesPage() {
   })
 
   // KPIs combinados: locais (endpoint /kpis) + TOConline ainda não importados
+  // Docs TOConline liquidados (status=3) ficam visíveis na lista mas não contam nos KPIs
   const combinedKpis = useMemo(() => {
     if (!kpis) return null
     const now = new Date()
-    const tocPending = tocOnly.reduce((s, d) => s + Number(d.pending_total ?? d.gross_total ?? 0), 0)
-    const tocOverdue = tocOnly.filter((d) => d.due_date && new Date(d.due_date) < now).length
+    const tocPending = (pendingToc => pendingToc.reduce((s, d) => s + Number(d.pending_total ?? d.gross_total ?? 0), 0))(tocOnly.filter(d => Number(d.status) !== 3))
+    const tocOpenCount = tocOnly.filter(d => Number(d.status) !== 3).length
+    const tocOverdue = tocOnly.filter((d) => Number(d.status) !== 3 && d.due_date && new Date(d.due_date) < now).length
+    const totalOpen = kpis.countOpen + tocOpenCount
+    const totalOverdue = kpis.countOverdue + tocOverdue
     return {
       totalPending: kpis.totalPending + tocPending,
-      countOpen: kpis.countOpen + tocOnly.length,
-      countOverdue: kpis.countOverdue + tocOverdue,
+      countOpen: totalOpen - totalOverdue,
+      countOverdue: totalOverdue,
       settledThisMonth: kpis.settledThisMonth,
       aging: kpis.aging,
     }
@@ -622,8 +627,7 @@ export default function ReceivablesPage() {
             <KpiCard
               title="Vencidas"
               value={String(combinedKpis.countOverdue)}
-              className={combinedKpis.countOverdue > 0 ? 'border-red-200 cursor-pointer hover:border-red-400 transition-colors' : ''}
-              onClick={combinedKpis.countOverdue > 0 ? () => { setStatusFilter('OPEN'); setDueDateTo(new Date().toISOString().slice(0, 10)); setDueDateFrom(''); setOriginFilter(''); setEntitySearch(''); setPage(1) } : undefined}
+              className={combinedKpis.countOverdue > 0 ? 'border-red-200' : ''}
             />
             <KpiCard title="Recebido este mês" value={formatCurrency(combinedKpis.settledThisMonth)} />
           </div>
@@ -648,6 +652,7 @@ export default function ReceivablesPage() {
           </div>
           <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
             <option value="">Todos os estados</option>
+            <option value="OPEN,PARTIAL">Pendente</option>
             <option value="OPEN">Emitido / Em aberto</option>
             <option value="PARTIAL">Parcialmente liquidado</option>
             <option value="SETTLED">Liquidado</option>
