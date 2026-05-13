@@ -359,11 +359,11 @@ export class TreasuryBankMovementsService {
     return this.prisma.treasuryBankMovement.update({ where: { id }, data: { description: description.trim() } })
   }
 
-  async classify(clientId: string, id: string, categoryId: string) {
+  async classify(clientId: string, id: string, categoryId: string | null) {
     const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId, deletedAt: null } })
     if (!mov) throw httpError(404, 'Movement not found')
 
-    const newStatus = mov.status === 'UNCLASSIFIED' ? 'CLASSIFIED' : mov.status
+    const newStatus = categoryId === null ? 'UNCLASSIFIED' : mov.status === 'UNCLASSIFIED' ? 'CLASSIFIED' : mov.status
     return this.prisma.treasuryBankMovement.update({ where: { id }, data: { categoryId, status: newStatus } })
   }
 

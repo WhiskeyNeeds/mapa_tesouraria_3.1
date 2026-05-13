@@ -386,13 +386,18 @@ export default function BanksPage() {
   })
 
   const classify = useMutation({
-    mutationFn: ({ id, categoryId }: { id: string; categoryId: string }) =>
+    mutationFn: ({ id, categoryId }: { id: string; categoryId: string | null }) =>
       api.patch(`/treasury/${selectedClientId}/movements/${id}/classify`, { categoryId }),
-    onSuccess: () => {
+    onSuccess: (_, { categoryId }) => {
       qc.invalidateQueries({ queryKey: ['movements'] })
       qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      qc.invalidateQueries({ queryKey: ['dashboard', selectedClientId] })
+      qc.invalidateQueries({ queryKey: ['dashboard-monthly', selectedClientId] })
+      qc.invalidateQueries({ queryKey: ['dashboard-categories', selectedClientId] })
+      qc.invalidateQueries({ queryKey: ['dashboard-cashflow-statement', selectedClientId] })
+      qc.invalidateQueries({ queryKey: ['dashboard-cash-positioning', selectedClientId] })
       setClassifyMovementId(null)
-      toast.success('Movimento classificado.')
+      toast.success(categoryId === null ? 'Categoria removida.' : 'Movimento classificado.')
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -861,30 +866,44 @@ export default function BanksPage() {
                               }
                             </button>
                           )}
-                          {classifyMovementId === m.id && (
-                            <div onMouseDown={(e) => e.stopPropagation()} className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg py-1 w-52 max-h-64 overflow-y-auto">
-                              {['REVENUE', 'EXPENSE'].map((type) => {
-                                const cats = categories.filter((c) => c.type === type && !c.isArchived)
-                                if (!cats.length) return null
-                                return (
-                                  <div key={type}>
-                                    <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase">{type === 'REVENUE' ? 'Receita' : 'Despesa'}</div>
-                                    {cats.map((c) => (
-                                      <button
-                                        key={c.id}
-                                        type="button"
-                                        onClick={() => classify.mutate({ id: m.id, categoryId: c.id })}
-                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
-                                      >
-                                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
-                                        {c.name}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
+                          {classifyMovementId === m.id && (() => {
+                            const allowedType = Number(m.amount) >= 0 ? 'REVENUE' : 'EXPENSE'
+                            const cats = categories.filter((c) => c.type === allowedType && !c.isArchived)
+                            return (
+                              <div onMouseDown={(e) => e.stopPropagation()} className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg py-1 w-52 max-h-64 overflow-y-auto">
+                                {m.category && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => classify.mutate({ id: m.id, categoryId: null })}
+                                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-500 hover:bg-red-50 text-left"
+                                    >
+                                      <X className="w-3.5 h-3.5 flex-shrink-0" />
+                                      Remover categoria
+                                    </button>
+                                    <div className="border-t border-gray-100 my-1" />
+                                  </>
+                                )}
+                                <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase">
+                                  {allowedType === 'REVENUE' ? 'Receita' : 'Despesa'}
+                                </div>
+                                {cats.length === 0 && (
+                                  <div className="px-3 py-2 text-xs text-gray-400">Sem categorias disponíveis</div>
+                                )}
+                                {cats.map((c) => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => classify.mutate({ id: m.id, categoryId: c.id })}
+                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                                  >
+                                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: c.color }} />
+                                    {c.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )
+                          })()}
                         </td>
                         <td className={`px-1 py-3 text-right font-semibold whitespace-nowrap ${Number(m.amount) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                           {Number(m.amount) >= 0 ? '+' : ''}{formatCurrency(Number(m.amount))}

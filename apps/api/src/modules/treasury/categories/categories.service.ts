@@ -9,6 +9,7 @@ export class TreasuryCategoriesService {
       this.prisma.treasuryCategory.findMany({
         where: { clientId, deletedAt: null, ...(includeArchived ? {} : { isArchived: false }), ...(type ? { type } : {}) },
         orderBy: [{ isArchived: 'asc' }, { name: 'asc' }],
+        include: { children: { where: { deletedAt: null }, orderBy: { name: 'asc' }, include: { children: { where: { deletedAt: null }, orderBy: { name: 'asc' } } } } },
       }),
       this.prisma.treasuryBankMovement.groupBy({
         by: ['categoryId'],
@@ -34,7 +35,12 @@ export class TreasuryCategoriesService {
     tocTaxDescriptorId?: string
     color?: string
     icon?: string
+    parentId?: string
   }) {
+    if (data.parentId) {
+      const parent = await this.prisma.treasuryCategory.findFirst({ where: { id: data.parentId, clientId, deletedAt: null } })
+      if (!parent) throw httpError(404, 'Parent category not found')
+    }
     return this.prisma.treasuryCategory.create({ data: { clientId, ...data } })
   }
 
@@ -45,8 +51,14 @@ export class TreasuryCategoriesService {
     color: string
     icon: string
     isArchived: boolean
+    parentId: string | null
   }>) {
     await this.getById(clientId, id)
+    if (data.parentId) {
+      const parent = await this.prisma.treasuryCategory.findFirst({ where: { id: data.parentId, clientId, deletedAt: null } })
+      if (!parent) throw httpError(404, 'Parent category not found')
+      if (data.parentId === id) throw httpError(400, 'Category cannot be its own parent')
+    }
     return this.prisma.treasuryCategory.update({ where: { id }, data })
   }
 

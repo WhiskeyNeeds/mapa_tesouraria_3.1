@@ -145,7 +145,7 @@ export class TreasuryBankAccountsService {
 
   async delete(clientId: string, id: string) {
     await this.getById(clientId, id)
-    return this.prisma.treasuryBankAccount.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } })
+    return this.prisma.treasuryBankAccount.delete({ where: { id } })
   }
 
   private async recalcManualBalances(bankAccountId: string) {

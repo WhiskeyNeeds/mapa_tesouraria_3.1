@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
-import { Plus, Tag, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
+import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
 
 interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean; usageCount: number }
@@ -280,7 +280,7 @@ export default function SettingsPage() {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <p className="text-sm text-gray-500">Gerencie as categorias de tesouraria e o flag "Lança no TOConline".</p>
+              <p className="text-sm text-gray-500">Gerencie as categorias de tesouraria.</p>
               <button
                 onClick={() => setShowArchived((v) => !v)}
                 className={`text-xs font-medium px-2 py-1 rounded-lg border transition-colors ${showArchived ? 'bg-gray-100 border-gray-300 text-gray-700' : 'border-gray-200 text-gray-400 hover:text-gray-600'}`}
@@ -308,10 +308,6 @@ export default function SettingsPage() {
                       {c.usageCount > 0 && (
                         <span className="text-xs text-gray-400">{c.usageCount} mov.</span>
                       )}
-                      <Tag className="w-3.5 h-3.5 text-gray-400" />
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${c.launchToc ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
-                        {c.launchToc ? 'Lança TOConline' : 'Apenas local'}
-                      </span>
                       {c.isArchived ? (
                         <button
                           onClick={() => restoreCat.mutate(c.id)}
@@ -323,7 +319,7 @@ export default function SettingsPage() {
                       ) : (
                         <>
                           <button
-                            onClick={() => { setEditCat(c); setEditCatForm({ name: c.name, color: c.color, launchToc: c.launchToc }) }}
+                            onClick={() => { setEditCat(c); setEditCatForm({ name: c.name, color: c.color, launchToc: false }) }}
                             className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-600 rounded transition-all"
                             title="Editar"
                           >
@@ -363,10 +359,6 @@ export default function SettingsPage() {
                 </select>
               </div>
               <div><label className="label">Cor</label><input type="color" className="h-9 w-20 rounded cursor-pointer border border-gray-300" value={newCat.color} onChange={(e) => setNewCat({ ...newCat, color: e.target.value })} /></div>
-              <div className="flex items-center gap-3">
-                <input type="checkbox" id="launchToc" checked={newCat.launchToc} onChange={(e) => setNewCat({ ...newCat, launchToc: e.target.checked })} className="rounded" />
-                <label htmlFor="launchToc" className="text-sm text-gray-700">Lança no TOConline</label>
-              </div>
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setShowNewCat(false)} className="btn-secondary flex-1">Cancelar</button>
                 <button onClick={() => createCat.mutate()} className="btn-primary flex-1" disabled={createCat.isPending || !newCat.name}>
@@ -385,10 +377,6 @@ export default function SettingsPage() {
                   <input type="color" className="h-9 w-20 rounded cursor-pointer border border-gray-300" value={editCatForm.color} onChange={(e) => setEditCatForm({ ...editCatForm, color: e.target.value })} />
                 </div>
                 <div className="w-4 h-4 rounded-full mt-5 flex-shrink-0" style={{ backgroundColor: editCatForm.color }} />
-              </div>
-              <div className="flex items-center gap-3">
-                <input type="checkbox" id="editLaunchToc" checked={editCatForm.launchToc} onChange={(e) => setEditCatForm({ ...editCatForm, launchToc: e.target.checked })} className="rounded" />
-                <label htmlFor="editLaunchToc" className="text-sm text-gray-700">Lança no TOConline</label>
               </div>
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setEditCat(null)} className="btn-secondary flex-1">Cancelar</button>

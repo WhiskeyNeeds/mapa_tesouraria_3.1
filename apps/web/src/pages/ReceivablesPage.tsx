@@ -8,7 +8,7 @@ import { formatCurrency, formatDate, statusLabel, statusVariant, tocStatusLabel,
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, SendToBack, Printer, Mail, ChevronLeft } from 'lucide-react'
+import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, Printer, Mail, ChevronLeft } from 'lucide-react'
 
 interface TocSalesDoc {
   id: number
@@ -737,7 +737,6 @@ export default function ReceivablesPage() {
                             <span className="flex items-center gap-1.5">
                               <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.category.color }} />
                               <span className="text-gray-700 text-xs">{r.category.name}</span>
-                              {!r.category.launchToc && <span className="text-gray-400 text-xs">· local</span>}
                             </span>
                           ) : <span className="text-gray-300 text-xs">—</span>}
                         </td>
@@ -1007,7 +1006,7 @@ export default function ReceivablesPage() {
             <label className="label">Categoria</label>
             <select className="input" value={editForm.categoryId} onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}>
               <option value="">Selecionar...</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div className="col-span-2">
@@ -1108,7 +1107,7 @@ export default function ReceivablesPage() {
             <label className="label">Categoria local <span className="text-gray-400 font-normal">(opcional)</span></label>
             <select className="input" value={importTocCatId} onChange={(e) => setImportTocCatId(e.target.value)} autoFocus>
               <option value="">Sem categoria</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div className="flex gap-3 pt-2">
@@ -1131,7 +1130,7 @@ export default function ReceivablesPage() {
             <label className="label">Categoria</label>
             <select className="input" value={form.categoryId} onChange={(e) => { setForm({ ...form, categoryId: e.target.value }); setTocCreate(false) }}>
               <option value="">Selecionar...</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{!c.launchToc ? ' (local)' : ''}</option>)}
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div className="col-span-2">
@@ -1161,22 +1160,9 @@ export default function ReceivablesPage() {
           <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
         </div>
 
-        {selectedCategory?.launchToc && (
+        {false && (
           <div className="mt-4 border-t border-green-100 pt-4 space-y-3">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                className="rounded border-gray-300 text-green-600"
-                checked={tocCreate}
-                onChange={(e) => {
-                  setTocCreate(e.target.checked)
-                  if (!e.target.checked) { setTocLines([{ ...emptyTocLine }]) }
-                }}
-              />
-              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
-                <SendToBack className="w-4 h-4 text-green-500" /> Criar também no TOConline
-              </span>
-            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none"></label>
 
             {tocCreate && (
               <div className="pl-6 space-y-3">
@@ -1274,9 +1260,9 @@ export default function ReceivablesPage() {
                       </div>
                     ))}
                   </div>
-                  {tocLinesTotal !== null && tocLinesTotal > 0 && (
+                  {(tocLinesTotal ?? 0) > 0 && (
                     <div className="mt-2 text-right text-sm text-green-700 font-semibold">
-                      Total c/IVA: {tocLinesTotal.toFixed(2)} €
+                      Total c/IVA: {(tocLinesTotal ?? 0).toFixed(2)} €
                     </div>
                   )}
                   {hasIseLines && (
@@ -1387,9 +1373,9 @@ export default function ReceivablesPage() {
           <button
             onClick={() => create.mutate()}
             className="btn-primary flex-1"
-            disabled={create.isPending || !form.entityName || (!tocCreate && (!form.reference || !form.totalAmount)) || !form.documentDate || !form.dueDate || (tocCreate && !tocLines.some((l) => l.description && l.unit_price))}
+            disabled={create.isPending || !form.entityName || !form.reference || !form.totalAmount || !form.documentDate || !form.dueDate}
           >
-            {create.isPending ? (tocCreate ? 'A criar no TOConline...' : 'A guardar...') : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
+            {create.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
         </div>
       </Modal>

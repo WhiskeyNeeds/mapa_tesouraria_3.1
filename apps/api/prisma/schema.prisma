@@ -244,6 +244,10 @@ model TreasuryCategory {
   icon       String?  @db.VarChar(40)
   isArchived Boolean  @default(false)
 
+  parentId   String?
+  parent     TreasuryCategory?  @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children   TreasuryCategory[] @relation("CategoryChildren")
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -254,9 +258,10 @@ model TreasuryCategory {
   movements           TreasuryBankMovement[]
   classificationRules TreasuryClassificationRule[]
 
-  @@unique([clientId, name])
+  @@unique([clientId, name, type])
   @@index([clientId, type])
   @@index([clientId, launchToc])
+  @@index([clientId, parentId])
   @@map("treasury_categories")
 }
 

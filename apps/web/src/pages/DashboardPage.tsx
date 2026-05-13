@@ -1,13 +1,14 @@
+import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency, formatDate, formatDateRelative, statusLabel, statusVariant } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText } from 'lucide-react'
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Legend, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine,
+  BarChart, Bar, Legend, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine, ReferenceArea,
 } from 'recharts'
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
@@ -32,6 +33,31 @@ interface DashboardData {
 }
 
 const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
+interface CashflowStatCategory {
+  id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; monthly: number[]
+  children?: CashflowStatCategory[]
+}
+interface CashflowStatementData {
+  year: number
+  months: Array<{ month: number; label: string }>
+  startingBalances: number[]; endingBalances: number[]
+  incomeTotal: number[]; expenseTotal: number[]
+  uncategorizedIncome: number[]; uncategorizedExpense: number[]
+  categories: CashflowStatCategory[]
+}
+interface CashPositioningWeek {
+  label: string; start: string; end: string
+  isCurrent: boolean; isFuture: boolean
+  openingBalance: number; closingBalance: number
+  income: number; expense: number
+  catIncome: Record<string, number>; catExpense: Record<string, number>
+}
+interface CashPositioningData {
+  currentBalance: number
+  categories: Array<{ id: string; name: string; type: string; color: string }>
+  weeks: CashPositioningWeek[]
+}
 
 // Custom tooltip component for recharts
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
@@ -109,6 +135,383 @@ function DonutWithLegend({ data, total, label }: { data: CatItem[]; total: numbe
 
 interface ForecastDay { date: string; balance: number; income: number; expense: number }
 
+// Indentation levels for cashflow category rows
+const INDENT_PX = [40, 56, 72] // px-10, px-14, px-18
+
+interface ColDef {
+  key: string; label: string; monthIndices: number[]
+  isFuture: boolean; isCurrent: boolean
+}
+
+function CashflowStatementTable({ data, year, onYearChange, cpData }: {
+  data: CashflowStatementData; year: number; onYearChange: (y: number) => void
+  cpData?: CashPositioningData
+}) {
+  const [inflowOpen, setInflowOpen] = useState(true)
+  const [outflowOpen, setOutflowOpen] = useState(true)
+  const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set())
+  const [selectedColKey, setSelectedColKey] = useState<string | null>(null)
+  const [hoveredColKey, setHoveredColKey] = useState<string | null>(null)
+  const [periodType, setPeriodType] = useState<'weekly' | 'monthly' | 'quarterly' | 'semester'>('monthly')
+
+  const currentYear = new Date().getFullYear()
+  const currentMonth = year === currentYear ? new Date().getMonth() : -1
+  const activeColKey = hoveredColKey ?? selectedColKey
+
+  const cols: ColDef[] = useMemo(() => {
+    const isFuture = (i: number) => year === currentYear && i > currentMonth
+    if (periodType === 'monthly') {
+      return Array.from({ length: 12 }, (_, i) => ({
+        key: data.months[i].label,
+        label: data.months[i].label,
+        monthIndices: [i],
+        isFuture: isFuture(i),
+        isCurrent: i === currentMonth,
+      }))
+    }
+    if (periodType === 'quarterly') {
+      return [0, 1, 2, 3].map((q) => {
+        const indices = [q * 3, q * 3 + 1, q * 3 + 2]
+        return {
+          key: `T${q + 1}`,
+          label: `T${q + 1}`,
+          monthIndices: indices,
+          isFuture: indices.every(isFuture),
+          isCurrent: year === currentYear && indices.includes(currentMonth),
+        }
+      })
+    }
+    return [0, 1].map((s) => {
+      const indices = Array.from({ length: 6 }, (_, k) => s * 6 + k)
+      return {
+        key: `S${s + 1}`,
+        label: `S${s + 1}`,
+        monthIndices: indices,
+        isFuture: indices.every(isFuture),
+        isCurrent: year === currentYear && indices.includes(currentMonth),
+      }
+    })
+  }, [periodType, data, year, currentMonth, currentYear])
+
+  const colIncome = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.incomeTotal[i], 0)
+  const colExpense = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.expenseTotal[i], 0)
+  const colStartBal = (col: ColDef) => data.startingBalances[col.monthIndices[0]]
+  const colEndBal = (col: ColDef) => data.endingBalances[col.monthIndices[col.monthIndices.length - 1]]
+  const colCatAmt = (col: ColDef, cat: CashflowStatCategory) => col.monthIndices.reduce((s, i) => s + (cat.monthly[i] ?? 0), 0)
+  const colUncatInc = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.uncategorizedIncome[i], 0)
+  const colUncatExp = (col: ColDef) => col.monthIndices.reduce((s, i) => s + data.uncategorizedExpense[i], 0)
+
+  const incomeCats = data.categories.filter((c) => c.type === 'REVENUE')
+  const expenseCats = data.categories.filter((c) => c.type === 'EXPENSE')
+  const totalIncome = cols.reduce((s, col) => s + colIncome(col), 0)
+  const totalExpense = cols.reduce((s, col) => s + colExpense(col), 0)
+  const netVariation = totalIncome - totalExpense
+
+  const navigateYear = (dir: -1 | 1) => { setSelectedColKey(null); onYearChange(year + dir) }
+  const netFmt = (v: number) => v === 0 ? '—' : (v > 0 ? '+' : '') + formatCurrency(v)
+  const colMinW = periodType === 'semester' ? 'min-w-[150px]' : periodType === 'quarterly' ? 'min-w-[130px]' : 'min-w-[110px]'
+
+  const hoverProps = (key: string) => ({
+    onMouseEnter: () => setHoveredColKey(key),
+    onMouseLeave: () => setHoveredColKey(null),
+    onClick: (e: React.MouseEvent) => { e.stopPropagation(); setSelectedColKey((p) => p === key ? null : key) },
+  })
+
+  const chartData = cols.map((col) => ({
+    label: col.label,
+    income: colIncome(col),
+    expense: colExpense(col),
+    balance: col.isFuture ? null : colEndBal(col),
+  }))
+
+  const weeklyChartData = (cpData?.weeks ?? []).map((wk) => ({
+    label: wk.label,
+    income: wk.income,
+    expense: wk.expense,
+    balance: wk.isFuture ? null : wk.closingBalance,
+  }))
+
+  const toggleGroup = (id: string) => setClosedGroups((prev) => {
+    const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next
+  })
+
+  const chartLegend = (
+    <div className="flex flex-col gap-2 py-3">
+      <div className="text-xs font-medium text-gray-500 mb-0.5">Gráfico</div>
+      <div className="flex items-center gap-1.5 text-xs text-gray-500"><div className="w-3 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: '#10b981' }} />Entradas</div>
+      <div className="flex items-center gap-1.5 text-xs text-gray-500"><div className="w-3 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: '#ef4444' }} />Saídas</div>
+      <div className="flex items-center gap-1.5 text-xs text-gray-500"><div className="w-4 flex-shrink-0 border-b-2 border-blue-500 rounded" style={{ marginTop: 1 }} />Saldo</div>
+    </div>
+  )
+
+  function renderChart(cData: typeof chartData, nCols: number, isFutureCol: (k: number) => boolean) {
+    return (
+      <tr>
+        <td className="sticky left-0 bg-white z-10 px-5 align-middle border-b border-gray-100" style={{ minWidth: 220 }}>{chartLegend}</td>
+        <td colSpan={nCols} className="p-0 border-b border-gray-100">
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart
+              data={cData}
+              margin={{ left: 0, right: 0, top: 8, bottom: 0 }}
+              barCategoryGap="22%"
+              onMouseMove={(s: { activeLabel?: string }) => setHoveredColKey(s?.activeLabel ?? null)}
+              onMouseLeave={() => setHoveredColKey(null)}
+              onClick={(s: { activeLabel?: string }) => { if (s?.activeLabel) setSelectedColKey((p) => p === s.activeLabel ? null : s.activeLabel!) }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+              {activeColKey && <ReferenceArea x1={activeColKey} x2={activeColKey} fill="#eff6ff" fillOpacity={1} />}
+              <XAxis dataKey="label" hide />
+              <YAxis hide />
+              <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} />
+              <Bar dataKey="income" name="Entradas" fill="#10b981" maxBarSize={32} radius={[2, 2, 0, 0]}>
+                {cData.map((_, k) => <Cell key={k} fill="#10b981" fillOpacity={isFutureCol(k) ? 0.22 : 1} />)}
+              </Bar>
+              <Bar dataKey="expense" name="Saídas" fill="#ef4444" maxBarSize={32} radius={[2, 2, 0, 0]}>
+                {cData.map((_, k) => <Cell key={k} fill="#ef4444" fillOpacity={isFutureCol(k) ? 0.22 : 1} />)}
+              </Bar>
+              <Line type="monotone" dataKey="balance" name="Saldo Final" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3, strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </td>
+        <td className="border-b border-gray-100 bg-white" />
+      </tr>
+    )
+  }
+
+  function renderCatRows(cats: CashflowStatCategory[], depth = 0): React.ReactNode {
+    const indentPx = INDENT_PX[Math.min(depth, INDENT_PX.length - 1)]
+    return cats.map((cat) => {
+      const hasChildren = (cat.children?.length ?? 0) > 0
+      const isOpen = !closedGroups.has(cat.id)
+      const catTotal = cols.reduce((s, col) => s + colCatAmt(col, cat), 0)
+      return (
+        <React.Fragment key={cat.id}>
+          <tr className={`hover:bg-gray-50/50 ${hasChildren ? 'cursor-pointer select-none' : ''}`} onClick={hasChildren ? () => toggleGroup(cat.id) : undefined}>
+            <td className="py-1.5 sticky left-0 bg-white z-10 pr-4" style={{ paddingLeft: indentPx }}>
+              <div className="flex items-center gap-1.5">
+                {hasChildren
+                  ? (isOpen ? <ChevronDown className="w-3 h-3 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 text-gray-400 flex-shrink-0" />)
+                  : <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color ?? '#9ca3af' }} />}
+                <span className={`text-xs truncate max-w-[160px] ${hasChildren ? 'font-medium text-gray-700' : 'text-gray-600'}`}>{cat.name}</span>
+              </div>
+            </td>
+            {cols.map((col) => {
+              const v = colCatAmt(col, cat)
+              return (
+                <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? (hasChildren ? 'font-medium text-gray-700' : 'text-gray-700') : 'text-gray-300'}`} {...hoverProps(col.key)}>
+                  {v > 0 && !col.isFuture ? formatCurrency(v) : '—'}
+                </td>
+              )
+            })}
+            <td className={`px-3 py-1.5 text-right text-xs whitespace-nowrap ${hasChildren ? 'font-medium text-gray-700' : 'text-gray-600'}`}>{catTotal > 0 ? formatCurrency(catTotal) : '—'}</td>
+          </tr>
+          {hasChildren && isOpen && renderCatRows(cat.children!, depth + 1)}
+        </React.Fragment>
+      )
+    })
+  }
+
+  const renderPeriodView = () => (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-max border-collapse">
+        <thead>
+          <tr className="border-b border-gray-100 bg-gray-50">
+            <th className="px-5 py-2 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 z-10 min-w-[220px]">Categoria</th>
+            {cols.map((col) => (
+              <th key={col.key} className={`px-3 py-2 text-center text-xs font-medium whitespace-nowrap cursor-pointer select-none ${colMinW} ${activeColKey === col.key ? 'bg-blue-50 text-blue-700' : col.isCurrent ? 'text-gray-700' : col.isFuture ? 'text-gray-400' : 'text-gray-500'}`} {...hoverProps(col.key)}>
+                {col.label}
+              </th>
+            ))}
+            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 whitespace-nowrap bg-gray-50">Total</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-50">
+          {renderChart(chartData, cols.length, (k) => cols[k].isFuture)}
+
+          <tr className="bg-white hover:bg-gray-50/50">
+            <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>
+            {cols.map((col) => {
+              const v = colStartBal(col)
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${col.isFuture ? 'text-gray-300' : 'text-gray-700'}`} {...hoverProps(col.key)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
+            })}
+            <td className="px-3 py-2 text-right text-xs text-gray-300">—</td>
+          </tr>
+
+          <tr className="bg-emerald-50 hover:bg-emerald-100 cursor-pointer select-none" onClick={() => setInflowOpen((o) => !o)}>
+            <td className="px-5 py-2 sticky left-0 bg-emerald-50 z-10">
+              <div className="flex items-center gap-1.5">
+                {inflowOpen ? <ChevronDown className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />}
+                <span className="text-xs font-semibold text-emerald-800">Entradas</span>
+              </div>
+            </td>
+            {cols.map((col) => {
+              const v = colIncome(col)
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-emerald-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
+            })}
+            <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{totalIncome > 0 ? formatCurrency(totalIncome) : '—'}</td>
+          </tr>
+          {inflowOpen && renderCatRows(incomeCats)}
+          {inflowOpen && cols.some((col) => colUncatInc(col) > 0) && (
+            <tr className="bg-white hover:bg-gray-50/50">
+              <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
+              {cols.map((col) => { const v = colUncatInc(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
+              <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{(() => { const t = cols.reduce((s, col) => s + colUncatInc(col), 0); return t > 0 ? formatCurrency(t) : '—' })()}</td>
+            </tr>
+          )}
+
+          <tr className="bg-red-50 hover:bg-red-100 cursor-pointer select-none" onClick={() => setOutflowOpen((o) => !o)}>
+            <td className="px-5 py-2 sticky left-0 bg-red-50 z-10">
+              <div className="flex items-center gap-1.5">
+                {outflowOpen ? <ChevronDown className="w-3.5 h-3.5 text-red-600 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-red-600 flex-shrink-0" />}
+                <span className="text-xs font-semibold text-red-800">Saídas</span>
+              </div>
+            </td>
+            {cols.map((col) => {
+              const v = colExpense(col)
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-red-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-red-700' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
+            })}
+            <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{totalExpense > 0 ? formatCurrency(totalExpense) : '—'}</td>
+          </tr>
+          {outflowOpen && renderCatRows(expenseCats)}
+          {outflowOpen && cols.some((col) => colUncatExp(col) > 0) && (
+            <tr className="bg-white hover:bg-gray-50/50">
+              <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
+              {cols.map((col) => { const v = colUncatExp(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.key)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
+              <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{(() => { const t = cols.reduce((s, col) => s + colUncatExp(col), 0); return t > 0 ? formatCurrency(t) : '—' })()}</td>
+            </tr>
+          )}
+
+          <tr className="bg-gray-50 border-t border-gray-200">
+            <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-gray-50 z-10">Variação líquida</td>
+            {cols.map((col) => {
+              const net = colIncome(col) - colExpense(col)
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50' : ''} ${col.isFuture || net === 0 ? 'text-gray-300' : net > 0 ? 'text-emerald-700' : 'text-red-700'}`} {...hoverProps(col.key)}>{net !== 0 && !col.isFuture ? netFmt(net) : '—'}</td>
+            })}
+            <td className={`px-3 py-2 text-right text-xs font-semibold whitespace-nowrap ${netVariation === 0 ? 'text-gray-300' : netVariation > 0 ? 'text-emerald-700' : 'text-red-700'}`}>{netVariation !== 0 ? netFmt(netVariation) : '—'}</td>
+          </tr>
+
+          <tr className="bg-white border-t-2 border-gray-300">
+            <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
+            {cols.map((col) => {
+              const v = colEndBal(col)
+              return <td key={col.key} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === col.key ? 'bg-blue-50 text-blue-900' : col.isFuture ? 'text-gray-300' : v < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(col.key)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
+            })}
+            <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+
+  const renderWeeklyView = () => {
+    if (!cpData) return <div className="px-5 py-8 text-center text-xs text-gray-400">Dados semanais não disponíveis</div>
+    const weeks = cpData.weeks
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-max border-collapse">
+          <thead>
+            <tr className="border-b border-gray-100 bg-gray-50">
+              <th className="px-5 py-2 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 z-10 min-w-[220px]" />
+              {weeks.map((wk) => (
+                <th key={wk.label} className={`px-3 py-2 text-center text-xs font-medium whitespace-nowrap cursor-pointer select-none min-w-[110px] ${activeColKey === wk.label ? 'bg-blue-50 text-blue-700' : wk.isCurrent ? 'text-blue-600' : wk.isFuture ? 'text-gray-400' : 'text-gray-500'}`} {...hoverProps(wk.label)}>
+                  <div>{wk.label}</div>
+                  <div className="text-gray-400 mt-0.5" style={{ fontSize: 9 }}>{wk.isCurrent ? 'atual' : wk.isFuture ? 'previsão' : 'realizado'}</div>
+                </th>
+              ))}
+              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 whitespace-nowrap bg-gray-50">Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {renderChart(weeklyChartData, weeks.length, (k) => weeks[k].isFuture)}
+
+            <tr className="bg-white hover:bg-gray-50/50">
+              <td className="px-5 py-2.5 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>
+              {weeks.map((wk) => (
+                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-medium cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${wk.openingBalance < 0 ? 'text-red-700' : wk.isCurrent ? 'text-blue-900' : wk.isFuture ? 'text-gray-500' : 'text-gray-800'}`} {...hoverProps(wk.label)}>
+                  {formatCurrency(wk.openingBalance)}
+                </td>
+              ))}
+              <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
+            </tr>
+
+            <tr className="bg-emerald-50">
+              <td className="px-5 py-2 sticky left-0 bg-emerald-50 z-10"><span className="text-xs font-semibold text-emerald-800">Entradas</span></td>
+              {weeks.map((wk) => (
+                <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-emerald-100' : ''} ${wk.income > 0 ? wk.isFuture ? 'text-emerald-400' : 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
+                  {wk.income > 0 ? formatCurrency(wk.income) : '—'}
+                </td>
+              ))}
+              <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{formatCurrency(weeks.filter((w) => !w.isFuture).reduce((s, w) => s + w.income, 0))}</td>
+            </tr>
+
+            <tr className="bg-red-50">
+              <td className="px-5 py-2 sticky left-0 bg-red-50 z-10"><span className="text-xs font-semibold text-red-800">Saídas</span></td>
+              {weeks.map((wk) => (
+                <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-red-100' : ''} ${wk.expense > 0 ? wk.isFuture ? 'text-red-400' : 'text-red-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
+                  {wk.expense > 0 ? formatCurrency(wk.expense) : '—'}
+                </td>
+              ))}
+              <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{formatCurrency(weeks.filter((w) => !w.isFuture).reduce((s, w) => s + w.expense, 0))}</td>
+            </tr>
+
+            <tr className="bg-gray-50 border-t border-gray-100">
+              <td className="px-5 py-2 text-xs font-semibold text-gray-600 sticky left-0 bg-gray-50 z-10">Variação líquida</td>
+              {weeks.map((wk) => {
+                const net = wk.income - wk.expense
+                return (
+                  <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${net === 0 ? 'text-gray-300' : net > 0 ? wk.isFuture ? 'text-emerald-400' : 'text-emerald-700' : wk.isFuture ? 'text-red-400' : 'text-red-700'}`} {...hoverProps(wk.label)}>
+                    {net !== 0 ? netFmt(net) : '—'}
+                  </td>
+                )
+              })}
+              <td className="px-3 py-2 text-right text-xs text-gray-300">—</td>
+            </tr>
+
+            <tr className="bg-white border-t-2 border-gray-300">
+              <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
+              {weeks.map((wk) => (
+                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50 text-blue-900' : wk.closingBalance < 0 ? 'text-red-700' : wk.isFuture ? 'text-gray-500' : 'text-gray-900'}`} {...hoverProps(wk.label)}>
+                  {formatCurrency(wk.closingBalance)}
+                </td>
+              ))}
+              <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-700">Demonstração de Cash Flow</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Entradas e saídas por categoria ao longo do período</p>
+        </div>
+        <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            {(['weekly', 'monthly', 'quarterly', 'semester'] as const).map((t) => (
+              <button key={t} onClick={() => { setPeriodType(t); setSelectedColKey(null); setHoveredColKey(null) }}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${periodType === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                {t === 'weekly' ? 'Semanal' : t === 'monthly' ? 'Mensal' : t === 'quarterly' ? 'Trimestral' : 'Semestral'}
+              </button>
+            ))}
+          </div>
+          {periodType !== 'weekly' && (
+            <div className="flex items-center gap-1">
+              <button onClick={() => navigateYear(-1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">‹</button>
+              <span className="text-sm font-semibold text-gray-700 min-w-[60px] text-center">{year}</span>
+              <button onClick={() => navigateYear(1)} disabled={year >= currentYear} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">›</button>
+            </div>
+          )}
+        </div>
+      </div>
+      {periodType === 'weekly' ? renderWeeklyView() : renderPeriodView()}
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
   const [days, setDays] = useState(30)
@@ -143,6 +546,20 @@ export default function DashboardPage() {
   const { data: forecastData } = useQuery<{ startingBalance: number; days: number; forecast: ForecastDay[] }>({
     queryKey: ['dashboard-forecast', selectedClientId, forecastDays],
     queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/forecast?days=${forecastDays}`),
+    enabled: !!selectedClientId,
+  })
+
+  const [stmtYear, setStmtYear] = useState(currentYear)
+
+  const { data: cashflowStmt } = useQuery<CashflowStatementData>({
+    queryKey: ['dashboard-cashflow-statement', selectedClientId, stmtYear],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cashflow-statement?year=${stmtYear}`),
+    enabled: !!selectedClientId,
+  })
+
+  const { data: cashPositioning } = useQuery<CashPositioningData>({
+    queryKey: ['dashboard-cash-positioning', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cash-positioning`),
     enabled: !!selectedClientId,
   })
 
@@ -490,6 +907,11 @@ export default function DashboardPage() {
             </ComposedChart>
           </ResponsiveContainer>
         </div>
+      )}
+
+      {/* Cashflow Statement Table */}
+      {cashflowStmt && (
+        <CashflowStatementTable data={cashflowStmt} year={stmtYear} onYearChange={setStmtYear} cpData={cashPositioning} />
       )}
 
       {/* Forecast section */}

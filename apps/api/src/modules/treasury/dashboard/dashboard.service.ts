@@ -210,6 +210,272 @@ export class TreasuryDashboardService {
     }
   }
 
+  async getCashflowStatement(clientId: string, year: number) {
+    const start = new Date(year, 0, 1)
+    const end = new Date(year, 11, 31, 23, 59, 59)
+
+    const [movements, categories, bankAccounts] = await Promise.all([
+      this.prisma.treasuryBankMovement.findMany({
+        where: { clientId, deletedAt: null, date: { gte: start, lte: end } },
+        select: { date: true, amount: true, categoryId: true },
+      }),
+      this.prisma.treasuryCategory.findMany({
+        where: { clientId, deletedAt: null, isArchived: false },
+        select: { id: true, name: true, type: true, color: true, parentId: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.treasuryBankAccount.findMany({
+        where: { clientId, isActive: true, deletedAt: null },
+        select: { id: true },
+      }),
+    ])
+
+    const balances = await this.fetchAccountBalances(clientId)
+    const currentBalance = bankAccounts.reduce((s, a) => s + (balances.get(a.id) ?? 0), 0)
+
+    const movementsAfterYear = await this.prisma.treasuryBankMovement.findMany({
+      where: { clientId, deletedAt: null, date: { gt: end } },
+      select: { amount: true },
+    })
+    const balanceAtYearEnd = currentBalance - movementsAfterYear.reduce((s, m) => s + Number(m.amount), 0)
+
+    const monthlyIncome = new Array(12).fill(0)
+    const monthlyExpense = new Array(12).fill(0)
+    for (const m of movements) {
+      const idx = m.date.getMonth()
+      const amt = Number(m.amount)
+      if (amt > 0) monthlyIncome[idx] += amt
+      else monthlyExpense[idx] += Math.abs(amt)
+    }
+
+    const endingBalances = new Array(12).fill(0)
+    const startingBalances = new Array(12).fill(0)
+    endingBalances[11] = balanceAtYearEnd
+    for (let i = 11; i >= 0; i--) {
+      startingBalances[i] = endingBalances[i] - monthlyIncome[i] + monthlyExpense[i]
+      if (i > 0) endingBalances[i - 1] = startingBalances[i]
+    }
+
+    // Per-category direct monthly amounts (movements assigned directly to this category)
+    const catDirectMonthly = new Map<string, number[]>()
+    const uncatIncome = new Array(12).fill(0)
+    const uncatExpense = new Array(12).fill(0)
+
+    for (const m of movements) {
+      const idx = m.date.getMonth()
+      const amt = Number(m.amount)
+      if (!m.categoryId) {
+        if (amt > 0) uncatIncome[idx] += amt
+        else uncatExpense[idx] += Math.abs(amt)
+        continue
+      }
+      if (!catDirectMonthly.has(m.categoryId)) catDirectMonthly.set(m.categoryId, new Array(12).fill(0))
+      catDirectMonthly.get(m.categoryId)![idx] += Math.abs(amt)
+    }
+
+    // Build hierarchy tree
+    type CatNode = {
+      id: string; name: string; type: string; color: string | null; parentId: string | null
+      ownMonthly: number[]; monthly: number[]
+      children: CatNode[]
+    }
+
+    const nodeMap = new Map<string, CatNode>()
+    for (const c of categories) {
+      nodeMap.set(c.id, {
+        id: c.id, name: c.name, type: c.type, color: c.color, parentId: c.parentId,
+        ownMonthly: catDirectMonthly.get(c.id) ?? new Array(12).fill(0),
+        monthly: new Array(12).fill(0),
+        children: [],
+      })
+    }
+
+    const roots: CatNode[] = []
+    for (const c of categories) {
+      const node = nodeMap.get(c.id)!
+      if (c.parentId && nodeMap.has(c.parentId)) {
+        nodeMap.get(c.parentId)!.children.push(node)
+      } else {
+        roots.push(node)
+      }
+    }
+
+    // Aggregate monthly amounts bottom-up (children sum into parents)
+    function aggregate(node: CatNode): number[] {
+      const total = [...node.ownMonthly]
+      for (const child of node.children) {
+        const childTotal = aggregate(child)
+        for (let i = 0; i < 12; i++) total[i] += childTotal[i]
+      }
+      node.monthly = total
+      return total
+    }
+    for (const root of roots) aggregate(root)
+
+    // Filter out nodes with no data (all zeros across all months)
+    function hasData(node: CatNode): boolean {
+      return node.monthly.some((v) => v > 0) || node.children.some(hasData)
+    }
+
+    function serializeNode(node: CatNode): object {
+      return {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        color: node.color,
+        monthly: node.monthly,
+        children: node.children.filter(hasData).map(serializeNode),
+      }
+    }
+
+    const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
+    return {
+      year,
+      months: MONTH_LABELS.map((label, i) => ({ month: i + 1, label })),
+      startingBalances,
+      endingBalances,
+      incomeTotal: monthlyIncome,
+      expenseTotal: monthlyExpense,
+      uncategorizedIncome: uncatIncome,
+      uncategorizedExpense: uncatExpense,
+      categories: roots.filter(hasData).map(serializeNode),
+    }
+  }
+
+  async getCashPositioning(clientId: string, weeksAhead = 6) {
+    const now = new Date()
+    now.setHours(0, 0, 0, 0)
+
+    // End of today — used to include all actual movements from today
+    const endOfToday = new Date(now)
+    endOfToday.setHours(23, 59, 59, 999)
+
+    // Monday of the current week
+    const dow = now.getDay()
+    const daysToMon = dow === 0 ? 6 : dow - 1
+    const currentMon = new Date(now)
+    currentMon.setDate(now.getDate() - daysToMon)
+
+    // Build week windows: 2 past + current + weeksAhead future
+    const weeksBack = 2
+    const weekList: Array<{ start: Date; end: Date; isFuture: boolean; isCurrent: boolean; label: string }> = []
+    for (let i = -weeksBack; i <= weeksAhead; i++) {
+      const start = new Date(currentMon)
+      start.setDate(currentMon.getDate() + i * 7)
+      const end = new Date(start)
+      end.setDate(start.getDate() + 6)
+      end.setHours(23, 59, 59, 999)
+
+      // ISO week number
+      const tmp = new Date(start)
+      tmp.setDate(tmp.getDate() + 3 - ((tmp.getDay() + 6) % 7))
+      const week1 = new Date(tmp.getFullYear(), 0, 4)
+      const wn = 1 + Math.round(((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7)
+      const dayStr = start.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })
+
+      weekList.push({ start, end, isFuture: i > 0, isCurrent: i === 0, label: `S${wn} - ${dayStr}` })
+    }
+
+    const rangeStart = weekList[0].start
+    const rangeEnd = weekList[weekList.length - 1].end
+
+    const [bankAccounts, pastMovements, pendingReceivables, pendingPayables, categories] = await Promise.all([
+      this.prisma.treasuryBankAccount.findMany({
+        where: { clientId, isActive: true, deletedAt: null },
+        select: { id: true },
+      }),
+      // Use endOfToday so movements recorded today are included in the current week's actuals
+      this.prisma.treasuryBankMovement.findMany({
+        where: { clientId, deletedAt: null, date: { gte: rangeStart, lte: endOfToday } },
+        select: { date: true, amount: true, categoryId: true },
+      }),
+      // Only fetch pending docs due AFTER today — docs due today belong to actuals, not forecast
+      this.prisma.treasuryReceivable.findMany({
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
+        select: { dueDate: true, pendingAmount: true, categoryId: true },
+      }),
+      this.prisma.treasuryPayable.findMany({
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
+        select: { dueDate: true, pendingAmount: true, categoryId: true },
+      }),
+      this.prisma.treasuryCategory.findMany({
+        where: { clientId, deletedAt: null, isArchived: false },
+        select: { id: true, name: true, type: true, color: true },
+        orderBy: { name: 'asc' },
+      }),
+    ])
+
+    const balances = await this.fetchAccountBalances(clientId)
+    const currentBalance = bankAccounts.reduce((s, a) => s + (balances.get(a.id) ?? 0), 0)
+
+    // Balance at start of range (subtract all past movements within range from current balance)
+    const movementsBeforeRange = pastMovements.filter((m) => m.date < rangeStart)
+    const movementsInRange = pastMovements.filter((m) => m.date >= rangeStart)
+    const balanceAtRangeStart = currentBalance - movementsInRange.reduce((s, m) => s + Number(m.amount), 0)
+
+    let running = balanceAtRangeStart
+    const weeks = weekList.map((wk) => {
+      let income = 0
+      let expense = 0
+      const catIncome = new Map<string, number>()
+      const catExpense = new Map<string, number>()
+
+      if (!wk.isFuture) {
+        // Actual movements
+        for (const m of pastMovements) {
+          if (m.date < wk.start || m.date > wk.end) continue
+          const amt = Number(m.amount)
+          if (amt > 0) {
+            income += amt
+            if (m.categoryId) catIncome.set(m.categoryId, (catIncome.get(m.categoryId) ?? 0) + amt)
+          } else {
+            expense += Math.abs(amt)
+            if (m.categoryId) catExpense.set(m.categoryId, (catExpense.get(m.categoryId) ?? 0) + Math.abs(amt))
+          }
+        }
+      } else {
+        // Forecast from pending docs
+        for (const r of pendingReceivables) {
+          if (r.dueDate < wk.start || r.dueDate > wk.end) continue
+          const amt = Number(r.pendingAmount)
+          income += amt
+          if (r.categoryId) catIncome.set(r.categoryId, (catIncome.get(r.categoryId) ?? 0) + amt)
+        }
+        for (const p of pendingPayables) {
+          if (p.dueDate < wk.start || p.dueDate > wk.end) continue
+          const amt = Number(p.pendingAmount)
+          expense += amt
+          if (p.categoryId) catExpense.set(p.categoryId, (p.categoryId ? (catExpense.get(p.categoryId) ?? 0) + amt : amt))
+        }
+      }
+
+      const openingBalance = running
+      running += income - expense
+      const closingBalance = running
+
+      return {
+        label: wk.label,
+        start: wk.start.toISOString().slice(0, 10),
+        end: wk.end.toISOString().slice(0, 10),
+        isCurrent: wk.isCurrent,
+        isFuture: wk.isFuture,
+        openingBalance,
+        closingBalance,
+        income,
+        expense,
+        catIncome: Object.fromEntries(catIncome),
+        catExpense: Object.fromEntries(catExpense),
+      }
+    })
+
+    return {
+      currentBalance,
+      categories: categories.map((c) => ({ id: c.id, name: c.name, type: c.type, color: c.color })),
+      weeks,
+    }
+  }
+
   async getForecast(clientId: string, days = 90) {
     // Ensure recurring entries are generated up to the forecast horizon before computing
     await this.recurrencesSvc.processForClient(clientId, days + 30)

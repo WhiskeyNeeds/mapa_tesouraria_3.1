@@ -28,4 +28,16 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
     const { days } = request.query as { days?: string }
     return reply.send(await svc.getCategoryBreakdown(clientId, days ? parseInt(days) : 30))
   })
+
+  fastify.get('/treasury/:clientId/dashboard/cashflow-statement', { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { year } = request.query as { year?: string }
+    return reply.send(await svc.getCashflowStatement(clientId, year ? parseInt(year) : new Date().getFullYear()))
+  })
+
+  fastify.get('/treasury/:clientId/dashboard/cash-positioning', { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { weeks } = request.query as { weeks?: string }
+    return reply.send(await svc.getCashPositioning(clientId, weeks ? parseInt(weeks) : 6))
+  })
 }

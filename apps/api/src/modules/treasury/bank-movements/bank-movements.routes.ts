@@ -275,7 +275,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
 
   fastify.patch(`${prefix}/:id/classify`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    const { categoryId } = request.body as { categoryId: string }
+    const { categoryId } = request.body as { categoryId: string | null }
     return reply.send(await svc.classify(clientId, id, categoryId))
   })
 
