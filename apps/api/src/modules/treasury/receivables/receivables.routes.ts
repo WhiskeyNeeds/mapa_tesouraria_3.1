@@ -25,7 +25,10 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       entityName?: string
       dueDateFrom?: string
       dueDateTo?: string
+      docDateFrom?: string
+      docDateTo?: string
       isRecurrent?: string
+      overdue?: string
       tocCustomerId?: string
       sortBy?: string
       sortDir?: string
@@ -41,6 +44,9 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       ...q,
       status: statusValue,
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
+      overdue: q.overdue === 'true',
+      docDateFrom: q.docDateFrom,
+      docDateTo: q.docDateTo,
       sortBy: validSortBy,
       sortDir: validSortDir,
       page: q.page ? parseInt(q.page) : undefined,

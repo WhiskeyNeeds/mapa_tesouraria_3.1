@@ -22,6 +22,7 @@ import { settingsRoutes } from './modules/treasury/settings/settings.routes.js'
 import { classificationRulesRoutes } from './modules/treasury/classification-rules/classification-rules.routes.js'
 import { dashboardRoutes } from './modules/treasury/dashboard/dashboard.routes.js'
 import { recurrencesRoutes } from './modules/treasury/recurrences/recurrences.routes.js'
+import { localContactsRoutes } from './modules/treasury/local-contacts/local-contacts.routes.js'
 import { HttpError } from './lib/errors.js'
 
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } })
@@ -71,6 +72,7 @@ await fastify.register(settingsRoutes, { prefix: V1 })
 await fastify.register(classificationRulesRoutes, { prefix: V1 })
 await fastify.register(dashboardRoutes, { prefix: V1 })
 await fastify.register(recurrencesRoutes, { prefix: V1 })
+await fastify.register(localContactsRoutes, { prefix: V1 })
 
 fastify.get('/health', () => ({ status: 'ok', ts: new Date().toISOString() }))
 

@@ -19,7 +19,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as {
       status?: string; origin?: TreasuryDocOrigin; categoryId?: string
-      entityName?: string; dueDateFrom?: string; dueDateTo?: string
+      entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string
       isRecurrent?: string; tocSupplierId?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
     const statusValue = q.status?.includes(',')

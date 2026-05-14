@@ -167,6 +167,7 @@ model Client {
   treasuryReceivables         TreasuryReceivable[]
   treasuryPayables            TreasuryPayable[]
   treasuryRecurrences         TreasuryRecurrence[]
+  localContacts               LocalContact[]
   treasuryReconciliations     TreasuryReconciliation[]
   treasuryClassificationRules TreasuryClassificationRule[]
   treasurySettings            TreasurySettings?
@@ -582,6 +583,34 @@ model TreasuryReconciliationPayable {
   @@index([payableId])
   @@index([tocPaymentId])
   @@map("treasury_reconciliation_payables")
+}
+
+enum LocalContactType {
+  CUSTOMER
+  SUPPLIER
+}
+
+model LocalContact {
+  id       String           @id @default(cuid())
+  clientId String
+  type     LocalContactType
+
+  name    String  @db.VarChar(200)
+  nif     String? @db.VarChar(20)
+  phone   String? @db.VarChar(30)
+  mobile  String? @db.VarChar(30)
+  email   String? @db.VarChar(150)
+  address String? @db.VarChar(500)
+  notes   String? @db.VarChar(1000)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, type])
+  @@map("local_contacts")
 }
 
 model TreasuryClassificationRule {

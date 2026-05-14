@@ -12,21 +12,26 @@ export class TreasuryReceivablesService {
     entityName?: string
     dueDateFrom?: string
     dueDateTo?: string
+    docDateFrom?: string
+    docDateTo?: string
     isRecurrent?: boolean
+    overdue?: boolean
     tocCustomerId?: string
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'
     sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
   }) {
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, isRecurrent, tocCustomerId, sortBy = 'dueDate', sortDir = 'asc' } = filters
-    const statusFilter = Array.isArray(status)
-      ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
-      : status ? { status } : {}
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, overdue, tocCustomerId, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const effectiveStatusFilter = overdue
+      ? { status: { in: ['OPEN', 'PARTIAL'] as TreasuryDocStatus[] } }
+      : Array.isArray(status)
+        ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
+        : status ? { status } : {}
     const where: Prisma.TreasuryReceivableWhereInput = {
       clientId,
       deletedAt: null,
-      ...statusFilter,
+      ...effectiveStatusFilter,
       ...(origin ? { origin } : {}),
       ...(categoryId ? { categoryId } : {}),
       ...(tocCustomerId ? { tocCustomerId } : {}),
@@ -34,10 +39,17 @@ export class TreasuryReceivablesService {
         { entityName: { contains: entityName, mode: 'insensitive' } },
         { reference: { contains: entityName, mode: 'insensitive' } },
       ] } : {}),
-      ...(dueDateFrom || dueDateTo ? {
+      ...(dueDateFrom || dueDateTo || overdue ? {
         dueDate: {
+          ...(overdue ? { lt: new Date() } : {}),
           ...(dueDateFrom ? { gte: new Date(dueDateFrom) } : {}),
-          ...(dueDateTo ? { lte: new Date(dueDateTo) } : {}),
+          ...(dueDateTo ? { lt: new Date(new Date(dueDateTo).getTime() + 86400000) } : {}),
+        },
+      } : {}),
+      ...(docDateFrom || docDateTo ? {
+        documentDate: {
+          ...(docDateFrom ? { gte: new Date(docDateFrom) } : {}),
+          ...(docDateTo ? { lt: new Date(new Date(docDateTo).getTime() + 86400000) } : {}),
         },
       } : {}),
       ...(isRecurrent !== undefined ? { recurrenceId: isRecurrent ? { not: null } : null } : {}),

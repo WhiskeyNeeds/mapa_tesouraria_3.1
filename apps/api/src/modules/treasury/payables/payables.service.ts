@@ -12,6 +12,8 @@ export class TreasuryPayablesService {
     entityName?: string
     dueDateFrom?: string
     dueDateTo?: string
+    docDateFrom?: string
+    docDateTo?: string
     isRecurrent?: boolean
     tocSupplierId?: string
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'
@@ -19,7 +21,7 @@ export class TreasuryPayablesService {
     page?: number
     limit?: number
   }) {
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, isRecurrent, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusFilter = Array.isArray(status)
       ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
       : status ? { status } : {}
@@ -37,7 +39,13 @@ export class TreasuryPayablesService {
       ...(dueDateFrom || dueDateTo ? {
         dueDate: {
           ...(dueDateFrom ? { gte: new Date(dueDateFrom) } : {}),
-          ...(dueDateTo ? { lte: new Date(dueDateTo) } : {}),
+          ...(dueDateTo ? { lt: new Date(new Date(dueDateTo).getTime() + 86400000) } : {}),
+        },
+      } : {}),
+      ...(docDateFrom || docDateTo ? {
+        documentDate: {
+          ...(docDateFrom ? { gte: new Date(docDateFrom) } : {}),
+          ...(docDateTo ? { lt: new Date(new Date(docDateTo).getTime() + 86400000) } : {}),
         },
       } : {}),
       ...(isRecurrent !== undefined ? { recurrenceId: isRecurrent ? { not: null } : null } : {}),
