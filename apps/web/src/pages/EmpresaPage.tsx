@@ -1153,7 +1153,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
     : { clientes: 'Novo Cliente',   fornecedores: 'Novo Fornecedor',   produtos: 'Novo Produto',   servicos: 'Novo Serviço' }
 
   const sHdr = (label: string) => (
-    <div className="px-6 py-1.5 bg-teal-600 text-white text-xs font-semibold uppercase tracking-wide">
+    <div className="px-6 py-1.5 bg-white text-gray-400 text-xs font-semibold uppercase tracking-wide border-y border-gray-100">
       {label}
     </div>
   )
@@ -2099,7 +2099,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
     staleTime: 60_000,
   })
   const dHdr = (label: string) => (
-    <div className="px-6 py-1.5 bg-teal-600 text-white text-xs font-semibold uppercase tracking-wide">
+    <div className="px-6 py-1.5 bg-white text-gray-400 text-xs font-semibold uppercase tracking-wide border-y border-gray-100">
       {label}
     </div>
   )

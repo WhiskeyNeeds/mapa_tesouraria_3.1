@@ -290,7 +290,7 @@ export default function CompanyManagerModal({ open, onClose }: Props) {
       {/* DELETE CONFIRM VIEW */}
       {view === 'delete-confirm' && deleteTarget && (
         <div className="space-y-4">
-          <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
+          <div className="flex items-start gap-3 bg-white border border-red-200 rounded-lg p-4 text-sm text-red-800">
             <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-500" />
             <div className="space-y-1">
               <p className="font-medium">
@@ -327,7 +327,7 @@ export default function CompanyManagerModal({ open, onClose }: Props) {
 
 function ErrorBanner({ message }: { message: string }) {
   return (
-    <div className="flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+    <div className="flex items-center gap-2 text-sm text-red-700 bg-white border border-red-200 rounded-lg px-3 py-2">
       <AlertTriangle className="w-4 h-4 flex-shrink-0" />
       <span>{message}</span>
     </div>

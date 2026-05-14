@@ -122,7 +122,7 @@ export default function CompanySelectorPage() {
                   />
                 </div>
                 {error && (
-                  <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-2 text-xs text-red-700 bg-white border border-red-200 rounded-lg px-3 py-2">
                     <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
                     <span>{error}</span>
                   </div>

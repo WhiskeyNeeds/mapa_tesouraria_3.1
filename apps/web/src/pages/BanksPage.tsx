@@ -229,6 +229,7 @@ export default function BanksPage() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importPdfFile, setImportPdfFile] = useState<File | null>(null)
   const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
+  const [replaceConfirm, setReplaceConfirm] = useState<{ file: File; bank: string; bankAccountId: string; existingCount: number } | null>(null)
   const [showNewMovement, setShowNewMovement] = useState(false)
   const [newMovement, setNewMovement] = useState({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' as 'income' | 'expense' })
   const [editDescId, setEditDescId] = useState<string | null>(null)
@@ -328,6 +329,12 @@ export default function BanksPage() {
       return api.get(`/treasury/${selectedClientId}/movements/balance-check${qs ? `?${qs}` : ''}`)
     },
     enabled: !!selectedClientId && !!selectedAccount,
+  })
+
+  const { data: balanceCheckAll = [] } = useQuery<BalanceCheckResult[]>({
+    queryKey: ['balance-check-all', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/movements/balance-check`),
+    enabled: !!selectedClientId && accounts.length > 0,
   })
 
   const currentAccountGaps = balanceCheck.find((r) => r.accountId === selectedAccount)?.gaps ?? []
@@ -432,19 +439,24 @@ export default function BanksPage() {
   })
 
   const uploadStatementMutation = useMutation({
-    mutationFn: async ({ file, bank, bankAccountId }: { file: File; bank: string; bankAccountId: string }) => {
+    mutationFn: async ({ file, bank, bankAccountId, force }: { file: File; bank: string; bankAccountId: string; force?: boolean }) => {
       const token = localStorage.getItem('access_token')
       const form = new FormData()
       form.append('file', file)
       form.append('bankAccountId', bankAccountId)
       form.append('bank', bank)
-      const res = await fetch(`/api/v1/treasury/${selectedClientId}/movements/upload`, {
+      const url = `/api/v1/treasury/${selectedClientId}/movements/upload${force ? '?force=true' : ''}`
+      const res = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: form,
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Erro desconhecido' }))
+        if (res.status === 409 && err.code === 'ACCOUNT_HAS_IMPORTS') {
+          const e = Object.assign(new Error(err.error ?? 'Conta com extrato existente'), { code: 'ACCOUNT_HAS_IMPORTS', existingCount: err.existingCount as number, uploadArgs: { file, bank, bankAccountId } })
+          throw e
+        }
         throw new Error(err.error ?? 'Erro ao importar')
       }
       return res.json()
@@ -454,9 +466,17 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       qc.invalidateQueries({ queryKey: ['balance-check'] })
       setImportResult(data)
+      setReplaceConfirm(null)
       toast.success(`${data.imported} movimento(s) importado(s).`)
     },
-    onError: (e) => toast.error((e as Error).message),
+    onError: (e: unknown) => {
+      const err = e as Error & { code?: string; existingCount?: number; uploadArgs?: { file: File; bank: string; bankAccountId: string } }
+      if (err.code === 'ACCOUNT_HAS_IMPORTS' && err.uploadArgs) {
+        setReplaceConfirm({ ...err.uploadArgs, existingCount: err.existingCount ?? 0 })
+      } else {
+        toast.error(err.message)
+      }
+    },
   })
 
   const selectedAccountData = accounts.find((a) => a.id === selectedAccount)
@@ -576,7 +596,9 @@ export default function BanksPage() {
             onScroll={checkScroll}
             className="flex gap-4 overflow-x-auto pb-4 -mb-4 snap-x snap-mandatory"
           >
-            {accounts.map((acc) => (
+            {accounts.map((acc) => {
+              const accGapCount = balanceCheckAll.find((r) => r.accountId === acc.id)?.gaps.length ?? 0
+              return (
               <div
                 key={acc.id}
                 onClick={() => { setSelectedAccount(selectedAccount === acc.id ? '' : acc.id); setPage(1) }}
@@ -612,13 +634,20 @@ export default function BanksPage() {
                 </div>
                 <div className={`text-xl font-bold ${acc.currentBalance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(acc.currentBalance)}</div>
                 {acc.lowBalanceWarning && (
-                  <div className="flex items-center gap-1 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                  <div className="flex items-center gap-1 mt-2 text-xs text-amber-700 bg-white border border-amber-200 rounded px-2 py-1">
                     <AlertTriangle className="w-3 h-3 flex-shrink-0" />
                     Saldo abaixo do mínimo ({formatCurrency(acc.minBalance ?? 0)})
                   </div>
                 )}
+                {accGapCount > 0 && (
+                  <div className="flex items-center gap-1 mt-2 text-xs text-red-700 bg-white border border-red-200 rounded px-2 py-1">
+                    <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                    {accGapCount} inconsistência{accGapCount !== 1 ? 's' : ''} detetada{accGapCount !== 1 ? 's' : ''}
+                  </div>
+                )}
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>
         {canScrollRight && (
@@ -1265,7 +1294,7 @@ export default function BanksPage() {
       </Modal>
 
       {/* Import modal */}
-      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} title="Importar Extrato Bancário" size="lg">
+      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setReplaceConfirm(null); setImportBank('CGD'); setImportAccountId('') }} title="Importar Extrato Bancário" size="lg">
         {importResult ? (
           <div className="space-y-5">
             <div className="flex flex-col items-center gap-3 py-4">
@@ -1287,6 +1316,36 @@ export default function BanksPage() {
               </div>
             </div>
             <button onClick={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} className="btn-primary w-full">Fechar</button>
+          </div>
+        ) : replaceConfirm ? (
+          <div className="space-y-5">
+            <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+              <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800">Esta conta já tem movimentos importados</p>
+                <p className="text-sm text-amber-700 mt-1">
+                  Existem <strong>{replaceConfirm.existingCount}</strong> movimento(s) importado(s) nesta conta.
+                  Ao substituir, todos os movimentos importados serão eliminados permanentemente e substituídos pelos do novo extrato.
+                  Os movimentos manuais serão mantidos.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setReplaceConfirm(null)}
+                className="btn-secondary flex-1"
+                disabled={uploadStatementMutation.isPending}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => uploadStatementMutation.mutate({ ...replaceConfirm, force: true })}
+                className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium transition-colors disabled:opacity-50"
+                disabled={uploadStatementMutation.isPending}
+              >
+                {uploadStatementMutation.isPending ? 'A substituir...' : 'Substituir'}
+              </button>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">

@@ -15,20 +15,23 @@ export class TreasuryPayablesService {
     docDateFrom?: string
     docDateTo?: string
     isRecurrent?: boolean
+    overdue?: boolean
     tocSupplierId?: string
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'
     sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
   }) {
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
-    const statusFilter = Array.isArray(status)
-      ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
-      : status ? { status } : {}
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const effectiveStatusFilter = overdue
+      ? { status: { in: ['OPEN', 'PARTIAL'] as TreasuryDocStatus[] } }
+      : Array.isArray(status)
+        ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
+        : status ? { status } : {}
     const where: Prisma.TreasuryPayableWhereInput = {
       clientId,
       deletedAt: null,
-      ...statusFilter,
+      ...effectiveStatusFilter,
       ...(origin ? { origin } : {}),
       ...(categoryId ? { categoryId } : {}),
       ...(tocSupplierId ? { tocSupplierId } : {}),
@@ -36,8 +39,9 @@ export class TreasuryPayablesService {
         { entityName: { contains: entityName, mode: 'insensitive' } },
         { reference: { contains: entityName, mode: 'insensitive' } },
       ] } : {}),
-      ...(dueDateFrom || dueDateTo ? {
+      ...(dueDateFrom || dueDateTo || overdue ? {
         dueDate: {
+          ...(overdue ? { lt: new Date() } : {}),
           ...(dueDateFrom ? { gte: new Date(dueDateFrom) } : {}),
           ...(dueDateTo ? { lt: new Date(new Date(dueDateTo).getTime() + 86400000) } : {}),
         },

@@ -22,7 +22,7 @@ export function parseSantander(buffer: Buffer): ParsedMovement[] {
     const description = cellToString(row[2])
     // Santander uses plain dot decimal: "-7291.31" (already signed)
     const amount = cellToAmount(row[4], 'plain')
-    const balanceAfter = row[6] ? cellToAmount(row[6], 'plain') : undefined
+    const balanceAfter = (row[6] != null && row[6] !== '') ? cellToAmount(row[6], 'plain') : undefined
 
     if (!date || !description || isNaN(amount)) continue
 

@@ -107,6 +107,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
   // File upload import (multipart: file + bankAccountId + bank)
   fastify.post(`${prefix}/upload`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
+    const { force } = request.query as { force?: string }
 
     let bankAccountId = ''
     let bank = ''
@@ -128,6 +129,25 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     if (!fileBuffer || fileBuffer.length === 0) throw httpError(400, 'No file uploaded')
     if (!bankAccountId) throw httpError(400, 'bankAccountId is required')
     if (!bank) throw httpError(400, 'bank is required (CGD | BCP | BPI | Bankinter | Santander | NovoBanco)')
+
+    // Check if account already has imported movements
+    const existingCount = await fastify.prisma.treasuryBankMovement.count({
+      where: { clientId, bankAccountId, deletedAt: null, source: { not: 'MANUAL' } },
+    })
+    if (existingCount > 0 && force !== 'true') {
+      return reply.status(409).send({
+        code: 'ACCOUNT_HAS_IMPORTS',
+        error: `Esta conta já tem ${existingCount} movimento(s) importado(s).`,
+        existingCount,
+      })
+    }
+    // Replace mode: soft-delete all existing imported movements before importing
+    if (existingCount > 0 && force === 'true') {
+      await fastify.prisma.treasuryBankMovement.updateMany({
+        where: { clientId, bankAccountId, deletedAt: null, source: { not: 'MANUAL' } },
+        data: { deletedAt: new Date() },
+      })
+    }
 
     const isPDF = originalFileName?.toLowerCase().endsWith('.pdf') ||
       (fileBuffer.length >= 4 && fileBuffer.slice(0, 4).toString('ascii') === '%PDF')

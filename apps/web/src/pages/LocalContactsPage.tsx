@@ -231,7 +231,7 @@ export default function LocalContactsPage() {
       <Modal open={showNew} onClose={() => { setShowNew(false); setForm(emptyForm) }} title={`Novo ${tabLabel}`} size="lg">
         <ContactForm form={form} onChange={setForm} />
         {create.isError && (
-          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
+          <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
           <button onClick={() => { setShowNew(false); setForm(emptyForm) }} className="btn-secondary flex-1">Cancelar</button>
@@ -249,7 +249,7 @@ export default function LocalContactsPage() {
       <Modal open={!!editItem} onClose={() => setEditItem(null)} title={`Editar ${tabLabel}`} size="lg">
         <ContactForm form={editForm} onChange={setEditForm} />
         {update.isError && (
-          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(update.error as Error).message}</p>
+          <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(update.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
           <button onClick={() => setEditItem(null)} className="btn-secondary flex-1">Cancelar</button>
@@ -269,7 +269,7 @@ export default function LocalContactsPage() {
           <p className="text-sm text-gray-400">A verificar documentos associados...</p>
         ) : docCount && docCount.total > 0 ? (
           <div className="space-y-3">
-            <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <div className="flex items-start gap-3 p-3 bg-white border border-red-200 rounded-lg">
               <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-red-700">
                 <p className="font-semibold mb-1">Este {tabLabel.toLowerCase()} tem documentos associados</p>

@@ -24,7 +24,7 @@ export function parseBCP(buffer: Buffer): ParsedMovement[] {
     const description = cellToString(row[2])
     // BCP stores amounts as plain dot-decimal or raw numbers
     const amount = cellToAmount(row[3], 'dot')
-    const balanceAfter = row[4] ? cellToAmount(row[4], 'dot') : undefined
+    const balanceAfter = (row[4] != null && row[4] !== '') ? cellToAmount(row[4], 'dot') : undefined
 
     if (!date || !description || isNaN(amount)) continue
 

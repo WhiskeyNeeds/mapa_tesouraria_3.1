@@ -183,7 +183,7 @@ export class TreasuryBankMovementsService {
           date: { in: candidateDates.map((d) => new Date(d)) },
           amount: { in: candidateAmounts },
         },
-        select: { date: true, amount: true, normalizedDesc: true, balanceAfter: true },
+        select: { id: true, date: true, amount: true, normalizedDesc: true, balanceAfter: true },
       })
       : []
 
@@ -199,6 +199,17 @@ export class TreasuryBankMovementsService {
       )
     )
 
+    // Map from keyNoBalance → id for existing movements with null balanceAfter
+    // Used to patch balanceAfter on re-import instead of inserting a duplicate
+    const nullBalanceMap = new Map<string, string>()
+    for (const m of existingLogicalCandidates) {
+      if (m.balanceAfter == null) {
+        const k = `${bankAccountId}|${this.toDateKey(m.date)}|${this.toAmountKey(Number(m.amount))}|${m.normalizedDesc ?? ''}`
+        nullBalanceMap.set(k, m.id)
+      }
+    }
+
+    const toUpdateBalance: Array<{ id: string; balanceAfter: number }> = []
     const seenIncomingLogical = new Set<string>()
     const toInsert = hashFiltered.filter(({ mov, normalizedDesc }) => {
       const logicalKey = this.buildLogicalKey(bankAccountId, mov.date, mov.amount, normalizedDesc, mov.balanceAfter)
@@ -206,9 +217,24 @@ export class TreasuryBankMovementsService {
         duplicated++
         return false
       }
+      // Incoming movement carries a balance but the existing record has null — update, don't duplicate
+      if (mov.balanceAfter != null) {
+        const k = `${bankAccountId}|${this.toDateKey(mov.date)}|${this.toAmountKey(mov.amount)}|${normalizedDesc}`
+        const existingId = nullBalanceMap.get(k)
+        if (existingId) {
+          toUpdateBalance.push({ id: existingId, balanceAfter: mov.balanceAfter })
+          duplicated++
+          return false
+        }
+      }
       seenIncomingLogical.add(logicalKey)
       return true
     })
+
+    // Patch balanceAfter on existing movements that previously had null
+    for (const { id, balanceAfter } of toUpdateBalance) {
+      await this.prisma.treasuryBankMovement.update({ where: { id }, data: { balanceAfter } })
+    }
 
     // Load classification rules once
     const rules = await this.prisma.treasuryClassificationRule.findMany({

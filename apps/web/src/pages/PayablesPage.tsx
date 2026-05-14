@@ -8,7 +8,7 @@ import { formatCurrency, formatDate, statusLabel, statusVariant, tocStatusLabel,
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, Printer, ChevronLeft } from 'lucide-react'
+import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, Printer, ChevronLeft, AlertTriangle } from 'lucide-react'
 
 interface TocPurchaseDoc {
   id: number
@@ -300,6 +300,7 @@ export default function PayablesPage() {
   const [form, setForm] = useState(emptyForm)
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isRecurrentFilter, setIsRecurrentFilter] = useState(false)
+  const [isOverdueFilter, setIsOverdueFilter] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [editRow, setEditRow] = useState<Payable | null>(null)
   const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
@@ -339,10 +340,14 @@ export default function PayablesPage() {
   })
 
   const { data } = useQuery({
-    queryKey: ['payables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, sortBy, sortDir, page, isRecurrentFilter],
+    queryKey: ['payables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, sortBy, sortDir, page, isRecurrentFilter, isOverdueFilter],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), limit: '25' })
-      if (statusFilter) params.set('status', statusFilter)
+      if (isOverdueFilter) {
+        params.set('overdue', 'true')
+      } else {
+        if (statusFilter) params.set('status', statusFilter)
+      }
       if (entitySearch) params.set('entityName', entitySearch)
       if (dueDateFrom) params.set('dueDateFrom', dueDateFrom)
       if (dueDateTo) params.set('dueDateTo', dueDateTo)
@@ -536,9 +541,9 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || isRecurrentFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || isRecurrentFilter || isOverdueFilter)
   function clearFilters() {
-    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setIsRecurrentFilter(false); setPage(1)
+    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setIsRecurrentFilter(false); setIsOverdueFilter(false); setPage(1)
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -584,7 +589,10 @@ export default function PayablesPage() {
     if (!PURCHASE_INVOICE_TYPES.has(t)) return false
     const s = Number(d.status)
     if (s === 0 || s === 4) return false
-    if (statusFilter) {
+    if (isOverdueFilter) {
+      if (s !== 1 && s !== 2 && s !== 5) return false
+      if (!d.due_date || new Date(d.due_date) >= new Date()) return false
+    } else if (statusFilter) {
       if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
       if (statusFilter === 'OPEN,PARTIAL' && s !== 1 && s !== 2 && s !== 5) return false
       if (statusFilter === 'PARTIAL' && s !== 2) return false
@@ -670,9 +678,8 @@ export default function PayablesPage() {
           <button
             key={id}
             onClick={() => setActiveTab(id)}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === id ? 'border-primary-600 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === id ? 'border-primary-600 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
           >
             {label}
           </button>
@@ -680,345 +687,351 @@ export default function PayablesPage() {
       </div>
 
       {activeTab === 'fornecedores' && (
-      <div className="space-y-4 pt-1">
-        <div className="flex justify-end">
-          <button onClick={() => setShowNew(true)} className="btn-primary flex items-center gap-2">
-            <Plus className="w-4 h-4" />Nova Conta a Pagar
-          </button>
-        </div>
-
-      <div className="card">
-        <div className="px-5 py-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-            <input
-              className="input pl-8 text-sm py-1 w-44"
-              placeholder="Fornecedor ou referência..."
-              value={entitySearch}
-              onChange={(e) => { setEntitySearch(e.target.value); setPage(1) }}
-            />
-            {entitySearch && (
-              <button onClick={() => { setEntitySearch(''); setPage(1) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-          <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
-            <option value="">Todos os estados</option>
-            <option value="OPEN,PARTIAL">Pendente</option>
-            <option value="OPEN">Emitido / Em aberto</option>
-            <option value="PARTIAL">Parcialmente liquidado</option>
-            <option value="SETTLED">Liquidado</option>
-            <option value="VOID">Anulado</option>
-          </select>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-500 whitespace-nowrap">Data doc.</span>
-            <input type="date" className="input text-sm py-1 w-36" value={docDateFrom} onChange={(e) => { setDocDateFrom(e.target.value); setPage(1) }} title="Data documento de" />
-            <span className="text-gray-400 text-xs">–</span>
-            <input type="date" className="input text-sm py-1 w-36" value={docDateTo} onChange={(e) => { setDocDateTo(e.target.value); setPage(1) }} title="Data documento até" />
-            {(docDateFrom || docDateTo) && (
-              <button onClick={() => { setDocDateFrom(''); setDocDateTo(''); setPage(1) }} className="text-gray-400 hover:text-gray-600">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-500 whitespace-nowrap">Vencimento</span>
-            <input type="date" className="input text-sm py-1 w-36" value={dueDateFrom} onChange={(e) => { setDueDateFrom(e.target.value); setPage(1) }} title="Vencimento de" />
-            <span className="text-gray-400 text-xs">–</span>
-            <input type="date" className="input text-sm py-1 w-36" value={dueDateTo} onChange={(e) => { setDueDateTo(e.target.value); setPage(1) }} title="Vencimento até" />
-            {(dueDateFrom || dueDateTo) && (
-              <button onClick={() => { setDueDateFrom(''); setDueDateTo(''); setPage(1) }} className="text-gray-400 hover:text-gray-600">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-          <button
-            onClick={() => { setIsRecurrentFilter((v) => !v); setPage(1) }}
-            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isRecurrentFilter ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-          >
-            <Repeat2 className="w-3.5 h-3.5" /> Recorrentes
-          </button>
-          {hasFilters && (
-            <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
-              <X className="w-3.5 h-3.5" /> Limpar
+        <div className="space-y-4 pt-1">
+          <div className="flex justify-end">
+            <button onClick={() => setShowNew(true)} className="btn-primary flex items-center gap-2">
+              <Plus className="w-4 h-4" />Nova Conta a Pagar
             </button>
-          )}
-          <span className="text-sm text-gray-400 ml-auto">
-            {data?.total ?? 0} locais{tocOnly.length > 0 ? ` · ${tocOnly.length} do TOConline` : ''}
-          </span>
-          {tocLoading && <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" />}
-          <button onClick={() => refetchToc()} className="text-xs text-gray-400 hover:text-gray-600" title="Atualizar TOConline">
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
-            <Download className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                <th className="text-left px-5 py-3">Documento</th>
-                <th onClick={() => toggleSort('entityName')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
-                  Fornecedor <SortIcon field="entityName" />
-                </th>
-                <th onClick={() => toggleSort('dueDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
-                  Vencimento <SortIcon field="dueDate" />
-                </th>
-                <th onClick={() => toggleSort('totalAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
-                  Total <SortIcon field="totalAmount" />
-                </th>
-                <th onClick={() => toggleSort('pendingAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
-                  Pendente <SortIcon field="pendingAmount" />
-                </th>
-                <th className="text-left px-5 py-3">Estado</th>
-                <th className="w-16 px-3 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {rows.map((row) => {
-                if (row._src === 'local') {
-                  const p = row.p
-                  return (
-                    <tr key={`l-${p.id}`} className="hover:bg-gray-50 group">
-                      <td className="px-5 py-3">
-                        <div className="flex items-start gap-1.5">
-                          <span className="w-4 flex-shrink-0" />
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-medium text-gray-900">{p.reference}</span>
-                              {p.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
-                            </div>
-                            <div className="text-xs text-gray-400">{formatDate(p.documentDate)}{p.description ? ` · ${p.description}` : ''}</div>
-                          </div>
-                        </div>
-                      </td>
-                        <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
-                        <td className="px-5 py-3 whitespace-nowrap">
-                          {(() => {
-                            const now = Date.now()
-                            const due = new Date(p.dueDate).getTime()
-                            const isActive = p.status !== 'SETTLED' && p.status !== 'VOID'
-                            const overdue = isActive && due < now
-                            const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
-                            const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
-                            return (
-                              <>
-                                <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(p.dueDate)}</div>
-                                {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
-                                {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
-                              </>
-                            )
-                          })()}
-                        </td>
-                        <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(p.totalAmount)}</td>
-                        <td className="px-5 py-3 text-right">
-                          <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
-                          {p.status === 'PARTIAL' && Number(p.paidAmount) > 0 && (
-                            <div className="text-xs text-gray-400">pago: {formatCurrency(Number(p.paidAmount))}</div>
-                          )}
-                        </td>
-                        <td className="px-5 py-3"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status)}</Badge></td>
-                        <td className="px-3 py-3">
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              title="Editar"
-                              onClick={() => {
-                                setEditId(p.id)
-                                setEditRow(p)
-                                setEditForm({
-                                  categoryId:   p.category?.id ?? '',
-                                  entityName:   p.entityName,
-                                  reference:    p.reference,
-                                  documentDate: p.documentDate.slice(0, 10),
-                                  dueDate:      p.dueDate.slice(0, 10),
-                                  totalAmount:  String(p.totalAmount),
-                                  description:  p.description ?? '',
-                                })
-                              }}
-                              className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
-                              <button
-                                title="Pagamento parcial"
-                                onClick={() => { setPartialId(p.id); setPartialAmount(''); setPartialMax(Number(p.pendingAmount)) }}
-                                className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                              >
-                                <DollarSign className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                            {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
-                              <button
-                                title="Liquidar totalmente"
-                                onClick={() => settlePayable.mutate(p.id)}
-                                className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-                              >
-                                <CheckCircle className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                            {p.status !== 'VOID' && p.status !== 'SETTLED' && (
-                              <button
-                                title="Anular"
-                                onClick={() => voidPayable.mutate(p.id)}
-                                className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                              >
-                                <XCircle className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                            <button
-                              title="Eliminar"
-                              onClick={() => setDeleteRow(p)}
-                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                    </tr>
-                  )
-                }
-
-                const d = row.d
-                const docId = String(d.id)
-                const ref = d.document_no
-                const supplier = d.supplier_business_name || '—'
-                const date = d.date
-                const dueDate = d.due_date ?? date
-                const total = d.gross_total
-                const pending = d.pending_total
-                const key = `t-${docId}`
-                const isExpanded = expandedIds.has(key)
-                const paymentCount = Array.isArray(d.payments_ids) ? (d.payments_ids as unknown[]).length : 0
-                const ncs = tocNcMap.get(docId) ?? []
-                const expandCount = paymentCount + ncs.length
-                return (
-                  <Fragment key={key}>
-                    <tr className="hover:bg-blue-50 bg-blue-50/30 group">
-                      <td className="px-5 py-3">
-                        <div className="flex items-start gap-1.5">
-                          {expandCount > 0 ? (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
-                              className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
-                              title={isExpanded ? 'Ocultar detalhe' : 'Ver pagamentos e notas de crédito'}
-                            >
-                              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                              <span className="text-xs font-semibold leading-none">{expandCount}</span>
-                            </button>
-                          ) : (
-                            <span className="w-4 flex-shrink-0" />
-                          )}
-                          <div>
-                            <div className="font-medium text-gray-900">{ref}</div>
-                            <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3 text-gray-700">{supplier}</td>
-                      <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
-                        {dueDate ? formatDate(dueDate) : '—'}
-                      </td>
-                      <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
-                      <td className="px-5 py-3 text-right font-semibold text-red-700">{formatCurrency(pending)}</td>
-                      <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
-                      <td className="px-3 py-3">
-                        <button
-                          onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
-                          className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-lg border border-blue-200 transition-all whitespace-nowrap"
-                          title="Importar para local"
-                        >
-                          <ArrowDownToLine className="w-3 h-3" />
-                          Importar
-                        </button>
-                      </td>
-                    </tr>
-                    {isExpanded && (
-                      <>
-                        {ncs.map((nc) => (
-                          <tr key={`nc-${nc.id}`} className="bg-amber-50/40 border-b border-amber-100/80">
-                            <td className="pl-10 pr-3 py-2">
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="text-[10px] font-bold uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-700 flex-shrink-0">NC</span>
-                                <div>
-                                  <div className="text-gray-700 font-medium">{nc.document_no}</div>
-                                  <div className="text-gray-400">{nc.date ? formatDate(nc.date) : '—'}</div>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-5 py-2 text-xs text-gray-500">{supplier}</td>
-                            <td className="px-5 py-2" />
-                            <td className="px-5 py-2 text-xs text-gray-400">{(nc.due_date as string | undefined) ? formatDate(nc.due_date as string) : '—'}</td>
-                            <td className="px-5 py-2 text-right text-xs text-amber-700 font-medium">−{formatCurrency(nc.gross_total)}</td>
-                            <td className="px-5 py-2" />
-                            <td className="px-5 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
-                            <td className="px-3 py-2" />
-                          </tr>
-                        ))}
-                        {paymentCount > 0 && (
-                          <PaymentSubRows
-                            clientId={selectedClientId!}
-                            tocDocId={docId}
-                            entityName={supplier}
-                          />
-                        )}
-                      </>
-                    )}
-                  </Fragment>
-                )
-              })}
-              {rows.length === 0 && (
-                <tr><td colSpan={7} className="px-5 py-10 text-center text-sm text-gray-400">Sem documentos</td></tr>
-              )}
-            </tbody>
-            {rows.length > 0 && (() => {
-              // Sem filtros activos: mostrar totais globais vindos do endpoint /kpis
-              if (!hasFilters && combinedKpis) {
-                const globalCount = (data?.total ?? 0) + tocOnly.length
-                return (
-                  <tfoot>
-                    <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
-                      <td colSpan={2} className="px-5 py-2">Total ({globalCount} doc.)</td>
-                      <td className="px-5 py-2 text-right text-gray-500 normal-case font-normal">Em aberto: {combinedKpis.countOpen}</td>
-                      <td className="px-5 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
-                      <td className="px-5 py-2 text-right text-gray-400">—</td>
-                      <td className="px-5 py-2 text-right text-red-700">{formatCurrency(combinedKpis.totalPending)}</td>
-                      <td colSpan={1} />
-                    </tr>
-                  </tfoot>
-                )
-              }
-              // Com filtros: subtotal da página actual
-              const totalAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.p.totalAmount) : Number(row.d.gross_total)), 0)
-              const pendingAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.p.pendingAmount) : Number(row.d.pending_total)), 0)
-              return (
-                <tfoot>
-                  <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
-                    <td colSpan={3} className="px-5 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
-                    <td className="px-5 py-2 text-right">{formatCurrency(totalAmt)}</td>
-                    <td className="px-5 py-2 text-right text-red-700">{formatCurrency(pendingAmt)}</td>
-                    <td colSpan={2} />
-                  </tr>
-                </tfoot>
-              )
-            })()}
-          </table>
-        </div>
-
-        {(data?.total ?? 0) > 25 && (
-          <div className="px-5 py-3 border-t border-gray-100 flex justify-between items-center">
-            <button className="btn-secondary text-xs py-1" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>‹ Anterior</button>
-            <span className="text-xs text-gray-500">
-              {(page - 1) * 25 + 1}–{Math.min(page * 25, data?.total ?? 0)} de {data?.total ?? 0}
-            </span>
-            <button className="btn-secondary text-xs py-1" disabled={page * 25 >= (data?.total ?? 0)} onClick={() => setPage((p) => p + 1)}>Seguinte ›</button>
           </div>
-        )}
-      </div>
-      </div>
+
+          <div className="card">
+            <div className="px-5 py-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                <input
+                  className="input pl-8 text-sm py-1 w-44"
+                  placeholder="Fornecedor ou referência..."
+                  value={entitySearch}
+                  onChange={(e) => { setEntitySearch(e.target.value); setPage(1) }}
+                />
+                {entitySearch && (
+                  <button onClick={() => { setEntitySearch(''); setPage(1) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
+                <option value="">Todos os estados</option>
+                <option value="OPEN,PARTIAL">Pendente</option>
+                <option value="OPEN">Emitido / Em aberto</option>
+                <option value="PARTIAL">Parcialmente liquidado</option>
+                <option value="SETTLED">Liquidado</option>
+                <option value="VOID">Anulado</option>
+              </select>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-500 whitespace-nowrap">Data doc.</span>
+                <input type="date" className="input text-sm py-1 w-36" value={docDateFrom} onChange={(e) => { setDocDateFrom(e.target.value); setPage(1) }} title="Data documento de" />
+                <span className="text-gray-400 text-xs">–</span>
+                <input type="date" className="input text-sm py-1 w-36" value={docDateTo} onChange={(e) => { setDocDateTo(e.target.value); setPage(1) }} title="Data documento até" />
+                {(docDateFrom || docDateTo) && (
+                  <button onClick={() => { setDocDateFrom(''); setDocDateTo(''); setPage(1) }} className="text-gray-400 hover:text-gray-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-500 whitespace-nowrap">Vencimento</span>
+                <input type="date" className="input text-sm py-1 w-36" value={dueDateFrom} onChange={(e) => { setDueDateFrom(e.target.value); setPage(1) }} title="Vencimento de" />
+                <span className="text-gray-400 text-xs">–</span>
+                <input type="date" className="input text-sm py-1 w-36" value={dueDateTo} onChange={(e) => { setDueDateTo(e.target.value); setPage(1) }} title="Vencimento até" />
+                {(dueDateFrom || dueDateTo) && (
+                  <button onClick={() => { setDueDateFrom(''); setDueDateTo(''); setPage(1) }} className="text-gray-400 hover:text-gray-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => { setIsRecurrentFilter((v) => !v); setPage(1) }}
+                className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isRecurrentFilter ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+              >
+                <Repeat2 className="w-3.5 h-3.5" /> Recorrentes
+              </button>
+              <button
+                onClick={() => { setIsOverdueFilter((v) => !v); setPage(1) }}
+                className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isOverdueFilter ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+              >
+                <AlertTriangle className="w-3.5 h-3.5" /> Vencidas
+              </button>
+              {hasFilters && (
+                <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
+                  <X className="w-3.5 h-3.5" /> Limpar
+                </button>
+              )}
+              <span className="text-sm text-gray-400 ml-auto">
+                {data?.total ?? 0} locais{tocOnly.length > 0 ? ` · ${tocOnly.length} do TOConline` : ''}
+              </span>
+              {tocLoading && <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" />}
+              <button onClick={() => refetchToc()} className="text-xs text-gray-400 hover:text-gray-600" title="Atualizar TOConline">
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
+                <Download className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
+                    <th className="text-left px-5 py-3">Documento</th>
+                    <th onClick={() => toggleSort('entityName')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
+                      Fornecedor <SortIcon field="entityName" />
+                    </th>
+                    <th onClick={() => toggleSort('dueDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
+                      Vencimento <SortIcon field="dueDate" />
+                    </th>
+                    <th onClick={() => toggleSort('totalAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
+                      Total <SortIcon field="totalAmount" />
+                    </th>
+                    <th onClick={() => toggleSort('pendingAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
+                      Pendente <SortIcon field="pendingAmount" />
+                    </th>
+                    <th className="text-left px-5 py-3">Estado</th>
+                    <th className="w-16 px-3 py-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {rows.map((row) => {
+                    if (row._src === 'local') {
+                      const p = row.p
+                      return (
+                        <tr key={`l-${p.id}`} className="hover:bg-gray-50 group">
+                          <td className="px-5 py-3">
+                            <div className="flex items-start gap-1.5">
+                              <span className="w-4 flex-shrink-0" />
+                              <div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-medium text-gray-900">{p.reference}</span>
+                                  {p.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
+                                </div>
+                                <div className="text-xs text-gray-400">{formatDate(p.documentDate)}{p.description ? ` · ${p.description}` : ''}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
+                          <td className="px-5 py-3 whitespace-nowrap">
+                            {(() => {
+                              const now = Date.now()
+                              const due = new Date(p.dueDate).getTime()
+                              const isActive = p.status !== 'SETTLED' && p.status !== 'VOID'
+                              const overdue = isActive && due < now
+                              const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
+                              const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
+                              return (
+                                <>
+                                  <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(p.dueDate)}</div>
+                                  {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
+                                  {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
+                                </>
+                              )
+                            })()}
+                          </td>
+                          <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(p.totalAmount)}</td>
+                          <td className="px-5 py-3 text-right">
+                            <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
+                            {p.status === 'PARTIAL' && Number(p.paidAmount) > 0 && (
+                              <div className="text-xs text-gray-400">pago: {formatCurrency(Number(p.paidAmount))}</div>
+                            )}
+                          </td>
+                          <td className="px-5 py-3"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status)}</Badge></td>
+                          <td className="px-3 py-3">
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                title="Editar"
+                                onClick={() => {
+                                  setEditId(p.id)
+                                  setEditRow(p)
+                                  setEditForm({
+                                    categoryId: p.category?.id ?? '',
+                                    entityName: p.entityName,
+                                    reference: p.reference,
+                                    documentDate: p.documentDate.slice(0, 10),
+                                    dueDate: p.dueDate.slice(0, 10),
+                                    totalAmount: String(p.totalAmount),
+                                    description: p.description ?? '',
+                                  })
+                                }}
+                                className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
+                                <button
+                                  title="Pagamento parcial"
+                                  onClick={() => { setPartialId(p.id); setPartialAmount(''); setPartialMax(Number(p.pendingAmount)) }}
+                                  className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
+                                <button
+                                  title="Liquidar totalmente"
+                                  onClick={() => settlePayable.mutate(p.id)}
+                                  className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+                                >
+                                  <CheckCircle className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              {p.status !== 'VOID' && p.status !== 'SETTLED' && (
+                                <button
+                                  title="Anular"
+                                  onClick={() => voidPayable.mutate(p.id)}
+                                  className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
+                                >
+                                  <XCircle className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              <button
+                                title="Eliminar"
+                                onClick={() => setDeleteRow(p)}
+                                className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    }
+
+                    const d = row.d
+                    const docId = String(d.id)
+                    const ref = d.document_no
+                    const supplier = d.supplier_business_name || '—'
+                    const date = d.date
+                    const dueDate = d.due_date ?? date
+                    const total = d.gross_total
+                    const pending = d.pending_total
+                    const key = `t-${docId}`
+                    const isExpanded = expandedIds.has(key)
+                    const paymentCount = Array.isArray(d.payments_ids) ? (d.payments_ids as unknown[]).length : 0
+                    const ncs = tocNcMap.get(docId) ?? []
+                    const expandCount = paymentCount + ncs.length
+                    return (
+                      <Fragment key={key}>
+                        <tr className="hover:bg-blue-50 bg-blue-50/30 group">
+                          <td className="px-5 py-3">
+                            <div className="flex items-start gap-1.5">
+                              {expandCount > 0 ? (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
+                                  className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
+                                  title={isExpanded ? 'Ocultar detalhe' : 'Ver pagamentos e notas de crédito'}
+                                >
+                                  {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                  <span className="text-xs font-semibold leading-none">{expandCount}</span>
+                                </button>
+                              ) : (
+                                <span className="w-4 flex-shrink-0" />
+                              )}
+                              <div>
+                                <div className="font-medium text-gray-900">{ref}</div>
+                                <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 text-gray-700">{supplier}</td>
+                          <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                            {dueDate ? formatDate(dueDate) : '—'}
+                          </td>
+                          <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
+                          <td className="px-5 py-3 text-right font-semibold text-red-700">{formatCurrency(pending)}</td>
+                          <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
+                          <td className="px-3 py-3">
+                            <button
+                              onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
+                              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-lg border border-blue-200 transition-all whitespace-nowrap"
+                              title="Importar para local"
+                            >
+                              <ArrowDownToLine className="w-3 h-3" />
+                              Importar
+                            </button>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <>
+                            {ncs.map((nc) => (
+                              <tr key={`nc-${nc.id}`} className="bg-amber-50/40 border-b border-amber-100/80">
+                                <td className="pl-10 pr-3 py-2">
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <span className="text-[10px] font-bold uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-700 flex-shrink-0">NC</span>
+                                    <div>
+                                      <div className="text-gray-700 font-medium">{nc.document_no}</div>
+                                      <div className="text-gray-400">{nc.date ? formatDate(nc.date) : '—'}</div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-5 py-2 text-xs text-gray-500">{supplier}</td>
+                                <td className="px-5 py-2" />
+                                <td className="px-5 py-2 text-xs text-gray-400">{(nc.due_date as string | undefined) ? formatDate(nc.due_date as string) : '—'}</td>
+                                <td className="px-5 py-2 text-right text-xs text-amber-700 font-medium">−{formatCurrency(nc.gross_total)}</td>
+                                <td className="px-5 py-2" />
+                                <td className="px-5 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
+                                <td className="px-3 py-2" />
+                              </tr>
+                            ))}
+                            {paymentCount > 0 && (
+                              <PaymentSubRows
+                                clientId={selectedClientId!}
+                                tocDocId={docId}
+                                entityName={supplier}
+                              />
+                            )}
+                          </>
+                        )}
+                      </Fragment>
+                    )
+                  })}
+                  {rows.length === 0 && (
+                    <tr><td colSpan={7} className="px-5 py-10 text-center text-sm text-gray-400">Sem documentos</td></tr>
+                  )}
+                </tbody>
+                {rows.length > 0 && (() => {
+                  // Sem filtros activos: mostrar totais globais vindos do endpoint /kpis
+                  if (!hasFilters && combinedKpis) {
+                    const globalCount = (data?.total ?? 0) + tocOnly.length
+                    return (
+                      <tfoot>
+                        <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
+                          <td colSpan={2} className="px-5 py-2">Total ({globalCount} doc.)</td>
+                          <td className="px-5 py-2 text-right text-gray-500 normal-case font-normal">Em aberto: {combinedKpis.countOpen}</td>
+                          <td className="px-5 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
+                          <td className="px-5 py-2 text-right text-gray-400">—</td>
+                          <td className="px-5 py-2 text-right text-red-700">{formatCurrency(combinedKpis.totalPending)}</td>
+                          <td colSpan={1} />
+                        </tr>
+                      </tfoot>
+                    )
+                  }
+                  // Com filtros: subtotal da página actual
+                  const totalAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.p.totalAmount) : Number(row.d.gross_total)), 0)
+                  const pendingAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.p.pendingAmount) : Number(row.d.pending_total)), 0)
+                  return (
+                    <tfoot>
+                      <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
+                        <td colSpan={3} className="px-5 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
+                        <td className="px-5 py-2 text-right">{formatCurrency(totalAmt)}</td>
+                        <td className="px-5 py-2 text-right text-red-700">{formatCurrency(pendingAmt)}</td>
+                        <td colSpan={2} />
+                      </tr>
+                    </tfoot>
+                  )
+                })()}
+              </table>
+            </div>
+
+            {(data?.total ?? 0) > 25 && (
+              <div className="px-5 py-3 border-t border-gray-100 flex justify-between items-center">
+                <button className="btn-secondary text-xs py-1" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>‹ Anterior</button>
+                <span className="text-xs text-gray-500">
+                  {(page - 1) * 25 + 1}–{Math.min(page * 25, data?.total ?? 0)} de {data?.total ?? 0}
+                </span>
+                <button className="btn-secondary text-xs py-1" disabled={page * 25 >= (data?.total ?? 0)} onClick={() => setPage((p) => p + 1)}>Seguinte ›</button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {activeTab === 'outras' && (
@@ -1090,13 +1103,13 @@ export default function PayablesPage() {
                                 setEditId(p.id)
                                 setEditRow(p)
                                 setEditForm({
-                                  categoryId:   p.category?.id ?? '',
-                                  entityName:   p.entityName,
-                                  reference:    p.reference,
+                                  categoryId: p.category?.id ?? '',
+                                  entityName: p.entityName,
+                                  reference: p.reference,
                                   documentDate: p.documentDate.slice(0, 10),
-                                  dueDate:      p.dueDate.slice(0, 10),
-                                  totalAmount:  String(p.totalAmount),
-                                  description:  p.description ?? '',
+                                  dueDate: p.dueDate.slice(0, 10),
+                                  totalAmount: String(p.totalAmount),
+                                  description: p.description ?? '',
                                 })
                               }}
                               className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
@@ -1220,7 +1233,7 @@ export default function PayablesPage() {
           </div>
         </div>
         {updatePayable.isError && (
-          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(updatePayable.error as Error).message}</p>
+          <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(updatePayable.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
           <button onClick={() => { setEditId(null); setEditRow(null) }} className="btn-secondary flex-1">Cancelar</button>
@@ -1228,12 +1241,12 @@ export default function PayablesPage() {
             onClick={() => {
               if (!editId) return
               const body: Record<string, unknown> = {
-                categoryId:   editForm.categoryId  || undefined,
-                entityName:   editForm.entityName,
-                reference:    editForm.reference   || undefined,
+                categoryId: editForm.categoryId || undefined,
+                entityName: editForm.entityName,
+                reference: editForm.reference || undefined,
                 documentDate: editForm.documentDate || undefined,
-                dueDate:      editForm.dueDate      || undefined,
-                description:  editForm.description  || undefined,
+                dueDate: editForm.dueDate || undefined,
+                description: editForm.description || undefined,
               }
               if (editRow?.status === 'OPEN' && editForm.totalAmount)
                 body.totalAmount = parseFloat(editForm.totalAmount)
@@ -1254,7 +1267,7 @@ export default function PayablesPage() {
             <span className="font-semibold text-gray-900">{deleteRow?.entityName}</span> será permanentemente eliminado. Esta acção não pode ser revertida.
           </p>
           {deletePayable.isError && (
-            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(deletePayable.error as Error).message}</p>
+            <p className="text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(deletePayable.error as Error).message}</p>
           )}
           <div className="flex gap-3 pt-2">
             <button onClick={() => setDeleteRow(null)} className="btn-secondary flex-1">Cancelar</button>
@@ -1271,7 +1284,7 @@ export default function PayablesPage() {
 
       <Modal open={!!importTocDoc} onClose={() => setImportTocDoc(null)} title="Importar do TOConline">
         <div className="space-y-4">
-          <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1.5">
+          <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm space-y-1.5">
             <div className="flex justify-between"><span className="text-gray-500">Documento</span><span className="font-medium">{importTocDoc?.document_no}</span></div>
             <div className="flex justify-between"><span className="text-gray-500">Fornecedor</span><span>{importTocDoc?.supplier_business_name}</span></div>
             <div className="flex justify-between"><span className="text-gray-500">Vencimento</span><span>{importTocDoc?.due_date ? formatDate(importTocDoc.due_date) : '—'}</span></div>
@@ -1530,7 +1543,7 @@ export default function PayablesPage() {
         </div>
 
         {create.isError && (
-          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
+          <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
           <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} className="btn-secondary flex-1">Cancelar</button>
@@ -1647,7 +1660,7 @@ export default function PayablesPage() {
           </div>
         </div>
         {createOutras.isError && (
-          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{(createOutras.error as Error).message}</p>
+          <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(createOutras.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
           <button onClick={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setOutrasContact(null); setOutrasContactSearch('') }} className="btn-secondary flex-1">Cancelar</button>

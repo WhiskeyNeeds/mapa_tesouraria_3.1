@@ -343,7 +343,7 @@ export class TreasuryDashboardService {
     }
   }
 
-  async getCashPositioning(clientId: string, weeksAhead = 12) {
+  async getCashPositioning(clientId: string, count = 12, startDate?: string) {
     const now = new Date()
     now.setHours(0, 0, 0, 0)
 
@@ -357,15 +357,27 @@ export class TreasuryDashboardService {
     const currentMon = new Date(now)
     currentMon.setDate(now.getDate() - daysToMon)
 
-    // Build week windows: 8 past + current + weeksAhead future
-    const weeksBack = 8
+    // Start of the visible window — caller-supplied or default to 3 weeks before current Monday
+    let windowStart: Date
+    if (startDate) {
+      windowStart = new Date(startDate)
+      windowStart.setHours(0, 0, 0, 0)
+    } else {
+      windowStart = new Date(currentMon)
+      windowStart.setDate(currentMon.getDate() - 3 * 7)
+    }
+
+    // Build exactly `count` week windows starting from windowStart
     const weekList: Array<{ start: Date; end: Date; isFuture: boolean; isCurrent: boolean; label: string }> = []
-    for (let i = -weeksBack; i <= weeksAhead; i++) {
-      const start = new Date(currentMon)
-      start.setDate(currentMon.getDate() + i * 7)
+    for (let i = 0; i < count; i++) {
+      const start = new Date(windowStart)
+      start.setDate(windowStart.getDate() + i * 7)
       const end = new Date(start)
       end.setDate(start.getDate() + 6)
       end.setHours(23, 59, 59, 999)
+
+      const isCurrent = start.getTime() === currentMon.getTime()
+      const isFuture = start > currentMon
 
       // ISO week number
       const tmp = new Date(start)
@@ -374,7 +386,7 @@ export class TreasuryDashboardService {
       const wn = 1 + Math.round(((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7)
       const dayStr = start.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit' })
 
-      weekList.push({ start, end, isFuture: i > 0, isCurrent: i === 0, label: `S${wn} - ${dayStr}` })
+      weekList.push({ start, end, isFuture, isCurrent, label: `S${wn} - ${dayStr}` })
     }
 
     const rangeStart = weekList[0].start

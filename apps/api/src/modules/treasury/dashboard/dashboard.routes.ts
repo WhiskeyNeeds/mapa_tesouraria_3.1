@@ -37,7 +37,7 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
 
   fastify.get('/treasury/:clientId/dashboard/cash-positioning', { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const { weeks } = request.query as { weeks?: string }
-    return reply.send(await svc.getCashPositioning(clientId, weeks ? parseInt(weeks) : 6))
+    const { count, startDate } = request.query as { count?: string; startDate?: string }
+    return reply.send(await svc.getCashPositioning(clientId, count ? parseInt(count) : 12, startDate))
   })
 }

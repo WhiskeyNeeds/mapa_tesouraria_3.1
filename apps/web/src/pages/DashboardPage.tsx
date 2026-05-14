@@ -10,7 +10,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Bar, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine, ReferenceArea,
 } from 'recharts'
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 
 interface UpcomingDue { entityName: string; reference: string; dueDate: string; pendingAmount: number }
@@ -143,7 +143,7 @@ interface ColDef {
   isFuture: boolean; isCurrent: boolean
 }
 
-function CashflowStatementTable({ cpData }: { cpData?: CashPositioningData }) {
+function CashflowStatementTable() {
   const { selectedClientId } = useAuth()
   const [inflowOpen, setInflowOpen] = useState(true)
   const [outflowOpen, setOutflowOpen] = useState(true)
@@ -153,8 +153,13 @@ function CashflowStatementTable({ cpData }: { cpData?: CashPositioningData }) {
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly'>('monthly')
   const [year, setYear] = useState(() => new Date().getFullYear())
   const [monthOffset, setMonthOffset] = useState(0)
-  const [weekOffset, setWeekOffset] = useState(0)
-  const weekOffsetInitialized = useRef(false)
+  const [weekWindowDate, setWeekWindowDate] = useState<string>(() => {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    const dow = d.getDay()
+    d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1) - 21)
+    return d.toISOString().slice(0, 10)
+  })
 
   const currentYear = new Date().getFullYear()
   const currentMonth = new Date().getMonth()
@@ -173,13 +178,11 @@ function CashflowStatementTable({ cpData }: { cpData?: CashPositioningData }) {
     enabled: !!selectedClientId && needsNextYear,
   })
 
-  useEffect(() => {
-    if (!cpData || weekOffsetInitialized.current) return
-    weekOffsetInitialized.current = true
-    const currentIdx = cpData.weeks.findIndex((w) => w.isCurrent)
-    const targetIdx = currentIdx >= 0 ? Math.max(0, currentIdx - 3) : Math.max(0, cpData.weeks.length - 12)
-    setWeekOffset(Math.floor(targetIdx / 3) * 3)
-  }, [cpData])
+  const { data: cpData } = useQuery<CashPositioningData>({
+    queryKey: ['dashboard-cash-positioning', selectedClientId, weekWindowDate],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cash-positioning?count=12&startDate=${weekWindowDate}`),
+    enabled: !!selectedClientId,
+  })
 
   const getYearData = (y: number) => y === year ? yearData : y === year + 1 ? nextYearData : undefined
 
@@ -231,17 +234,28 @@ function CashflowStatementTable({ cpData }: { cpData?: CashPositioningData }) {
     else setMonthOffset(newOffset)
   }
 
-  const visibleWeeks = cpData?.weeks.slice(weekOffset, weekOffset + 12) ?? []
-  const navigateWeeks = (dir: -1 | 1) => { setSelectedColKey(null); setWeekOffset((w) => Math.max(0, w + dir * 3)) }
-  const isFirstWeekWindow = weekOffset === 0
-  const isLastWeekWindow = weekOffset + 12 >= (cpData?.weeks.length ?? 0)
-
-  const nextWindowYear = monthOffset === 9 ? year + 1 : year
-  const isLastMonthWindow = nextWindowYear > currentYear
+  const visibleWeeks = cpData?.weeks ?? []
+  const navigateWeeks = (dir: -1 | 1) => {
+    setSelectedColKey(null)
+    setWeekWindowDate((prev) => {
+      const d = new Date(prev)
+      d.setDate(d.getDate() + dir * 21)
+      return d.toISOString().slice(0, 10)
+    })
+  }
 
   const endYear = year + Math.floor((monthOffset + 11) / 12)
   const endMonthIdx = (monthOffset + 11) % 12
   const windowLabel = monthOffset === 0 ? `${year}` : `${MONTH_LABELS[monthOffset]} ${year} – ${MONTH_LABELS[endMonthIdx]} ${endYear}`
+
+  const weeklyRangeLabel = (() => {
+    if (!visibleWeeks.length) return 'Semanas'
+    const MONTHS_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+    const fmt = (s: string) => { const d = new Date(s); return `${MONTHS_PT[d.getUTCMonth()]} ${d.getUTCFullYear()}` }
+    const s = fmt(visibleWeeks[0].start)
+    const e = fmt(visibleWeeks[visibleWeeks.length - 1].end)
+    return s === e ? s : `${s} – ${e}`
+  })()
 
   const netFmt = (v: number) => v === 0 ? '—' : (v > 0 ? '+' : '') + formatCurrency(v)
   const colMinW = 'min-w-[110px]'
@@ -619,13 +633,13 @@ function CashflowStatementTable({ cpData }: { cpData?: CashPositioningData }) {
             <div className="flex items-center gap-1">
               <button onClick={() => navigateMonths(-1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">‹</button>
               <span className="text-sm font-semibold text-gray-700 min-w-[160px] text-center">{windowLabel}</span>
-              <button onClick={() => navigateMonths(1)} disabled={isLastMonthWindow} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">›</button>
+              <button onClick={() => navigateMonths(1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">›</button>
             </div>
           ) : (
             <div className="flex items-center gap-1">
-              <button onClick={() => navigateWeeks(-1)} disabled={isFirstWeekWindow} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">‹</button>
-              <span className="text-sm font-semibold text-gray-700 min-w-[120px] text-center">Semanas</span>
-              <button onClick={() => navigateWeeks(1)} disabled={isLastWeekWindow} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none disabled:opacity-30">›</button>
+              <button onClick={() => navigateWeeks(-1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">‹</button>
+              <span className="text-sm font-semibold text-gray-700 min-w-[160px] text-center">{weeklyRangeLabel}</span>
+              <button onClick={() => navigateWeeks(1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">›</button>
             </div>
           )}
         </div>
@@ -664,11 +678,6 @@ export default function DashboardPage() {
     enabled: !!selectedClientId,
   })
 
-  const { data: cashPositioning } = useQuery<CashPositioningData>({
-    queryKey: ['dashboard-cash-positioning', selectedClientId],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/cash-positioning?weeks=12`),
-    enabled: !!selectedClientId,
-  })
 
   // Derived stats from chart data
   const stats = useMemo(() => {
@@ -1014,7 +1023,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Cashflow Statement Table */}
-      <CashflowStatementTable cpData={cashPositioning} />
+      <CashflowStatementTable />
 
       {/* Painel de Controlo */}
       <div className="card p-5">

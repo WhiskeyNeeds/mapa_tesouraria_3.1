@@ -24,7 +24,7 @@ export function parseBPI(buffer: Buffer): ParsedMovement[] {
     const description = cellToString(row[2])
     // BPI uses Portuguese number format: "-3.874,50"
     const amount = cellToAmount(row[3], 'pt')
-    const balanceAfter = row[4] ? cellToAmount(row[4], 'pt') : undefined
+    const balanceAfter = (row[4] != null && row[4] !== '') ? cellToAmount(row[4], 'pt') : undefined
 
     if (!date || !description || isNaN(amount)) continue
 
