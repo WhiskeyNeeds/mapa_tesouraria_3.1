@@ -400,13 +400,6 @@ export default function ReceivablesPage() {
     throwOnError: false,
   })
 
-  interface LocalContact { id: string; name: string; nif?: string | null; phone?: string | null; mobile?: string | null }
-  const { data: localCustomers = [] } = useQuery<LocalContact[]>({
-    queryKey: ['local-contacts', selectedClientId, 'CUSTOMER'],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/local-contacts?type=CUSTOMER`),
-    enabled: !!selectedClientId,
-  })
-
   const filteredCustomers = useMemo(() => {
     const q = tocCustomerSearch.toLowerCase().trim()
     const list = q
@@ -1662,8 +1655,8 @@ export default function ReceivablesPage() {
               {outrasContact ? (
                 <div className="input flex items-center gap-2 bg-gray-50 cursor-default">
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-800 truncate">{outrasContact.name}</div>
-                    {outrasContact.nif && <div className="text-xs text-gray-400">NIF {outrasContact.nif}</div>}
+                    <div className="text-sm font-medium text-gray-800 truncate">{outrasContact.business_name as string}</div>
+                    {outrasContact.tax_identification_number && <div className="text-xs text-gray-400">NIF {outrasContact.tax_identification_number as string}</div>}
                   </div>
                   <button onClick={() => { setOutrasContact(null); setOutrasContactSearch(''); setOutrasForm({ ...outrasForm, entityName: '', entityNif: '' }) }} className="text-gray-400 hover:text-gray-600 flex-shrink-0"><X className="w-3.5 h-3.5" /></button>
                 </div>
@@ -1672,7 +1665,7 @@ export default function ReceivablesPage() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
                   <input
                     className="input pl-8"
-                    placeholder="Pesquisar cliente local..."
+                    placeholder="Pesquisar cliente..."
                     value={outrasContactSearch}
                     onChange={(e) => setOutrasContactSearch(e.target.value)}
                     onFocus={() => setShowOutrasContactDropdown(true)}
@@ -1682,18 +1675,18 @@ export default function ReceivablesPage() {
               )}
               {showOutrasContactDropdown && !outrasContact && (
                 <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {localCustomers.filter(c => !outrasContactSearch || c.name.toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.nif ?? '').includes(outrasContactSearch)).slice(0, 10).length === 0 ? (
+                  {tocCustomers.filter(c => !outrasContactSearch || (c.business_name ?? '').toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.tax_identification_number ?? '').includes(outrasContactSearch)).slice(0, 10).length === 0 ? (
                     <div className="px-4 py-3 text-sm text-gray-400">
-                      {localCustomers.length === 0 ? 'Sem clientes em Definições Locais' : 'Nenhum cliente encontrado'}
+                      {tocCustomers.length === 0 ? 'Sem clientes disponíveis' : 'Nenhum cliente encontrado'}
                     </div>
-                  ) : localCustomers.filter(c => !outrasContactSearch || c.name.toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.nif ?? '').includes(outrasContactSearch)).slice(0, 10).map(c => (
+                  ) : tocCustomers.filter(c => !outrasContactSearch || (c.business_name ?? '').toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.tax_identification_number ?? '').includes(outrasContactSearch)).slice(0, 10).map(c => (
                     <button
                       key={c.id}
                       className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex flex-col gap-0.5"
-                      onMouseDown={(e) => { e.preventDefault(); setOutrasContact(c); setOutrasForm({ ...outrasForm, entityName: c.name, entityNif: c.nif ?? '' }); setOutrasContactSearch(''); setShowOutrasContactDropdown(false) }}
+                      onMouseDown={(e) => { e.preventDefault(); setOutrasContact(c); setOutrasForm({ ...outrasForm, entityName: c.business_name ?? '', entityNif: c.tax_identification_number ?? '' }); setOutrasContactSearch(''); setShowOutrasContactDropdown(false) }}
                     >
-                      <span className="font-medium text-gray-800 text-sm">{c.name}</span>
-                      {c.nif && <span className="text-xs text-gray-400">NIF {c.nif}</span>}
+                      <span className="font-medium text-gray-800 text-sm">{c.business_name}</span>
+                      {c.tax_identification_number && <span className="text-xs text-gray-400">NIF {c.tax_identification_number}</span>}
                     </button>
                   ))}
                 </div>

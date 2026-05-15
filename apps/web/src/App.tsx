@@ -13,7 +13,6 @@ import PayablesPage from '@/pages/PayablesPage'
 import ForecastPage from '@/pages/ForecastPage'
 import EmpresaPage from '@/pages/EmpresaPage'
 import SettingsPage from '@/pages/SettingsPage'
-import LocalContactsPage from '@/pages/LocalContactsPage'
 import ToconlineCallbackPage from '@/pages/ToconlineCallbackPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 
@@ -49,7 +48,6 @@ export default function App() {
             <Route path="contas-a-pagar" element={<PayablesPage />} />
             <Route path="previsao" element={<ForecastPage />} />
             <Route path="empresa" element={<EmpresaPage />} />
-            <Route path="definicoes-locais" element={<LocalContactsPage />} />
             <Route path="definicoes" element={<SettingsPage />} />
           </Route>
 

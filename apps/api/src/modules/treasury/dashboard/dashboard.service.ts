@@ -157,6 +157,43 @@ export class TreasuryDashboardService {
     }
   }
 
+  async getAccountMonthlyBalances(clientId: string, year: number) {
+    const accounts = await this.prisma.treasuryBankAccount.findMany({
+      where: { clientId, isActive: true, deletedAt: null },
+      select: { id: true, name: true, openingBalance: true },
+      orderBy: { name: 'asc' },
+    })
+
+    const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999)
+
+    const allMovements = await this.prisma.treasuryBankMovement.findMany({
+      where: { bankAccountId: { in: accounts.map((a) => a.id) }, deletedAt: null, date: { lte: endOfYear } },
+      select: { id: true, bankAccountId: true, date: true, amount: true, balanceAfter: true, source: true },
+      orderBy: { date: 'asc' },
+    })
+
+    const byAccount = new Map<string, typeof allMovements>()
+    for (const m of allMovements) {
+      if (!byAccount.has(m.bankAccountId)) byAccount.set(m.bankAccountId, [])
+      byAccount.get(m.bankAccountId)!.push(m)
+    }
+
+    const result = accounts.map((acc) => {
+      const movements = byAccount.get(acc.id) ?? []
+      const monthlyBalances = Array.from({ length: 12 }, (_, i) => {
+        const month = i + 1
+        const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999)
+        const snapshots = movements
+          .filter((m) => m.date <= endOfMonth)
+          .map((m) => ({ id: m.id, date: m.date, amount: Number(m.amount), balanceAfter: m.balanceAfter !== null ? Number(m.balanceAfter) : null, source: m.source }))
+        return resolveAccountBalance(Number(acc.openingBalance), snapshots)
+      })
+      return { id: acc.id, name: acc.name, monthlyBalances }
+    })
+
+    return { year, accounts: result }
+  }
+
   async getCashFlowMonthly(clientId: string, year: number) {
     const start = new Date(year, 0, 1)
     const end = new Date(year, 11, 31, 23, 59, 59)

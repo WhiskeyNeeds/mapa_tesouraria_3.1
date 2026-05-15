@@ -40,4 +40,10 @@ export async function dashboardRoutes(fastify: FastifyInstance) {
     const { count, startDate } = request.query as { count?: string; startDate?: string }
     return reply.send(await svc.getCashPositioning(clientId, count ? parseInt(count) : 12, startDate))
   })
+
+  fastify.get('/treasury/:clientId/dashboard/account-monthly-balances', { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { year } = request.query as { year?: string }
+    return reply.send(await svc.getAccountMonthlyBalances(clientId, year ? parseInt(year) : new Date().getFullYear()))
+  })
 }
