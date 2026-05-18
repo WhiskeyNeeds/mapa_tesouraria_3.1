@@ -21,14 +21,18 @@ export class TreasuryReconciliationsService {
 
   async list(clientId: string, filters: { page?: number; limit?: number; status?: string }) {
     const { page = 1, limit = 20, status } = filters
-    const where = { clientId, ...(status ? { status: status as never } : {}) }
+    const where = {
+      clientId,
+      ...(status ? { status: status as never } : {}),
+      movements: { some: { movement: { deletedAt: null } } },
+    }
 
     const [total, items] = await Promise.all([
       this.prisma.treasuryReconciliation.count({ where }),
       this.prisma.treasuryReconciliation.findMany({
         where,
         include: {
-          movements: { include: { movement: { select: { id: true, date: true, amount: true, description: true } } } },
+          movements: { include: { movement: { select: { id: true, date: true, amount: true, description: true, bankAccount: { select: { id: true, name: true } } } } } },
           receivables: { include: { receivable: { select: { id: true, reference: true, entityName: true, pendingAmount: true } } } },
           payables: { include: { payable: { select: { id: true, reference: true, entityName: true, pendingAmount: true } } } },
           createdBy: { select: { id: true, name: true } },

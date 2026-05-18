@@ -16,8 +16,9 @@ export interface JwtUser {
 
 function parseJwt(token: string): JwtUser | null {
   try {
-    const payload = token.split('.')[1]
-    return JSON.parse(atob(payload)) as JwtUser
+    const payload = JSON.parse(atob(token.split('.')[1])) as JwtUser & { exp?: number }
+    if (payload.exp && payload.exp * 1000 < Date.now()) return null
+    return payload
   } catch {
     return null
   }

@@ -46,7 +46,7 @@ interface RecHistoryItem {
   id: string; status: string; isDryRun: boolean; totalMovements: number; totalAllocated: number
   createdAt: string; direction: string; reversedAt?: string; reversedReason?: string
   createdBy: { name: string }
-  movements: Array<{ amount: number; movement: { id: string; date: string; amount: number; description: string } }>
+  movements: Array<{ amount: number; movement: { id: string; date: string; amount: number; description: string; bankAccount?: { id: string; name: string } | null } }>
   receivables: Array<{ amountAllocated: number; receivable: { id: string; reference: string; entityName: string } }>
   payables: Array<{ amountAllocated: number; payable: { id: string; reference: string; entityName: string } }>
 }
@@ -414,7 +414,8 @@ export default function ReconciliationPage() {
       })
     },
     onSuccess: () => {
-      ['movements-pending', 'receivables-pending', 'payables-pending', 'reconciliations',
+      qc.refetchQueries({ queryKey: ['reconciliations'] })
+      ;['movements-pending', 'receivables-pending', 'payables-pending',
         'movements', 'receivables', 'payables', 'toc-sales', 'toc-purchases']
         .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
       clearAll(); setShowModal(false)
@@ -430,7 +431,8 @@ export default function ReconciliationPage() {
     mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
       api.post(`/treasury/${selectedClientId}/reconciliations/${id}/reverse`, { reason }),
     onSuccess: () => {
-      ['reconciliations', 'movements-pending', 'movements', 'receivables-pending', 'receivables',
+      qc.refetchQueries({ queryKey: ['reconciliations'] })
+      ;['movements-pending', 'movements', 'receivables-pending', 'receivables',
         'payables-pending', 'payables', 'toc-sales', 'toc-purchases']
         .forEach((k) => qc.invalidateQueries({ queryKey: [k] }))
       setReverseId(null); setReverseReason('')
@@ -883,6 +885,9 @@ export default function ReconciliationPage() {
         <div className="divide-y divide-gray-50">
           {(historyData?.items ?? []).map((rec) => {
             const isExpanded = expandedId === rec.id
+            const uniqueAccounts = Array.from(
+              new Map(rec.movements.flatMap((l) => l.movement.bankAccount ? [[l.movement.bankAccount.id, l.movement.bankAccount.name]] : [])).entries()
+            ).map(([, name]) => name)
             return (
               <div key={rec.id}>
                 <div
@@ -900,6 +905,11 @@ export default function ReconciliationPage() {
                         {rec.direction === 'REVENUE' ? '↓ Entrada' : '↑ Saída'}
                       </span>
                       <span className="text-gray-400 text-xs">{rec.movements.length} mov. · {rec.receivables.length + rec.payables.length} doc.</span>
+                      {uniqueAccounts.length > 0 && (
+                        <span className="text-[11px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full font-medium">
+                          {uniqueAccounts.join(', ')}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-gray-400 mt-0.5">
                       {formatDate(rec.createdAt)} · {rec.createdBy?.name}
@@ -931,7 +941,12 @@ export default function ReconciliationPage() {
                       <div className="space-y-1.5">
                         {rec.movements.map((link) => (
                           <div key={link.movement.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
-                            <span className="truncate mr-2 text-gray-600">{link.movement.description}</span>
+                            <div className="truncate mr-2 min-w-0">
+                              <span className="text-gray-600">{link.movement.description}</span>
+                              {link.movement.bankAccount && (
+                                <span className="ml-1.5 text-[11px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full font-medium">{link.movement.bankAccount.name}</span>
+                              )}
+                            </div>
                             <span className={`font-semibold whitespace-nowrap ${Number(link.movement.amount) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
                               {Number(link.movement.amount) >= 0 ? '+' : '−'}{formatCurrency(Math.abs(Number(link.movement.amount)))}
                             </span>

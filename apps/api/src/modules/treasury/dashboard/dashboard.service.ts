@@ -432,12 +432,12 @@ export class TreasuryDashboardService {
     const [bankAccounts, pastMovements, pendingReceivables, pendingPayables, categories] = await Promise.all([
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
-        select: { id: true },
+        select: { id: true, name: true },
       }),
       // Use endOfToday so movements recorded today are included in the current week's actuals
       this.prisma.treasuryBankMovement.findMany({
         where: { clientId, deletedAt: null, date: { gte: rangeStart, lte: endOfToday } },
-        select: { date: true, amount: true, categoryId: true },
+        select: { date: true, amount: true, categoryId: true, bankAccountId: true },
       }),
       // Only fetch pending docs due AFTER today — docs due today belong to actuals, not forecast
       this.prisma.treasuryReceivable.findMany({
@@ -462,6 +462,13 @@ export class TreasuryDashboardService {
     const movementsBeforeRange = pastMovements.filter((m) => m.date < rangeStart)
     const movementsInRange = pastMovements.filter((m) => m.date >= rangeStart)
     const balanceAtRangeStart = currentBalance - movementsInRange.reduce((s, m) => s + Number(m.amount), 0)
+
+    // Per-account running balances: start from each account's balance minus in-range movements
+    const accRunning = new Map<string, number>()
+    for (const acc of bankAccounts) {
+      const accInRange = movementsInRange.filter((m) => (m as { bankAccountId?: string }).bankAccountId === acc.id)
+      accRunning.set(acc.id, (balances.get(acc.id) ?? 0) - accInRange.reduce((s, m) => s + Number(m.amount), 0))
+    }
 
     let running = balanceAtRangeStart
     const weeks = weekList.map((wk) => {
@@ -503,6 +510,19 @@ export class TreasuryDashboardService {
       running += income - expense
       const closingBalance = running
 
+      // Per-account balances for this week (past only)
+      const accountBalances: Array<{ id: string; name: string; balance: number }> = []
+      if (!wk.isFuture) {
+        for (const acc of bankAccounts) {
+          const weekChange = pastMovements
+            .filter((m) => (m as { bankAccountId?: string }).bankAccountId === acc.id && m.date >= wk.start && m.date <= wk.end)
+            .reduce((s, m) => s + Number(m.amount), 0)
+          const newBal = (accRunning.get(acc.id) ?? 0) + weekChange
+          accRunning.set(acc.id, newBal)
+          accountBalances.push({ id: acc.id, name: acc.name, balance: newBal })
+        }
+      }
+
       return {
         label: wk.label,
         start: wk.start.toISOString().slice(0, 10),
@@ -515,11 +535,13 @@ export class TreasuryDashboardService {
         expense,
         catIncome: Object.fromEntries(catIncome),
         catExpense: Object.fromEntries(catExpense),
+        accountBalances,
       }
     })
 
     return {
       currentBalance,
+      accounts: bankAccounts.map((a) => ({ id: a.id, name: a.name })),
       categories: categories.map((c) => ({ id: c.id, name: c.name, type: c.type, color: c.color })),
       weeks,
     }

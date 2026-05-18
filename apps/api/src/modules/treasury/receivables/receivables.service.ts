@@ -84,13 +84,13 @@ export class TreasuryReceivablesService {
 
   async create(clientId: string, userId: string, data: {
     categoryId?: string
-    entityName: string
+    entityName?: string
     entityNif?: string
     tocCustomerId?: string
     tocSalesDocId?: string
-    reference: string
+    reference?: string
     description?: string
-    documentDate: string
+    documentDate?: string
     dueDate: string
     totalAmount: number
     currency?: string
@@ -107,7 +107,7 @@ export class TreasuryReceivablesService {
       const existing = await this.prisma.treasuryReceivable.findFirst({
         where: { clientId, tocSalesDocId: data.tocSalesDocId, deletedAt: null },
       })
-      if (existing) throw httpError(409, `Documento ${data.reference} já importado`)
+      if (existing) throw httpError(409, `Documento ${data.reference ?? data.tocSalesDocId} já importado`)
     }
 
     let recurrenceId = data.recurrenceId
@@ -134,15 +134,15 @@ export class TreasuryReceivablesService {
         origin: category?.launchToc ? 'TOCONLINE' : 'LOCAL',
         totalAmount: data.totalAmount,
         pendingAmount: data.totalAmount,
-        documentDate: new Date(data.documentDate),
+        documentDate: data.documentDate ? new Date(data.documentDate) : null,
         dueDate: new Date(data.dueDate),
         currency: data.currency ?? 'EUR',
         categoryId: data.categoryId,
-        entityName: data.entityName,
+        entityName: data.entityName ?? null,
         entityNif: data.entityNif,
         tocCustomerId: data.tocCustomerId,
         tocSalesDocId: data.tocSalesDocId,
-        reference: data.reference,
+        reference: data.reference ?? null,
         description: data.description,
         recurrenceId,
       },

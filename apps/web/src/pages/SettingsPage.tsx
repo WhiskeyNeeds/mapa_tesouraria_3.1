@@ -37,7 +37,7 @@ interface ToconlineConfig {
 }
 
 export default function SettingsPage() {
-  const { selectedClientId } = useAuth()
+  const { selectedClientId, isTocEnabled, setIsTocEnabled } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
   const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline'>('categories')
@@ -626,6 +626,22 @@ export default function SettingsPage() {
 
       {tab === 'toconline' && (
         <div className="space-y-6 max-w-xl">
+          {/* TOConline enable toggle */}
+          <div className="card px-5 py-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Integração TOConline</p>
+              <p className="text-xs text-gray-500 mt-0.5">Desligar permite usar a aplicação sem credenciais TOConline ativas.</p>
+            </div>
+            <button
+              onClick={() => setIsTocEnabled(!isTocEnabled)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isTocEnabled ? 'bg-primary-600' : 'bg-gray-200'}`}
+              role="switch"
+              aria-checked={isTocEnabled}
+            >
+              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${isTocEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
+
           {/* Status banner */}
           {tocSuccess && (
             <div className="flex items-center gap-3 p-4 rounded-lg bg-green-50 border border-green-200">

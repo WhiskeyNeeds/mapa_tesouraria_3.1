@@ -7,8 +7,8 @@ import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight } from 'lucide-react'
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  Bar, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine, ReferenceArea,
+  Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Bar, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine,
 } from 'recharts'
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
@@ -58,9 +58,11 @@ interface CashPositioningWeek {
   openingBalance: number; closingBalance: number
   income: number; expense: number
   catIncome: Record<string, number>; catExpense: Record<string, number>
+  accountBalances: Array<{ id: string; name: string; balance: number }>
 }
 interface CashPositioningData {
   currentBalance: number
+  accounts: Array<{ id: string; name: string }>
   categories: Array<{ id: string; name: string; type: string; color: string }>
   weeks: CashPositioningWeek[]
 }
@@ -158,7 +160,7 @@ function CashflowStatementTable() {
   const [hoveredColKey, setHoveredColKey] = useState<string | null>(null)
   const [viewType, setViewType] = useState<'cashflow' | 'balances'>('cashflow')
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly'>('monthly')
-  const [balChartMode, setBalChartMode] = useState<'composed' | 'stacked'>('composed')
+
   const [year, setYear] = useState(() => new Date().getFullYear())
   const [monthOffset, setMonthOffset] = useState(0)
   const [weekWindowDate, setWeekWindowDate] = useState<string>(() => {
@@ -219,6 +221,15 @@ function CashflowStatementTable() {
       return { key: `${colYear}-${monthIdx}`, label: displayLabel, colYear, monthIndices: [monthIdx], isFuture, isCurrent }
     })
   }, [year, monthOffset, currentYear, currentMonth])
+
+  const accountColorMap = useMemo(() => {
+    const ids = new Set<string>()
+    for (const a of balYearData?.accounts ?? []) ids.add(a.id)
+    for (const a of balNextYearData?.accounts ?? []) ids.add(a.id)
+    for (const a of cpData?.accounts ?? []) ids.add(a.id)
+    const sorted = [...ids].sort()
+    return new Map(sorted.map((id, i) => [id, ACCOUNT_COLORS[i % ACCOUNT_COLORS.length]]))
+  }, [balYearData, balNextYearData, cpData])
 
   const findCatInTree = (cats: CashflowStatCategory[], id: string): CashflowStatCategory | undefined => {
     for (const c of cats) {
@@ -384,6 +395,212 @@ function CashflowStatementTable() {
     })
   }
 
+  const renderBalancesWeeklyView = () => {
+    if (!cpData) return <div className="px-5 py-8 text-center text-sm text-gray-400">A carregar dados semanais…</div>
+    const weeks = visibleWeeks
+    if (!weeks.length) return <div className="px-5 py-8 text-center text-sm text-gray-400">Sem dados semanais</div>
+    const wkAccounts = cpData.accounts ?? []
+
+    // ── Stacked chart calculations (same logic as monthly view)
+    let maxNetPos = 1, maxGrossNeg = 0
+    for (const wk of weeks) {
+      if (wk.isFuture) continue
+      const accs = wk.accountBalances ?? []
+      const net = accs.reduce((s, a) => s + a.balance, 0)
+      const gp = accs.reduce((s, a) => s + Math.max(0, a.balance), 0)
+      const gn = accs.reduce((s, a) => s + Math.max(0, -a.balance), 0)
+      if (Math.max(net, gp) > maxNetPos) maxNetPos = Math.max(net, gp)
+      if (gn > maxGrossNeg) maxGrossNeg = gn
+    }
+    const sHasNeg = maxGrossNeg > 0
+    const TD_H = 180, CHART_TOP = 16, CHART_BOTTOM = 6
+    const CHART_INNER = TD_H - CHART_TOP - CHART_BOTTOM
+    const SEP_H = sHasNeg ? 2 : 0
+    const niceUp = (max: number, divs = 4) => { const r = max / divs || 1; const m = Math.pow(10, Math.floor(Math.log10(r))); return Math.max(1, Math.ceil(r / m) * m) }
+    const sNicePos = niceUp(maxNetPos), sChartMaxPos = Math.ceil(maxNetPos / sNicePos) * sNicePos
+    const sNiceNeg = sHasNeg ? niceUp(maxGrossNeg, 2) : 1, sChartMaxNeg = sHasNeg ? Math.ceil(maxGrossNeg / sNiceNeg) * sNiceNeg : 0
+    const sNegAreaH = sHasNeg ? Math.max(Math.round(0.15 * (CHART_INNER - SEP_H)), Math.round((sChartMaxNeg / (sChartMaxPos + sChartMaxNeg)) * (CHART_INNER - SEP_H))) : 0
+    const sPosAreaH = CHART_INNER - SEP_H - sNegAreaH
+    const sTicks: number[] = []
+    for (let i = 0; i * sNicePos <= sChartMaxPos + 0.001; i++) sTicks.push(i * sNicePos)
+    if (sHasNeg) for (let v = -sNiceNeg; v >= -sChartMaxNeg; v -= sNiceNeg) sTicks.push(v)
+    const sTickY = (v: number) => v >= 0
+      ? CHART_TOP + sPosAreaH - Math.round((v / sChartMaxPos) * sPosAreaH)
+      : CHART_TOP + sPosAreaH + SEP_H + Math.round((Math.abs(v) / sChartMaxNeg) * sNegAreaH)
+    const sFmtTick = (v: number) => { const a = Math.abs(v), p = v < 0 ? '-' : ''; return a >= 1e6 ? `${p}${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${p}${(a / 1e3).toFixed(0)}k` : `${p}${Math.round(a)}` }
+
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-max border-collapse">
+          <thead>
+            <tr className="border-b border-gray-100 bg-gray-50">
+              <th className="px-5 py-2 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50 z-10 min-w-[220px]">Conta</th>
+              {weeks.map((wk) => (
+                <th key={wk.label} className={`px-3 py-2 text-center text-xs font-medium whitespace-nowrap cursor-pointer select-none ${colMinW} ${activeColKey === wk.label ? 'bg-blue-50 text-blue-700' : wk.isCurrent ? 'text-gray-700' : wk.isFuture ? 'text-gray-400' : 'text-gray-500'}`} {...hoverProps(wk.label)}>
+                  {wk.label}
+                </th>
+              ))}
+              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 whitespace-nowrap bg-gray-50">—</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {/* Chart row — stacked bars + smooth grossPos line */}
+            {(() => {
+              const colW = 100 / weeks.length
+              const grossPosPts = weeks.map((wk, wkIdx) => {
+                if (wk.isFuture) return null
+                const accs = wk.accountBalances ?? []
+                const gp = accs.reduce((s, a) => s + Math.max(0, a.balance), 0)
+                return gp > 0 ? { wkIdx, gp } : null
+              }).filter((p): p is { wkIdx: number; gp: number } => p !== null)
+              return (
+                <tr>
+                  <td className="sticky left-0 bg-white z-10 px-3 border-b border-gray-100 relative" style={{ height: TD_H }}>
+                    {sTicks.map((v) => (
+                      <span key={v} className="absolute text-gray-400 tabular-nums select-none pointer-events-none" style={{ top: sTickY(v) - 6, right: 10, fontSize: 9, lineHeight: '12px' }}>
+                        {sFmtTick(v)}
+                      </span>
+                    ))}
+                  </td>
+                  <td colSpan={weeks.length} className="border-b border-gray-100 p-0" style={{ height: TD_H }}>
+                    <div style={{ position: 'relative', height: TD_H }}>
+                      {sTicks.map((v) => (
+                        <div key={v} className="absolute left-0 right-0 pointer-events-none" style={{ top: sTickY(v), height: v === 0 ? 2 : 1, backgroundColor: v === 0 ? '#d1d5db' : '#f3f4f6' }} />
+                      ))}
+                      {weeks.map((wk, wkIdx) => {
+                        const accs = wk.accountBalances ?? []
+                        const netTotal = !wk.isFuture ? accs.reduce((s, a) => s + a.balance, 0) : 0
+                        const grossPos = accs.reduce((s, a) => s + Math.max(0, a.balance), 0)
+                        const grossNeg = !wk.isFuture ? accs.reduce((s, a) => s + Math.max(0, -a.balance), 0) : 0
+                        const barH = netTotal > 0 ? Math.round((netTotal / sChartMaxPos) * sPosAreaH) : 0
+                        const negBarH = grossNeg > 0 && sChartMaxNeg > 0 ? Math.round((grossNeg / sChartMaxNeg) * sNegAreaH) : 0
+                        return (
+                          <div key={wk.label} className={`absolute cursor-pointer select-none group ${activeColKey === wk.label ? 'bg-blue-50' : ''}`}
+                            style={{ top: 0, left: `${wkIdx * colW}%`, width: `${colW}%`, height: TD_H }}
+                            {...hoverProps(wk.label)}>
+                            <div style={{ position: 'absolute', top: CHART_TOP, left: '50%', transform: 'translateX(-13px)', width: 26 }}>
+                              <div style={{ height: sPosAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                                {barH > 0 && (
+                                  <div style={{ height: barH, display: 'flex', flexDirection: 'column-reverse', overflow: 'hidden', borderRadius: '2px 2px 0 0' }}>
+                                    {accs.map((acc) => {
+                                      const val = Math.max(0, acc.balance)
+                                      if (val === 0 || grossPos === 0) return null
+                                      return <div key={acc.id} style={{ height: `${(val / grossPos) * barH}px`, backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6', minHeight: 1, opacity: wk.isCurrent ? 0.55 : 1 }} />
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                              {sHasNeg && <div style={{ height: SEP_H, backgroundColor: '#9ca3af' }} />}
+                              {sHasNeg && (
+                                <div style={{ height: sNegAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+                                  {negBarH > 0 && (
+                                    <div style={{ height: negBarH, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: '0 0 2px 2px' }}>
+                                      {accs.map((acc) => {
+                                        const val = Math.max(0, -acc.balance)
+                                        if (val === 0 || grossNeg === 0) return null
+                                        return <div key={acc.id} style={{ height: `${(val / grossNeg) * negBarH}px`, backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6', opacity: 0.4, minHeight: 1 }} />
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            {!wk.isFuture && grossPos > 0 && (
+                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(grossPos) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
+                            )}
+                            {!wk.isFuture && netTotal !== 0 && (
+                              <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
+                                <div className="font-medium text-gray-700 mb-1">{wk.label}</div>
+                                {accs.map((acc) => (
+                                  <div key={acc.id} className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6' }} />
+                                    <span className="text-gray-600">{acc.name}:</span>
+                                    <span className={`font-semibold ${acc.balance < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(acc.balance)}</span>
+                                  </div>
+                                ))}
+                                <div className="border-t border-gray-100 mt-1 pt-1 flex items-center gap-2">
+                                  <span className="text-gray-600">Total:</span>
+                                  <span className={`font-semibold ${netTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(netTotal)}</span>
+                                </div>
+                                {grossPos !== netTotal && (
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
+                                    <span className="text-gray-600">Saldo Final.:</span>
+                                    <span className="font-semibold text-blue-700">{formatCurrency(grossPos)}</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {/* Continuous grossPos SVG line — smooth Catmull-Rom spline */}
+                      {grossPosPts.length >= 2 && (() => {
+                        const pts = grossPosPts.map(pt => [pt.wkIdx + 0.5, sTickY(pt.gp)] as [number, number])
+                        let d = `M ${pts[0][0]} ${pts[0][1]}`
+                        for (let i = 0; i < pts.length - 1; i++) {
+                          const p0 = pts[Math.max(0, i - 1)]
+                          const p1 = pts[i]
+                          const p2 = pts[i + 1]
+                          const p3 = pts[Math.min(pts.length - 1, i + 2)]
+                          const cp1x = p1[0] + (p2[0] - p0[0]) / 6
+                          const cp1y = p1[1] + (p2[1] - p0[1]) / 6
+                          const cp2x = p2[0] - (p3[0] - p1[0]) / 6
+                          const cp2y = p2[1] - (p3[1] - p1[1]) / 6
+                          d += ` C ${cp1x.toFixed(3)} ${cp1y.toFixed(3)}, ${cp2x.toFixed(3)} ${cp2y.toFixed(3)}, ${p2[0]} ${p2[1]}`
+                        }
+                        return (
+                          <svg viewBox={`0 0 ${weeks.length} ${TD_H}`} preserveAspectRatio="none"
+                            width="100%" height={TD_H}
+                            style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}>
+                            <path d={d} fill="none" stroke="#3b82f6" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                          </svg>
+                        )
+                      })()}
+                    </div>
+                  </td>
+                  <td className="border-b border-gray-100 bg-white" />
+                </tr>
+              )
+            })()}
+
+            {/* Account rows */}
+            {wkAccounts.map((acc) => (
+              <tr key={acc.id} className="hover:bg-gray-50/50">
+                <td className="px-5 py-2 text-xs font-medium text-gray-700 sticky left-0 bg-white z-10">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6' }} />
+                    {acc.name}
+                  </div>
+                </td>
+                {weeks.map((wk) => {
+                  const accBal = wk.isFuture ? null : (wk.accountBalances ?? []).find((a) => a.id === acc.id)
+                  return (
+                    <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${wk.isFuture ? 'text-gray-300' : accBal && accBal.balance < 0 ? 'text-red-600 font-semibold' : wk.isCurrent ? 'text-gray-500' : 'text-gray-700'}`} {...hoverProps(wk.label)}>
+                      {accBal === undefined || accBal === null ? '—' : formatCurrency(accBal.balance)}
+                    </td>
+                  )
+                })}
+                <td className="px-3 py-2 text-right text-xs text-gray-300">—</td>
+              </tr>
+            ))}
+
+            {/* Saldo final */}
+            <tr className="bg-white border-t-2 border-gray-300">
+              <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
+              {weeks.map((wk) => (
+                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs font-bold whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${wk.isFuture ? 'text-gray-300' : wk.closingBalance < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(wk.label)}>
+                  {wk.isFuture ? '—' : formatCurrency(wk.closingBalance)}
+                </td>
+              ))}
+              <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
   const renderBalancesView = () => {
     const accounts = balYearData?.accounts ?? []
     if (accounts.length === 0) return <div className="px-5 py-8 text-center text-sm text-gray-400">Sem contas bancárias</div>
@@ -395,89 +612,36 @@ function CashflowStatementTable() {
       return acc ? acc.monthlyBalances[col.monthIndices[0]] : 0
     }
 
-    // Build Recharts data: one entry per column
-    const balChartData = cols.map((col) => {
-      const d = getBalYearData(col.colYear)
-      const accs = d?.accounts ?? []
-      const total = col.isFuture ? null : accs.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0)
-      const entry: Record<string, unknown> = { label: col.label, total, isFuture: col.isFuture }
-      for (const acc of accs) {
-        entry[`acc_${acc.id}`] = col.isFuture ? null : acc.monthlyBalances[col.monthIndices[0]]
-      }
-      return entry
-    })
 
-    const fmtTick = (v: number) => {
-      const abs = Math.abs(v), pfx = v < 0 ? '-' : ''
-      if (abs >= 1_000_000) return `${pfx}${(abs / 1_000_000).toFixed(1)}M`
-      if (abs >= 1_000) return `${pfx}${(abs / 1_000).toFixed(0)}k`
-      return String(v)
-    }
 
-    // ── Composed chart (Barras + Linhas) legend
-    const balLegend = (
-      <div className="flex flex-col gap-2 py-3">
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          <div className="w-3 h-2.5 rounded-sm flex-shrink-0 bg-blue-400" />
-          Saldo total
-        </div>
-        {accounts.map((acc, i) => (
-          <div key={acc.id} className="flex items-center gap-1.5 text-xs text-gray-500">
-            <div className="w-4 flex-shrink-0 border-b-2 rounded" style={{ borderColor: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length], marginTop: 1 }} />
-            <span className="truncate max-w-[150px]">{acc.name}</span>
-          </div>
-        ))}
-      </div>
-    )
-
-    // ── Stacked chart calculations (Empilhado)
+    // ── Stacked chart calculations
     let maxNetPos = 1, maxGrossNeg = 0
     for (const col of cols) {
       if (col.isFuture) continue
       const d = getBalYearData(col.colYear)
       if (!d) continue
       const net = d.accounts.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0)
+      const gp = d.accounts.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
       const gn = d.accounts.reduce((s, a) => s + Math.max(0, -a.monthlyBalances[col.monthIndices[0]]), 0)
-      if (net > maxNetPos) maxNetPos = net
+      if (Math.max(net, gp) > maxNetPos) maxNetPos = Math.max(net, gp)
       if (gn > maxGrossNeg) maxGrossNeg = gn
     }
     const sHasNeg = maxGrossNeg > 0
     const TD_H = 180, CHART_TOP = 16, CHART_BOTTOM = 6
     const CHART_INNER = TD_H - CHART_TOP - CHART_BOTTOM
     const SEP_H = sHasNeg ? 2 : 0
-    const niceUp = (max: number, divs = 4) => { const r = max / divs || 1; const m = Math.pow(10, Math.floor(Math.log10(r))); return Math.ceil(r / m) * m }
+    const niceUp = (max: number, divs = 4) => { const r = max / divs || 1; const m = Math.pow(10, Math.floor(Math.log10(r))); return Math.max(1, Math.ceil(r / m) * m) }
     const sNicePos = niceUp(maxNetPos), sChartMaxPos = Math.ceil(maxNetPos / sNicePos) * sNicePos
     const sNiceNeg = sHasNeg ? niceUp(maxGrossNeg, 2) : 1, sChartMaxNeg = sHasNeg ? Math.ceil(maxGrossNeg / sNiceNeg) * sNiceNeg : 0
     const sNegAreaH = sHasNeg ? Math.max(Math.round(0.15 * (CHART_INNER - SEP_H)), Math.round((sChartMaxNeg / (sChartMaxPos + sChartMaxNeg)) * (CHART_INNER - SEP_H))) : 0
     const sPosAreaH = CHART_INNER - SEP_H - sNegAreaH
     const sTicks: number[] = []
-    for (let v = 0; v <= sChartMaxPos; v += sNicePos) sTicks.push(v)
+    for (let i = 0; i * sNicePos <= sChartMaxPos + 0.001; i++) sTicks.push(i * sNicePos)
     if (sHasNeg) for (let v = -sNiceNeg; v >= -sChartMaxNeg; v -= sNiceNeg) sTicks.push(v)
     const sTickY = (v: number) => v >= 0
       ? CHART_TOP + sPosAreaH - Math.round((v / sChartMaxPos) * sPosAreaH)
       : CHART_TOP + sPosAreaH + SEP_H + Math.round((Math.abs(v) / sChartMaxNeg) * sNegAreaH)
-    const sFmtTick = (v: number) => { const a = Math.abs(v), p = v < 0 ? '-' : ''; return a >= 1e6 ? `${p}${(a/1e6).toFixed(1)}M` : a >= 1e3 ? `${p}${(a/1e3).toFixed(0)}k` : `${p}${a}` }
-
-    // ── Composed chart domain / tick computation
-    const cAllValues: number[] = balChartData.flatMap((d) => {
-      const vals: number[] = []
-      if (d.total !== null && d.total !== undefined) vals.push(d.total as number)
-      for (const acc of accounts) {
-        const v = d[`acc_${acc.id}`]
-        if (v !== null && v !== undefined) vals.push(v as number)
-      }
-      return vals
-    })
-    const cRawMin = cAllValues.length > 0 ? Math.min(...cAllValues) : 0
-    const cRawMax = cAllValues.length > 0 ? Math.max(...cAllValues) : 1
-    const cNiceStep = niceUp(Math.max(Math.abs(cRawMax), Math.abs(cRawMin), 1), 4)
-    const cDomMin = cRawMin < 0 ? Math.floor(cRawMin / cNiceStep) * cNiceStep : 0
-    const cDomMax = Math.ceil(cRawMax / cNiceStep) * cNiceStep || cNiceStep
-    const cTicks: number[] = []
-    for (let v = cDomMin; v <= cDomMax + cNiceStep * 0.01; v += cNiceStep) cTicks.push(Math.round(v / cNiceStep) * cNiceStep)
-    const cDomain: [number, number] = [cTicks[0] ?? 0, cTicks[cTicks.length - 1] ?? 1]
-    const C_H = 200, C_MT = 8, C_XH = 0, C_PH = C_H - C_MT - C_XH
-    const cTickY = (v: number) => Math.round(C_MT + (1 - (v - cDomain[0]) / (cDomain[1] - cDomain[0])) * C_PH)
+    const sFmtTick = (v: number) => { const a = Math.abs(v), p = v < 0 ? '-' : ''; return a >= 1e6 ? `${p}${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${p}${(a / 1e3).toFixed(0)}k` : `${p}${Math.round(a)}` }
 
     return (
       <div className="overflow-x-auto">
@@ -494,141 +658,138 @@ function CashflowStatementTable() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {/* Chart row — Barras + Linhas */}
-            {balChartMode === 'composed' && (
-              <tr>
-                <td className="sticky left-0 bg-white z-10 align-middle border-b border-gray-100 relative" style={{ minWidth: 220, height: C_H }}>
-                  <div className="px-5">{balLegend}</div>
-                  <div className="absolute inset-0 pointer-events-none">
-                    {cTicks.map((v) => (
-                      <span key={v} className="absolute text-gray-400 tabular-nums select-none" style={{ top: cTickY(v) - 5, right: 8, fontSize: 9, lineHeight: '10px' }}>
-                        {fmtTick(v)}
+            {/* Chart row — Empilhado */}
+            {(() => {
+              const colW = 100 / cols.length
+              const grossPosPts = cols.map((col, colIdx) => {
+                if (col.isFuture) return null
+                const accs = getBalYearData(col.colYear)?.accounts ?? []
+                const gp = accs.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
+                return gp > 0 ? { colIdx, gp } : null
+              }).filter((p): p is { colIdx: number; gp: number } => p !== null)
+              return (
+                <tr>
+                  <td className="sticky left-0 bg-white z-10 px-3 border-b border-gray-100 relative" style={{ height: TD_H }}>
+                    {sTicks.map((v) => (
+                      <span key={v} className="absolute text-gray-400 tabular-nums select-none pointer-events-none" style={{ top: sTickY(v) - 6, right: 10, fontSize: 9, lineHeight: '12px' }}>
+                        {sFmtTick(v)}
                       </span>
                     ))}
-                  </div>
-                </td>
-                <td colSpan={cols.length} className="p-0 border-b border-gray-100">
-                  <ResponsiveContainer width="100%" height={C_H}>
-                    <ComposedChart
-                      data={balChartData}
-                      margin={{ left: 0, right: 0, top: C_MT, bottom: 0 }}
-                      barCategoryGap="22%"
-                      onMouseMove={(s: { activeLabel?: string }) => setHoveredColKey(s?.activeLabel ?? null)}
-                      onMouseLeave={() => setHoveredColKey(null)}
-                      onClick={(s: { activeLabel?: string }) => { if (s?.activeLabel) setSelectedColKey((p) => p === s.activeLabel ? null : s.activeLabel!) }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-                      {activeColKey && <ReferenceArea x1={activeColKey} x2={activeColKey} fill="#eff6ff" fillOpacity={1} />}
-                      <ReferenceLine y={0} stroke="#9ca3af" strokeWidth={1} />
-                      <XAxis dataKey="label" hide height={C_XH} />
-                      <YAxis domain={cDomain} ticks={cTicks} width={0} tick={false} axisLine={false} tickLine={false} />
-                      <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} />
-                      <Bar dataKey="total" name="Saldo total" maxBarSize={32} radius={[2, 2, 0, 0]} isAnimationActive={false}>
-                        {balChartData.map((d, k) => (
-                          <Cell key={k} fill="#3b82f6" fillOpacity={(d as { isFuture?: boolean }).isFuture ? 0.22 : 1} />
-                        ))}
-                      </Bar>
-                      {accounts.map((acc, i) => (
-                        <Line key={acc.id} dataKey={`acc_${acc.id}`} name={acc.name}
-                          stroke={ACCOUNT_COLORS[i % ACCOUNT_COLORS.length]} strokeWidth={2} dot={false} connectNulls={false}
-                          isAnimationActive={false} />
-                      ))}
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </td>
-                <td className="border-b border-gray-100 bg-white" />
-              </tr>
-            )}
-            {/* Chart row — Empilhado */}
-            {balChartMode === 'stacked' && (
-              <tr>
-                <td className="sticky left-0 bg-white z-10 px-3 border-b border-gray-100 relative" style={{ height: TD_H }}>
-                  {sTicks.map((v) => (
-                    <span key={v} className="absolute text-gray-400 tabular-nums select-none pointer-events-none" style={{ top: sTickY(v) - 6, right: 10, fontSize: 9, lineHeight: '12px' }}>
-                      {sFmtTick(v)}
-                    </span>
-                  ))}
-                  <div className="absolute bottom-2 left-5 flex flex-col gap-1">
-                    {accounts.map((acc, i) => (
-                      <div key={acc.id} className="flex items-center gap-1.5">
-                        <div className="w-3 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length] }} />
-                        <span className="text-xs text-gray-500 truncate max-w-[150px]">{acc.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                </td>
-                {cols.map((col) => {
-                  const d = getBalYearData(col.colYear)
-                  const accs = d?.accounts ?? []
-                  const netTotal = !col.isFuture ? accs.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0) : 0
-                  const grossPos = accs.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
-                  const grossNeg = !col.isFuture ? accs.reduce((s, a) => s + Math.max(0, -a.monthlyBalances[col.monthIndices[0]]), 0) : 0
-                  const barH = netTotal > 0 ? Math.round((netTotal / sChartMaxPos) * sPosAreaH) : 0
-                  const negBarH = grossNeg > 0 && sChartMaxNeg > 0 ? Math.round((grossNeg / sChartMaxNeg) * sNegAreaH) : 0
-                  return (
-                    <td key={col.key} className={`border-b border-gray-100 cursor-pointer select-none relative group ${activeColKey === col.label ? 'bg-blue-50' : ''}`} style={{ height: TD_H }} {...hoverProps(col.label)}>
+                  </td>
+                  <td colSpan={cols.length} className="border-b border-gray-100 p-0" style={{ height: TD_H }}>
+                    <div style={{ position: 'relative', height: TD_H }}>
+                      {/* Horizontal grid lines */}
                       {sTicks.map((v) => (
                         <div key={v} className="absolute left-0 right-0 pointer-events-none" style={{ top: sTickY(v), height: v === 0 ? 2 : 1, backgroundColor: v === 0 ? '#d1d5db' : '#f3f4f6' }} />
                       ))}
-                      <div style={{ position: 'absolute', top: CHART_TOP, left: '50%', transform: 'translateX(-13px)', width: 26 }}>
-                        <div style={{ height: sPosAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
-                          {barH > 0 && (
-                            <div style={{ height: barH, display: 'flex', flexDirection: 'column-reverse', overflow: 'hidden', borderRadius: '2px 2px 0 0' }}>
-                              {accs.map((acc, i) => {
-                                const val = Math.max(0, acc.monthlyBalances[col.monthIndices[0]])
-                                if (val === 0 || grossPos === 0) return null
-                                return <div key={acc.id} style={{ height: `${(val / grossPos) * barH}px`, backgroundColor: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length], minHeight: 1, opacity: col.isCurrent ? 0.55 : 1 }} />
-                              })}
+                      {/* Per-column bars + hover */}
+                      {cols.map((col, colIdx) => {
+                        const d = getBalYearData(col.colYear)
+                        const accs = d?.accounts ?? []
+                        const netTotal = !col.isFuture ? accs.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0) : 0
+                        const grossPos = accs.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
+                        const grossNeg = !col.isFuture ? accs.reduce((s, a) => s + Math.max(0, -a.monthlyBalances[col.monthIndices[0]]), 0) : 0
+                        const barH = netTotal > 0 ? Math.round((netTotal / sChartMaxPos) * sPosAreaH) : 0
+                        const negBarH = grossNeg > 0 && sChartMaxNeg > 0 ? Math.round((grossNeg / sChartMaxNeg) * sNegAreaH) : 0
+                        return (
+                          <div key={col.key} className={`absolute cursor-pointer select-none group ${activeColKey === col.label ? 'bg-blue-50' : ''}`}
+                            style={{ top: 0, left: `${colIdx * colW}%`, width: `${colW}%`, height: TD_H }}
+                            {...hoverProps(col.label)}>
+                            <div style={{ position: 'absolute', top: CHART_TOP, left: '50%', transform: 'translateX(-13px)', width: 26 }}>
+                              <div style={{ height: sPosAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                                {barH > 0 && (
+                                  <div style={{ height: barH, display: 'flex', flexDirection: 'column-reverse', overflow: 'hidden', borderRadius: '2px 2px 0 0' }}>
+                                    {accs.map((acc) => {
+                                      const val = Math.max(0, acc.monthlyBalances[col.monthIndices[0]])
+                                      if (val === 0 || grossPos === 0) return null
+                                      return <div key={acc.id} style={{ height: `${(val / grossPos) * barH}px`, backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6', minHeight: 1, opacity: col.isCurrent ? 0.55 : 1 }} />
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                              {sHasNeg && <div style={{ height: SEP_H, backgroundColor: '#9ca3af' }} />}
+                              {sHasNeg && (
+                                <div style={{ height: sNegAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+                                  {negBarH > 0 && (
+                                    <div style={{ height: negBarH, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: '0 0 2px 2px' }}>
+                                      {accs.map((acc) => {
+                                        const val = Math.max(0, -acc.monthlyBalances[col.monthIndices[0]])
+                                        if (val === 0 || grossNeg === 0) return null
+                                        return <div key={acc.id} style={{ height: `${(val / grossNeg) * negBarH}px`, backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6', opacity: 0.4, minHeight: 1 }} />
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                        {sHasNeg && <div style={{ height: SEP_H, backgroundColor: '#9ca3af' }} />}
-                        {sHasNeg && (
-                          <div style={{ height: sNegAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
-                            {negBarH > 0 && (
-                              <div style={{ height: negBarH, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: '0 0 2px 2px' }}>
-                                {accs.map((acc, i) => {
-                                  const val = Math.max(0, -acc.monthlyBalances[col.monthIndices[0]])
-                                  if (val === 0 || grossNeg === 0) return null
-                                  return <div key={acc.id} style={{ height: `${(val / grossNeg) * negBarH}px`, backgroundColor: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length], opacity: 0.4, minHeight: 1 }} />
+                            {!col.isFuture && grossPos > 0 && (
+                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(grossPos) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
+                            )}
+                            {!col.isFuture && netTotal !== 0 && (
+                              <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
+                                <div className="font-medium text-gray-700 mb-1">{col.label}</div>
+                                {accs.map((acc) => {
+                                  const bal = acc.monthlyBalances[col.monthIndices[0]]
+                                  return (
+                                    <div key={acc.id} className="flex items-center gap-2">
+                                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6' }} />
+                                      <span className="text-gray-600">{acc.name}:</span>
+                                      <span className={`font-semibold ${bal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(bal)}</span>
+                                    </div>
+                                  )
                                 })}
+                                <div className="border-t border-gray-100 mt-1 pt-1 flex items-center gap-2">
+                                  <span className="text-gray-600">Total:</span>
+                                  <span className={`font-semibold ${netTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(netTotal)}</span>
+                                </div>
+                                {grossPos !== netTotal && (
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
+                                    <span className="text-gray-600">Saldo Final.:</span>
+                                    <span className="font-semibold text-blue-700">{formatCurrency(grossPos)}</span>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                      {!col.isFuture && netTotal !== 0 && (
-                        <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
-                          <div className="font-medium text-gray-700 mb-1">{col.label}</div>
-                          {accs.map((acc, i) => {
-                            const bal = acc.monthlyBalances[col.monthIndices[0]]
-                            return (
-                              <div key={acc.id} className="flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length] }} />
-                                <span className="text-gray-600">{acc.name}:</span>
-                                <span className={`font-semibold ${bal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(bal)}</span>
-                              </div>
-                            )
-                          })}
-                          <div className="border-t border-gray-100 mt-1 pt-1 flex items-center gap-2">
-                            <span className="text-gray-600">Total:</span>
-                            <span className={`font-semibold ${netTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(netTotal)}</span>
-                          </div>
-                        </div>
-                      )}
-                    </td>
-                  )
-                })}
-                <td className="border-b border-gray-100 bg-white" />
-              </tr>
-            )}
+                        )
+                      })}
+                      {/* Continuous grossPos SVG line — smooth Catmull-Rom spline */}
+                      {grossPosPts.length >= 2 && (() => {
+                        const pts = grossPosPts.map(pt => [pt.colIdx + 0.5, sTickY(pt.gp)] as [number, number])
+                        let d = `M ${pts[0][0]} ${pts[0][1]}`
+                        for (let i = 0; i < pts.length - 1; i++) {
+                          const p0 = pts[Math.max(0, i - 1)]
+                          const p1 = pts[i]
+                          const p2 = pts[i + 1]
+                          const p3 = pts[Math.min(pts.length - 1, i + 2)]
+                          const cp1x = p1[0] + (p2[0] - p0[0]) / 6
+                          const cp1y = p1[1] + (p2[1] - p0[1]) / 6
+                          const cp2x = p2[0] - (p3[0] - p1[0]) / 6
+                          const cp2y = p2[1] - (p3[1] - p1[1]) / 6
+                          d += ` C ${cp1x.toFixed(3)} ${cp1y.toFixed(3)}, ${cp2x.toFixed(3)} ${cp2y.toFixed(3)}, ${p2[0]} ${p2[1]}`
+                        }
+                        return (
+                          <svg viewBox={`0 0 ${cols.length} ${TD_H}`} preserveAspectRatio="none"
+                            width="100%" height={TD_H}
+                            style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}>
+                            <path d={d} fill="none" stroke="#3b82f6" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                          </svg>
+                        )
+                      })()}
+                    </div>
+                  </td>
+                  <td className="border-b border-gray-100 bg-white" />
+                </tr>
+              )
+            })()}
 
             {/* Account rows */}
-            {accounts.map((acc, i) => (
+            {accounts.map((acc) => (
               <tr key={acc.id} className="hover:bg-gray-50/50">
                 <td className="px-5 py-2 text-xs font-medium text-gray-700 sticky left-0 bg-white z-10">
                   <div className="flex items-center gap-1.5">
-                    <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length] }} />
+                    <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: accountColorMap.get(acc.id) ?? '#3b82f6' }} />
                     {acc.name}
                   </div>
                 </td>
@@ -915,7 +1076,7 @@ function CashflowStatementTable() {
       <div className="px-5 py-4 border-b border-gray-100">
         <div>
           <h2 className="text-sm font-semibold text-gray-700">Demonstração</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Entradas e saídas por categoria ao longo do período</p>
+          <p className="text-xs text-gray-400 mt-0.5">Entradas e saídas e Saldo por Contas</p>
         </div>
         <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
           <div className="flex items-center gap-2">
@@ -923,32 +1084,20 @@ function CashflowStatementTable() {
               {(['cashflow', 'balances'] as const).map((v) => (
                 <button key={v} onClick={() => { setViewType(v); setSelectedColKey(null); setHoveredColKey(null) }}
                   className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${viewType === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                  {v === 'cashflow' ? 'Cash Flow' : 'Saldo Final'}
+                  {v === 'cashflow' ? 'Cash Flow' : 'Saldo por Contas'}
                 </button>
               ))}
             </div>
-            {viewType === 'cashflow' && (
-              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                {(['weekly', 'monthly'] as const).map((t) => (
-                  <button key={t} onClick={() => { setPeriodType(t); setSelectedColKey(null); setHoveredColKey(null) }}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${periodType === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                    {t === 'weekly' ? 'Semanal' : 'Mensal'}
-                  </button>
-                ))}
-              </div>
-            )}
-            {viewType === 'balances' && (
-              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                {(['composed', 'stacked'] as const).map((m) => (
-                  <button key={m} onClick={() => setBalChartMode(m)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${balChartMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                    {m === 'composed' ? 'Barras + Linhas' : 'Empilhado'}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+              {(['weekly', 'monthly'] as const).map((t) => (
+                <button key={t} onClick={() => { setPeriodType(t); setSelectedColKey(null); setHoveredColKey(null) }}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${periodType === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                  {t === 'weekly' ? 'Semanal' : 'Mensal'}
+                </button>
+              ))}
+            </div>
           </div>
-          {viewType === 'cashflow' && periodType === 'weekly' ? (
+          {periodType === 'weekly' ? (
             <div className="flex items-center gap-1">
               <button onClick={() => navigateWeeks(-1)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors leading-none">‹</button>
               <span className="text-sm font-semibold text-gray-700 min-w-[160px] text-center">{weeklyRangeLabel}</span>
@@ -963,7 +1112,9 @@ function CashflowStatementTable() {
           )}
         </div>
       </div>
-      {viewType === 'balances' ? renderBalancesView() : periodType === 'weekly' ? renderWeeklyView() : renderPeriodView()}
+      {viewType === 'balances'
+        ? (periodType === 'weekly' ? renderBalancesWeeklyView() : renderBalancesView())
+        : (periodType === 'weekly' ? renderWeeklyView() : renderPeriodView())}
     </div>
   )
 }
@@ -1137,147 +1288,112 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Row: Balance chart + accounts + stats */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Balance evolution */}
-        <div className="card p-5 lg:col-span-2">
-          <h2 className="text-sm font-semibold text-gray-700 mb-1">Evolução do Saldo</h2>
-          <p className="text-xs text-gray-400 mb-4">Últimos {days} dias</p>
-          {data.chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={data.chartData} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="balGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="incGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.08} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} tickFormatter={(v: string) => formatDate(v, 'dd/MM')} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} width={38} />
-                <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} labelFormatter={(l: string) => formatDate(l)} />
-                <Area type="monotone" dataKey="balance" stroke="#3b82f6" fill="url(#balGrad)" strokeWidth={2} dot={false} name="Saldo" />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex items-center justify-center h-[200px] text-gray-400 text-sm">Sem movimentos no período</div>
-          )}
-
-        </div>
-
-        {/* Bank accounts + derived stats */}
-        <div className="space-y-4">
-          {/* Accounts */}
-          <div className="card p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-gray-700">Contas Bancárias</h2>
-              <Link to="/bancos" className="text-xs text-primary-600 hover:text-primary-700 font-medium">Ver →</Link>
-            </div>
-            <div className="space-y-2.5">
-              {data.bankAccounts.map((acc) => (
-                <div key={acc.id} className={`flex items-center justify-between rounded-lg px-2.5 py-2 -mx-0.5 ${acc.lowBalanceWarning ? 'bg-red-50 border border-red-100' : 'hover:bg-gray-50'}`}>
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-gray-900 flex items-center gap-1">
-                      {acc.name}
-                      {acc.lowBalanceWarning && <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />}
-                    </div>
-                    <div className="text-xs text-gray-400">{acc.bankName} ···· {acc.ibanLast4}</div>
-                  </div>
-                  <div className={`text-sm font-semibold whitespace-nowrap ${acc.lowBalanceWarning ? 'text-red-600' : acc.currentBalance < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                    {formatCurrency(acc.currentBalance)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Indicadores financeiros */}
-          {stats && (
-            <div className="card p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <Gauge className="w-4 h-4 text-gray-400" />
-                <h2 className="text-sm font-semibold text-gray-700">Indicadores Financeiros</h2>
-              </div>
-              <div className="space-y-2.5">
-                {/* Net cash flow highlight */}
-                <div className={`rounded-lg px-3 py-2 flex items-center justify-between ${stats.netCashFlow >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
-                  <span className="text-xs text-gray-600 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Fluxo líquido ({days}d)</span>
-                  <span className={`text-sm font-bold ${stats.netCashFlow >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {stats.netCashFlow >= 0 ? '+' : ''}{formatCurrency(stats.netCashFlow)}
-                  </span>
-                </div>
-                <div className="pt-1 space-y-2.5">
-                  {stats.liquidezImediata !== null && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500 flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5" />Liquidez imediata</span>
-                      <span className={`text-xs font-semibold ${stats.liquidezImediata >= 1 ? 'text-green-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-700'}`}>
-                        {stats.liquidezImediata.toFixed(2)}×
-                      </span>
-                    </div>
-                  )}
-                  {stats.coverageRatio !== null && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500 flex items-center gap-1.5"><ArrowDownToLine className="w-3.5 h-3.5" />Rácio CR/CP</span>
-                      <span className={`text-xs font-semibold ${stats.coverageRatio >= 1 ? 'text-green-700' : 'text-amber-600'}`}>
-                        {stats.coverageRatio.toFixed(2)}×
-                      </span>
-                    </div>
-                  )}
-                  {stats.cashRunway !== null && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />Autonomia de caixa</span>
-                      <span className={`text-xs font-semibold ${stats.cashRunway > 90 ? 'text-green-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-700'}`}>
-                        {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
-                      </span>
-                    </div>
-                  )}
-                  {stats.dso !== null && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" />DSO est.</span>
-                      <span className={`text-xs font-semibold ${stats.dso <= 30 ? 'text-green-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-700'}`}>
-                        {stats.dso} dias
-                      </span>
-                    </div>
-                  )}
-                  {stats.dpo !== null && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500 flex items-center gap-1.5"><ReceiptText className="w-3.5 h-3.5" />DPO est.</span>
-                      <span className="text-xs font-semibold text-gray-700">{stats.dpo} dias</span>
-                    </div>
-                  )}
-                </div>
-                <div className="pt-2 border-t border-gray-100">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Capital de trabalho</span>
-                    <span className={`text-xs font-semibold ${stats.workingCapital >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      {formatCurrency(stats.workingCapital)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Média diária entrada</span>
-                    <span className="text-xs font-medium text-green-700">{formatCurrency(stats.avgDailyIncome)}</span>
-                  </div>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" />Média diária saída</span>
-                    <span className="text-xs font-medium text-red-700">{formatCurrency(stats.avgDailyExpense)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-
-
       {/* Cashflow Statement Table */}
       <CashflowStatementTable />
 
+      {/* Bank accounts + derived stats */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Accounts */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-700">Contas Bancárias</h2>
+            <Link to="/bancos" className="text-xs text-primary-600 hover:text-primary-700 font-medium">Ver →</Link>
+          </div>
+          <div className="space-y-2.5">
+            {data.bankAccounts.map((acc) => (
+              <div key={acc.id} className={`flex items-center justify-between rounded-lg px-2.5 py-2 -mx-0.5 ${acc.lowBalanceWarning ? 'bg-red-50 border border-red-100' : 'hover:bg-gray-50'}`}>
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-gray-900 flex items-center gap-1">
+                    {acc.name}
+                    {acc.lowBalanceWarning && <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />}
+                  </div>
+                  <div className="text-xs text-gray-400">{acc.bankName} ···· {acc.ibanLast4}</div>
+                </div>
+                <div className={`text-sm font-semibold whitespace-nowrap ${acc.lowBalanceWarning ? 'text-red-600' : acc.currentBalance < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                  {formatCurrency(acc.currentBalance)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Indicadores financeiros */}
+        {stats && (
+          <div className="card p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Gauge className="w-4 h-4 text-gray-400" />
+              <h2 className="text-sm font-semibold text-gray-700">Indicadores Financeiros</h2>
+            </div>
+            <div className="space-y-2.5">
+              {/* Net cash flow highlight */}
+              <div className={`rounded-lg px-3 py-2 flex items-center justify-between ${stats.netCashFlow >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
+                <span className="text-xs text-gray-600 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Fluxo líquido ({days}d)</span>
+                <span className={`text-sm font-bold ${stats.netCashFlow >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  {stats.netCashFlow >= 0 ? '+' : ''}{formatCurrency(stats.netCashFlow)}
+                </span>
+              </div>
+              <div className="pt-1 space-y-2.5">
+                {stats.liquidezImediata !== null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5" />Liquidez imediata</span>
+                    <span className={`text-xs font-semibold ${stats.liquidezImediata >= 1 ? 'text-green-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-700'}`}>
+                      {stats.liquidezImediata.toFixed(2)}×
+                    </span>
+                  </div>
+                )}
+                {stats.coverageRatio !== null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ArrowDownToLine className="w-3.5 h-3.5" />Rácio CR/CP</span>
+                    <span className={`text-xs font-semibold ${stats.coverageRatio >= 1 ? 'text-green-700' : 'text-amber-600'}`}>
+                      {stats.coverageRatio.toFixed(2)}×
+                    </span>
+                  </div>
+                )}
+                {stats.cashRunway !== null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />Autonomia de caixa</span>
+                    <span className={`text-xs font-semibold ${stats.cashRunway > 90 ? 'text-green-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-700'}`}>
+                      {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
+                    </span>
+                  </div>
+                )}
+                {stats.dso !== null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" />DSO est.</span>
+                    <span className={`text-xs font-semibold ${stats.dso <= 30 ? 'text-green-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-700'}`}>
+                      {stats.dso} dias
+                    </span>
+                  </div>
+                )}
+                {stats.dpo !== null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ReceiptText className="w-3.5 h-3.5" />DPO est.</span>
+                    <span className="text-xs font-semibold text-gray-700">{stats.dpo} dias</span>
+                  </div>
+                )}
+              </div>
+              <div className="pt-2 border-t border-gray-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Capital de trabalho</span>
+                  <span className={`text-xs font-semibold ${stats.workingCapital >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                    {formatCurrency(stats.workingCapital)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Média diária entrada</span>
+                  <span className="text-xs font-medium text-green-700">{formatCurrency(stats.avgDailyIncome)}</span>
+                </div>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" />Média diária saída</span>
+                  <span className="text-xs font-medium text-red-700">{formatCurrency(stats.avgDailyExpense)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Cashflow Statement Table */}
       {/* Painel de Controlo */}
       <div className="card p-5">
         <div className="mb-4">

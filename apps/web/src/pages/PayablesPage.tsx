@@ -70,11 +70,13 @@ interface TocSupplier { id: string | number; business_name?: string; tax_registr
 
 const emptyForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  documentDate: '', dueDate: '', totalAmount: '', currency: 'EUR',
+  dueDate: '', totalAmount: '', currency: 'EUR',
 }
 const emptyRecurrence = {
   isRecurrent: false,
-  frequency: 'MONTHLY' as const,
+  frequency: 'MONTHLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL',
+  dayOfMonth: 1,
+  daysOfWeek: [1] as number[],
   endType: 'none' as 'none' | 'date' | 'occurrences',
   endDate: '',
   occurrences: '',
@@ -82,7 +84,7 @@ const emptyRecurrence = {
 const emptyTocLine = { description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
 const emptyOutrasForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  documentDate: '', dueDate: '', totalAmount: '',
+  dueDate: '', totalAmount: '',
 }
 const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
 
@@ -285,7 +287,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName }: { clientId: string; 
 }
 
 export default function PayablesPage() {
-  const { selectedClientId } = useAuth()
+  const { selectedClientId, isTocEnabled } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
   const [statusFilter, setStatusFilter] = useState('')
@@ -370,7 +372,7 @@ export default function PayablesPage() {
   const { data: tocSuppliers = [] } = useQuery<TocSupplier[]>({
     queryKey: ['toc-suppliers', selectedClientId],
     queryFn: () => api.get(`/toconline/${selectedClientId}/suppliers`),
-    enabled: !!selectedClientId,
+    enabled: !!selectedClientId && isTocEnabled,
     retry: false,
     throwOnError: false,
   })
@@ -378,7 +380,7 @@ export default function PayablesPage() {
   const { data: tocDocs, isLoading: tocLoading, refetch: refetchToc } = useQuery<TocPurchaseDoc[]>({
     queryKey: ['toc-purchases', selectedClientId],
     queryFn: () => api.get(`/toconline/${selectedClientId}/purchases`),
-    enabled: !!selectedClientId,
+    enabled: !!selectedClientId && isTocEnabled,
     retry: false,
     throwOnError: false,
   })
@@ -411,6 +413,8 @@ export default function PayablesPage() {
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
+          ...(recForm.frequency === 'WEEKLY' ? { daysOfWeek: recForm.daysOfWeek.length ? recForm.daysOfWeek : [1] } : {}),
+          ...(['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) ? { dayOfMonth: recForm.dayOfMonth } : {}),
           ...(recForm.endType === 'date' && recForm.endDate ? { endDate: recForm.endDate } : {}),
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
@@ -521,24 +525,36 @@ export default function PayablesPage() {
   })
 
   const createOutras = useMutation({
-    mutationFn: () => api.post(`/treasury/${selectedClientId}/payables`, {
-      categoryId: outrasForm.categoryId || undefined,
-      entityName: outrasForm.entityName,
-      entityNif: outrasForm.entityNif || undefined,
-      reference: outrasForm.reference,
-      description: outrasForm.description || undefined,
-      documentDate: outrasForm.documentDate,
-      dueDate: outrasForm.dueDate,
-      totalAmount: parseFloat(outrasForm.totalAmount) || 0,
-    }),
+    mutationFn: () => {
+      const body: Record<string, unknown> = {
+        categoryId: outrasForm.categoryId || undefined,
+        entityName: outrasForm.entityName || undefined,
+        entityNif: outrasForm.entityNif || undefined,
+        reference: outrasForm.reference || undefined,
+        description: outrasForm.description || undefined,
+        dueDate: outrasForm.dueDate,
+        totalAmount: parseFloat(outrasForm.totalAmount) || 0,
+      }
+      if (recForm.isRecurrent) {
+        body.recurrence = {
+          frequency: recForm.frequency,
+          ...(recForm.frequency === 'WEEKLY' ? { daysOfWeek: recForm.daysOfWeek.length ? recForm.daysOfWeek : [1] } : {}),
+          ...(['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) ? { dayOfMonth: recForm.dayOfMonth } : {}),
+          ...(recForm.endType === 'date' && recForm.endDate ? { endDate: recForm.endDate } : {}),
+          ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
+        }
+      }
+      return api.post(`/treasury/${selectedClientId}/payables`, body)
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['payables'] })
       qc.invalidateQueries({ queryKey: ['payables-kpis'] })
       setShowNewOutras(false)
       setOutrasForm(emptyOutrasForm)
+      setRecForm(emptyRecurrence)
       setOutrasContact(null)
       setOutrasContactSearch('')
-      toast.success('Operação criada.')
+      toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Operação criada.')
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -1339,7 +1355,6 @@ export default function PayablesPage() {
             </label>
             <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} disabled={tocCreate} placeholder={tocCreate ? 'calculado das linhas' : ''} />
           </div>
-          <div><label className="label">Data Documento <span className="text-red-500">*</span></label><input type="date" className="input" value={form.documentDate} onChange={(e) => setForm({ ...form, documentDate: e.target.value })} /></div>
           <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} /></div>
           <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
         </div>
@@ -1509,12 +1524,36 @@ export default function PayablesPage() {
               <div className="col-span-2">
                 <label className="label">Frequência</label>
                 <select className="input" value={recForm.frequency} onChange={(e) => setRecForm({ ...recForm, frequency: e.target.value as typeof recForm.frequency })}>
+                  <option value="DAILY">Diariamente</option>
+                  <option value="WEEKLY">Semanalmente</option>
                   <option value="MONTHLY">Mensal</option>
                   <option value="QUARTERLY">Trimestral</option>
                   <option value="SEMIANNUAL">Semestral</option>
                   <option value="ANNUAL">Anual</option>
                 </select>
               </div>
+              {recForm.frequency === 'WEEKLY' && (
+                <div className="col-span-2">
+                  <label className="label">Dias da semana</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d, i) => (
+                      <button key={i} type="button"
+                        onClick={() => {
+                          const cur = recForm.daysOfWeek
+                          setRecForm({ ...recForm, daysOfWeek: cur.includes(i) ? (cur.length > 1 ? cur.filter(x => x !== i) : cur) : [...cur, i].sort() })
+                        }}
+                        className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${recForm.daysOfWeek.includes(i) ? 'bg-primary-600 border-primary-600 text-white' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+                      >{d}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) && (
+                <div className="col-span-2">
+                  <label className="label">Dia do mês</label>
+                  <input type="number" min="1" max="31" className="input w-24" value={recForm.dayOfMonth} onChange={(e) => setRecForm({ ...recForm, dayOfMonth: parseInt(e.target.value) || 1 })} />
+                </div>
+              )}
               <div className="col-span-2">
                 <label className="label">Terminar</label>
                 <select className="input" value={recForm.endType} onChange={(e) => setRecForm({ ...recForm, endType: e.target.value as typeof recForm.endType, endDate: '', occurrences: '' })}>
@@ -1547,14 +1586,14 @@ export default function PayablesPage() {
           <button
             onClick={() => create.mutate()}
             className="btn-primary flex-1"
-            disabled={create.isPending || !form.entityName || !form.reference || !form.totalAmount || !form.documentDate || !form.dueDate}
+            disabled={create.isPending || !form.totalAmount || !form.dueDate}
           >
             {create.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
         </div>
       </Modal>
 
-      <Modal open={showNewOutras} onClose={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setOutrasContact(null); setOutrasContactSearch('') }} title="Nova Operação" size="lg">
+      <Modal open={showNewOutras} onClose={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch('') }} title="Nova Operação" size="lg">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <label className="label">Categoria</label>
@@ -1608,7 +1647,7 @@ export default function PayablesPage() {
             </div>
           </div>
           <div>
-            <label className="label">NIF <span className="text-red-500">*</span></label>
+            <label className="label">NIF</label>
             <input
               className="input"
               value={outrasForm.entityNif}
@@ -1620,16 +1659,12 @@ export default function PayablesPage() {
             />
           </div>
           <div>
-            <label className="label">Referência <span className="text-red-500">*</span></label>
+            <label className="label">Referência</label>
             <input className="input" value={outrasForm.reference} onChange={(e) => setOutrasForm({ ...outrasForm, reference: e.target.value })} placeholder="REF001" />
           </div>
           <div>
-            <label className="label">Valor (€)</label>
+            <label className="label">Valor (€) <span className="text-red-500">*</span></label>
             <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
-          </div>
-          <div>
-            <label className="label">Data Documento <span className="text-red-500">*</span></label>
-            <input type="date" className="input" value={outrasForm.documentDate} onChange={(e) => setOutrasForm({ ...outrasForm, documentDate: e.target.value })} />
           </div>
           <div>
             <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
@@ -1640,17 +1675,89 @@ export default function PayablesPage() {
             <input className="input" value={outrasForm.description} onChange={(e) => setOutrasForm({ ...outrasForm, description: e.target.value })} placeholder="Notas sobre a operação" />
           </div>
         </div>
+
+        <div className="mt-4 border-t border-gray-100 pt-4 space-y-3">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-300 text-primary-600"
+              checked={recForm.isRecurrent}
+              onChange={(e) => setRecForm({ ...recForm, isRecurrent: e.target.checked })}
+            />
+            <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+              <Repeat2 className="w-4 h-4 text-primary-500" /> Recorrente
+            </span>
+          </label>
+          {recForm.isRecurrent && (
+            <div className="grid grid-cols-2 gap-3 pl-6">
+              <div className="col-span-2">
+                <label className="label">Frequência</label>
+                <select className="input" value={recForm.frequency} onChange={(e) => setRecForm({ ...recForm, frequency: e.target.value as typeof recForm.frequency })}>
+                  <option value="DAILY">Diariamente</option>
+                  <option value="WEEKLY">Semanalmente</option>
+                  <option value="MONTHLY">Mensal</option>
+                  <option value="QUARTERLY">Trimestral</option>
+                  <option value="SEMIANNUAL">Semestral</option>
+                  <option value="ANNUAL">Anual</option>
+                </select>
+              </div>
+              {recForm.frequency === 'WEEKLY' && (
+                <div className="col-span-2">
+                  <label className="label">Dias da semana</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d, i) => (
+                      <button key={i} type="button"
+                        onClick={() => {
+                          const cur = recForm.daysOfWeek
+                          setRecForm({ ...recForm, daysOfWeek: cur.includes(i) ? (cur.length > 1 ? cur.filter(x => x !== i) : cur) : [...cur, i].sort() })
+                        }}
+                        className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${recForm.daysOfWeek.includes(i) ? 'bg-primary-600 border-primary-600 text-white' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+                      >{d}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) && (
+                <div className="col-span-2">
+                  <label className="label">Dia do mês</label>
+                  <input type="number" min="1" max="31" className="input w-24" value={recForm.dayOfMonth} onChange={(e) => setRecForm({ ...recForm, dayOfMonth: parseInt(e.target.value) || 1 })} />
+                </div>
+              )}
+              <div className="col-span-2">
+                <label className="label">Terminar</label>
+                <select className="input" value={recForm.endType} onChange={(e) => setRecForm({ ...recForm, endType: e.target.value as typeof recForm.endType, endDate: '', occurrences: '' })}>
+                  <option value="none">Sem data de fim</option>
+                  <option value="date">Na data</option>
+                  <option value="occurrences">Após N ocorrências</option>
+                </select>
+              </div>
+              {recForm.endType === 'date' && (
+                <div className="col-span-2">
+                  <label className="label">Data de fim</label>
+                  <input type="date" className="input" value={recForm.endDate} onChange={(e) => setRecForm({ ...recForm, endDate: e.target.value })} />
+                </div>
+              )}
+              {recForm.endType === 'occurrences' && (
+                <div className="col-span-2">
+                  <label className="label">Nº de ocorrências</label>
+                  <input type="number" min="2" max="120" className="input" value={recForm.occurrences} onChange={(e) => setRecForm({ ...recForm, occurrences: e.target.value })} placeholder="ex: 12" />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {createOutras.isError && (
           <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(createOutras.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
-          <button onClick={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setOutrasContact(null); setOutrasContactSearch('') }} className="btn-secondary flex-1">Cancelar</button>
+          <button onClick={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch('') }} className="btn-secondary flex-1">Cancelar</button>
           <button
             onClick={() => createOutras.mutate()}
             className="btn-primary flex-1"
-            disabled={createOutras.isPending || !outrasForm.entityName || outrasForm.entityNif.length !== 9 || !outrasForm.reference || !outrasForm.totalAmount || !outrasForm.documentDate || !outrasForm.dueDate}
+            disabled={createOutras.isPending || !outrasForm.totalAmount || !outrasForm.dueDate}
           >
-            {createOutras.isPending ? 'A guardar...' : 'Criar'}
+            {createOutras.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
         </div>
       </Modal>

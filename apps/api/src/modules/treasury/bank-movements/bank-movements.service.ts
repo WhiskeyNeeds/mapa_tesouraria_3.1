@@ -159,10 +159,10 @@ export class TreasuryBankMovementsService {
       normalizedDesc: this.normalize(mov.description),
     }))
 
-    // Bulk pre-check: fetch all existing hashes in one query
+    // Bulk pre-check: fetch all existing hashes in one query (exclude soft-deleted)
     const allHashes = incomingWithHash.map((m) => m.dedupeHash)
     const existing = await this.prisma.treasuryBankMovement.findMany({
-      where: { clientId, bankAccountId, dedupeHash: { in: allHashes } },
+      where: { clientId, bankAccountId, deletedAt: null, dedupeHash: { in: allHashes } },
       select: { dedupeHash: true },
     })
     const existingHashes = new Set(existing.map((e) => e.dedupeHash))
@@ -406,12 +406,59 @@ export class TreasuryBankMovementsService {
     const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId } })
     if (!mov) throw httpError(404, 'Movement not found')
     if (mov.status === 'RECONCILED') throw httpError(409, 'Cannot delete a reconciled movement')
-    await this.prisma.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } })
+
+    // Find reconciliations linked to this movement that haven't been reversed yet
+    const reconciliations = await this.prisma.treasuryReconciliation.findMany({
+      where: {
+        clientId,
+        status: { not: 'REVERSED' },
+        movements: { some: { movementId: id } },
+      },
+      include: {
+        receivables: { include: { receivable: true } },
+        payables: { include: { payable: true } },
+      },
+    })
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const recon of reconciliations) {
+        if (recon.status === 'CONFIRMED') {
+          for (const link of recon.receivables) {
+            const rec = link.receivable
+            const newReceived = Math.max(0, Number(rec.receivedAmount) - Number(link.amountAllocated))
+            await tx.treasuryReceivable.update({
+              where: { id: link.receivableId },
+              data: {
+                receivedAmount: newReceived,
+                pendingAmount: Number(rec.totalAmount) - newReceived,
+                status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
+              },
+            })
+          }
+          for (const link of recon.payables) {
+            const pay = link.payable
+            const newPaid = Math.max(0, Number(pay.paidAmount) - Number(link.amountAllocated))
+            await tx.treasuryPayable.update({
+              where: { id: link.payableId },
+              data: {
+                paidAmount: newPaid,
+                pendingAmount: Number(pay.totalAmount) - newPaid,
+                status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
+              },
+            })
+          }
+        }
+        await tx.treasuryReconciliation.delete({ where: { id: recon.id } })
+      }
+
+      await tx.treasuryBankMovement.update({ where: { id }, data: { deletedAt: new Date() } })
+    })
+
     if (userId) {
       await this.prisma.treasuryAuditLog.create({
         data: {
           clientId, userId, action: 'movement.delete', entityType: 'BankMovement', entityId: id,
-          payload: { bankAccountId: mov.bankAccountId, amount: Number(mov.amount), source: mov.source }
+          payload: { bankAccountId: mov.bankAccountId, amount: Number(mov.amount), source: mov.source },
         },
       })
     }

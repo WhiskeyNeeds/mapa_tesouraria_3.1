@@ -4,6 +4,37 @@ function getToken(): string | null {
   return localStorage.getItem('access_token')
 }
 
+// Shared refresh promise — prevents concurrent 401s from triggering multiple refresh calls.
+// All requests that hit 401 simultaneously wait on the same promise; only one refresh is made.
+let refreshing: Promise<boolean> | null = null
+
+async function tryRefresh(): Promise<boolean> {
+  if (refreshing) return refreshing
+
+  refreshing = (async () => {
+    const rt = localStorage.getItem('refresh_token')
+    if (!rt) return false
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: rt }),
+      })
+      if (!res.ok) return false
+      const data = await res.json() as { accessToken: string; refreshToken: string }
+      localStorage.setItem('access_token', data.accessToken)
+      localStorage.setItem('refresh_token', data.refreshToken)
+      return true
+    } catch {
+      return false
+    } finally {
+      refreshing = null
+    }
+  })()
+
+  return refreshing
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
@@ -16,21 +47,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (res.status === 401) {
-    // Try refresh
-    const rt = localStorage.getItem('refresh_token')
-    if (rt) {
-      const refreshRes = await fetch(`${BASE}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: rt }),
-      })
-      if (refreshRes.ok) {
-        const data = await refreshRes.json() as { accessToken: string; refreshToken: string }
-        localStorage.setItem('access_token', data.accessToken)
-        localStorage.setItem('refresh_token', data.refreshToken)
-        return request(path, init)
-      }
-    }
+    const refreshed = await tryRefresh()
+    if (refreshed) return request(path, init)
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     window.location.href = '/auth/login'

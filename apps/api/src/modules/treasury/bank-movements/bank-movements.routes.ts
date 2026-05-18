@@ -143,8 +143,8 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
 
     type Issue = { row: number; field: string; message: string }
     const issues: Issue[] = []
-    let prevBalance: number | null = null
 
+    // Per-row field validation (in file order)
     for (let i = 0; i < movements.length; i++) {
       const m = movements[i]
       const row = i + 1
@@ -157,18 +157,35 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
 
       if (isNaN(m.amount) || m.amount === 0)
         issues.push({ row, field: 'Valor', message: 'Valor em falta ou igual a zero' })
+    }
 
-      if (m.balanceAfter != null && prevBalance !== null && !isNaN(m.amount)) {
-        const expected = Math.round((prevBalance + m.amount) * 100) / 100
-        if (Math.abs(expected - m.balanceAfter) > 0.02)
-          issues.push({
-            row,
-            field: 'Saldo pós movimento',
-            message: `Saldo inconsistente: esperado ${expected.toFixed(2)} €, tem ${m.balanceAfter.toFixed(2)} €`,
-          })
+    // Balance consistency check — same algorithm as checkBalanceConsistency:
+    // sort by date, consider only movements with balanceAfter, compare consecutive pairs.
+    // For same-date movements, sort by (balanceAfter - amount) = balance before the movement,
+    // which determines the correct chronological order regardless of file ordering direction.
+    const indexed = movements.map((m, i) => ({ ...m, _row: i + 1 }))
+    const sorted = [...indexed].sort((a, b) => {
+      const dateCmp = a.date.localeCompare(b.date)
+      if (dateCmp !== 0) return dateCmp
+      if (a.balanceAfter != null && b.balanceAfter != null) {
+        return (a.balanceAfter - a.amount) - (b.balanceAfter - b.amount)
       }
+      return 0
+    })
+    const withBalance = sorted.filter((m) => m.balanceAfter != null && !isNaN(m.balanceAfter))
 
-      if (m.balanceAfter != null && !isNaN(m.balanceAfter)) prevBalance = m.balanceAfter
+    for (let i = 1; i < withBalance.length; i++) {
+      const prev = withBalance[i - 1]
+      const curr = withBalance[i]
+      const calculated = Math.round((prev.balanceAfter! + curr.amount) * 100) / 100
+      const actual = Math.round(curr.balanceAfter! * 100) / 100
+      const gap = Math.round((calculated - actual) * 100) / 100
+      if (Math.abs(gap) > 0.01)
+        issues.push({
+          row: curr._row,
+          field: 'Saldo pós movimento',
+          message: `Saldo inconsistente: esperado ${calculated.toFixed(2)} €, tem ${actual.toFixed(2)} € (diferença: ${gap > 0 ? '+' : ''}${gap.toFixed(2)} €)`,
+        })
     }
 
     return reply.send({ parsed: movements.length, issues })
@@ -222,7 +239,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const isPDF = originalFileName?.toLowerCase().endsWith('.pdf') ||
       (fileBuffer.length >= 4 && fileBuffer.slice(0, 4).toString('ascii') === '%PDF')
 
-    // File-level duplicate check (account-scoped)
+    // File-level duplicate check (account-scoped) — only blocks if the existing import still has active movements
     const fileSha256 = createHash('sha256').update(fileBuffer).digest('hex')
     const existingImport = await fastify.prisma.treasuryBankImport.findFirst({
       where: {
@@ -231,6 +248,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
         fileSha256,
         status: { in: ['PENDING', 'PROCESSING', 'DONE'] },
         bankAccount: { deletedAt: null, isActive: true },
+        movements: { some: { deletedAt: null } },
       },
       select: { id: true, createdAt: true, originalFileName: true, bankAccount: { select: { name: true } } },
     })
@@ -241,7 +259,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       return reply.status(409).send({ error: `Este ficheiro${fileName} já foi importado${accountName} em ${when}.` })
     }
 
-    // Cross-account duplicate check: same file already imported in another account
+    // Cross-account duplicate check — only blocks if the existing import still has active movements
     const importedInAnotherAccount = await fastify.prisma.treasuryBankImport.findFirst({
       where: {
         clientId,
@@ -249,6 +267,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
         NOT: { bankAccountId },
         status: { in: ['PENDING', 'PROCESSING', 'DONE'] },
         bankAccount: { deletedAt: null, isActive: true },
+        movements: { some: { deletedAt: null } },
       },
       select: { createdAt: true, originalFileName: true, bankAccount: { select: { name: true } } },
     })
@@ -443,7 +462,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     })))
   })
 
-  // Revert a specific import (soft-delete its active movements)
+  // Revert a specific import (soft-delete its active movements + delete linked reconciliations)
   fastify.delete(`${prefix}/imports/:importId`, { onRequest: auth }, async (request, reply) => {
     const { clientId, importId } = request.params as { clientId: string; importId: string }
 
@@ -452,20 +471,71 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     })
     if (!imp) throw httpError(404, 'Import not found')
 
-    const { count } = await fastify.prisma.treasuryBankMovement.updateMany({
-      where: { clientId, importId, deletedAt: null },
-      data: { deletedAt: new Date() },
+    // Find reconciliations linked to movements of this import that haven't been reversed yet
+    const reconciliations = await fastify.prisma.treasuryReconciliation.findMany({
+      where: {
+        clientId,
+        status: { not: 'REVERSED' },
+        movements: { some: { movement: { importId, deletedAt: null } } },
+      },
+      include: {
+        movements: true,
+        receivables: { include: { receivable: true } },
+        payables: { include: { payable: true } },
+      },
+    })
+
+    const { count, reconCount } = await fastify.prisma.$transaction(async (tx) => {
+      // For each confirmed reconciliation, undo its effects on receivables/payables before deleting
+      for (const recon of reconciliations) {
+        if (recon.status === 'CONFIRMED') {
+          for (const link of recon.receivables) {
+            const rec = link.receivable
+            const newReceived = Math.max(0, Number(rec.receivedAmount) - Number(link.amountAllocated))
+            await tx.treasuryReceivable.update({
+              where: { id: link.receivableId },
+              data: {
+                receivedAmount: newReceived,
+                pendingAmount: Number(rec.totalAmount) - newReceived,
+                status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
+              },
+            })
+          }
+          for (const link of recon.payables) {
+            const pay = link.payable
+            const newPaid = Math.max(0, Number(pay.paidAmount) - Number(link.amountAllocated))
+            await tx.treasuryPayable.update({
+              where: { id: link.payableId },
+              data: {
+                paidAmount: newPaid,
+                pendingAmount: Number(pay.totalAmount) - newPaid,
+                status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
+              },
+            })
+          }
+        }
+        // Delete reconciliation — cascades to movement/receivable/payable link tables
+        await tx.treasuryReconciliation.delete({ where: { id: recon.id } })
+      }
+
+      // Soft-delete the import movements
+      const { count } = await tx.treasuryBankMovement.updateMany({
+        where: { clientId, importId, deletedAt: null },
+        data: { deletedAt: new Date() },
+      })
+
+      return { count, reconCount: reconciliations.length }
     })
 
     await fastify.prisma.treasuryAuditLog.create({
       data: {
         clientId, userId: request.user.sub,
         action: 'import.revert', entityType: 'BankImport', entityId: importId,
-        payload: { reverted: count, bankAccountId: imp.bankAccountId },
+        payload: { reverted: count, reconciliationsDeleted: reconCount, bankAccountId: imp.bankAccountId },
       },
     })
 
-    return reply.send({ reverted: count })
+    return reply.send({ reverted: count, reconciliationsDeleted: reconCount })
   })
 
   fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {

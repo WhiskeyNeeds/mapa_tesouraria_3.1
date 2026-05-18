@@ -370,7 +370,6 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['movements-summary'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       qc.invalidateQueries({ queryKey: ['balance-check'] })
-      qc.invalidateQueries({ queryKey: ['account-history', selectedClientId, historyAccountId] })
       setConfirmDeleteMovementId(null)
     },
   })
@@ -414,8 +413,6 @@ export default function BanksPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  type HistoryTab = 'timeline' | 'imports' | 'reconciliations'
-  const [historyTab, setHistoryTab] = useState<HistoryTab>('timeline')
 
   interface ImportRecord {
     id: string; originalFileName: string | null; createdAt: string
@@ -501,6 +498,7 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['movements-summary'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       qc.invalidateQueries({ queryKey: ['balance-check'] })
+      qc.refetchQueries({ queryKey: ['movements-pending'] })
       setShowNewMovement(false)
       setNewMovement({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' })
       toast.success('Movimento criado.')
@@ -535,6 +533,7 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['movements'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       qc.invalidateQueries({ queryKey: ['balance-check'] })
+      qc.refetchQueries({ queryKey: ['movements-pending'] })
       setImportResult(data)
       setReplaceConfirm(null)
       toast.success(`${data.imported} movimento(s) importado(s).`)
@@ -641,7 +640,20 @@ export default function BanksPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Bancos & Movimentos</h1>
         <div className="flex gap-2">
-          <button onClick={() => setShowImport(true)} className="btn-secondary flex items-center gap-2"><Upload className="w-4 h-4" />Importar movimentos de conta</button>
+          <button onClick={() => {
+            setImportFile(null)
+            setImportPdfFile(null)
+            setImportResult(null)
+            setReplaceConfirm(null)
+            setPreviewWarning(null)
+            setImportBank('CGD')
+            setImportAccountId('')
+            previewMutation.reset()
+            uploadStatementMutation.reset()
+            if (fileInputRef.current) fileInputRef.current.value = ''
+            if (pdfFileInputRef.current) pdfFileInputRef.current.value = ''
+            setShowImport(true)
+          }} className="btn-secondary flex items-center gap-2"><Upload className="w-4 h-4" />Importar movimentos de conta</button>
           <button onClick={() => { setNewMovement(m => ({ ...m, bankAccountId: selectedAccount || accounts[0]?.id || '', date: new Date().toISOString().slice(0, 10) })); setShowNewMovement(true) }} className="btn-secondary flex items-center gap-2"><PenLine className="w-4 h-4" />Novo Movimento</button>
           <button onClick={() => setShowNewAccount(true)} className="btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />Nova Conta</button>
         </div>
@@ -1335,183 +1347,130 @@ export default function BanksPage() {
           'statement.delete':         { label: 'Extrato eliminado',          color: 'bg-red-100 text-red-700' },
         }
 
-        const tabs: { id: HistoryTab; label: string; count?: number }[] = [
-          { id: 'timeline',        label: 'Linha do tempo', count: accountHistory?.timeline.length },
-          { id: 'imports',         label: 'Importações',    count: importHistory.length },
-          { id: 'reconciliations', label: 'Reconciliações', count: accountHistory?.reconciliations.length },
-        ]
-
         return (
-          <Modal open={!!historyAccountId} onClose={() => { setHistoryAccountId(null); setRevertConfirmId(null); setHistoryTab('timeline') }} title={`Histórico — ${acc?.name ?? ''}`} size="lg">
+          <Modal open={!!historyAccountId} onClose={() => { setHistoryAccountId(null); setRevertConfirmId(null) }} title={`Histórico — ${acc?.name ?? ''}`} size="lg">
             <div className="space-y-4">
-              {/* Tabs */}
-              <div className="flex gap-1 border-b border-gray-200">
-                {tabs.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setHistoryTab(t.id)}
-                    className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${historyTab === t.id ? 'border-primary-500 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  >
-                    {t.label}
-                    {t.count != null && t.count > 0 && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded-full ${historyTab === t.id ? 'bg-primary-100 text-primary-600' : 'bg-gray-100 text-gray-500'}`}>{t.count}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-
               {isLoading ? (
                 <div className="flex items-center justify-center py-12 text-gray-400">
                   <RefreshCw className="w-5 h-5 animate-spin mr-2" /> A carregar...
                 </div>
               ) : (
-                <div className="max-h-[55vh] overflow-y-auto pr-1 space-y-2">
-
-                  {/* ── Linha do tempo ── */}
-                  {historyTab === 'timeline' && (
-                    accountHistory?.timeline.length === 0 ? (
-                      <div className="text-center py-10 text-gray-400 text-sm">Sem eventos registados.</div>
-                    ) : (
-                      <div className="relative">
-                        <div className="absolute left-3 top-0 bottom-0 w-px bg-gray-100" />
-                        {accountHistory?.timeline.map((ev) => {
-                          const meta = TIMELINE_LABELS[ev.type] ?? { label: ev.type, color: 'bg-gray-100 text-gray-500' }
-                          const p = ev.payload
-                          return (
-                            <div key={ev.id} className="relative flex gap-3 pb-4 pl-8">
-                              <div className="absolute left-0 w-6 h-6 rounded-full bg-white border-2 border-gray-200 flex items-center justify-center">
-                                <div className="w-2 h-2 rounded-full bg-gray-300" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${meta.color}`}>{meta.label}</span>
-                                  {ev.user && <span className="text-xs text-gray-400">por {ev.user}</span>}
-                                  <span className="text-xs text-gray-300 ml-auto">{new Date(ev.date).toLocaleString('pt-PT')}</span>
-                                </div>
-                                {/* Payload details */}
-                                <div className="mt-1 text-xs text-gray-500 space-y-0.5">
-                                  {ev.type === 'import.complete' && <span>{p.imported as number} importados · {p.duplicated as number} duplicados · {p.failed as number} erros</span>}
-                                  {ev.type === 'import.revert' && <span>{p.reverted as number} movimento(s) revertidos</span>}
-                                  {ev.type === 'movement.create' && <span>Valor: {formatCurrency(p.amount as number)} · Data: {formatDate(p.date as string)}</span>}
-                                  {ev.type === 'movement.delete' && <span>Valor: {formatCurrency(p.amount as number)} · Origem: {p.source as string}</span>}
-                                  {ev.type === 'movement.edit' && <><span className="line-through text-gray-400">{p.before as string}</span><span className="ml-1">→ {p.after as string}</span></>}
-                                  {ev.type === 'account.create' && <span>Saldo inicial: {formatCurrency(p.openingBalance as number)}</span>}
-                                  {ev.type === 'account.update' && <span>{Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>}
-                                  {ev.type === 'account.deduplicate' && <span>{p.removed as number} duplicado(s) removido(s)</span>}
-                                  {ev.type === 'reconciliation.confirm' && <span>{p.movementsCount as number} movimento(s) · {p.allocationsCount as number} alocação(ões){p.isDryRun ? ' · Dry-run' : ''}</span>}
-                                  {ev.type === 'reconciliation.reverse' && p.reason && <span>Motivo: {p.reason as string}</span>}
-                                  {ev.type === 'movement.restore' && <span>Valor: {formatCurrency(p.amount as number)}</span>}
-                                </div>
-                                {ev.type === 'movement.edit' && ev.entityId && (p.before as string) && (
-                                  <button
-                                    onClick={() => revertDescriptionMutation.mutate({ movementId: ev.entityId!, description: p.before as string })}
-                                    disabled={revertDescriptionMutation.isPending}
-                                    className="mt-1.5 flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 hover:underline"
-                                  >
-                                    <RotateCcw className="w-3 h-3" /> Reverter descrição
-                                  </button>
-                                )}
-                                {ev.type === 'movement.delete' && ev.entityId && (
-                                  <button
-                                    onClick={() => restoreMovementMutation.mutate(ev.entityId!)}
-                                    disabled={restoreMovementMutation.isPending}
-                                    className="mt-1.5 flex items-center gap-1 text-xs text-green-600 hover:text-green-700 hover:underline"
-                                  >
-                                    <RotateCcw className="w-3 h-3" /> Restaurar movimento
-                                  </button>
-                                )}
-                                {ev.type === 'movement.create' && ev.entityId && (
-                                  <button
-                                    onClick={() => deleteMovement.mutate(ev.entityId!)}
-                                    disabled={deleteMovement.isPending}
-                                    className="mt-1.5 flex items-center gap-1 text-xs text-red-600 hover:text-red-700 hover:underline"
-                                  >
-                                    <RotateCcw className="w-3 h-3" /> Eliminar movimento
-                                  </button>
-                                )}
-                              </div>
+                <div className="max-h-[55vh] overflow-y-auto pr-1">
+                  {accountHistory?.timeline.length === 0 ? (
+                    <div className="text-center py-10 text-gray-400 text-sm">Sem eventos registados.</div>
+                  ) : (
+                    <div className="relative">
+                      <div className="absolute left-3 top-0 bottom-0 w-px bg-gray-100" />
+                      {accountHistory?.timeline.map((ev) => {
+                        const meta = TIMELINE_LABELS[ev.type] ?? { label: ev.type, color: 'bg-gray-100 text-gray-500' }
+                        const p = ev.payload
+                        const imp = ev.type === 'import.complete' ? importHistory.find((i) => i.id === ev.entityId) : null
+                        const recon = (ev.type === 'reconciliation.confirm' || ev.type === 'reconciliation.reverse')
+                          ? accountHistory?.reconciliations.find((r) => r.id === ev.entityId)
+                          : null
+                        const isReverted = imp ? imp.activeMovements === 0 : false
+                        const isReverting = revertImportMutation.isPending && revertConfirmId === ev.entityId
+                        const confirmingThis = revertConfirmId === ev.entityId && !revertImportMutation.isPending
+                        return (
+                          <div key={ev.id} className="relative flex gap-3 pb-4 pl-8">
+                            <div className="absolute left-0 w-6 h-6 rounded-full bg-white border-2 border-gray-200 flex items-center justify-center">
+                              <div className="w-2 h-2 rounded-full bg-gray-300" />
                             </div>
-                          )
-                        })}
-                      </div>
-                    )
-                  )}
-
-                  {/* ── Importações ── */}
-                  {historyTab === 'imports' && (
-                    importHistory.length === 0 ? (
-                      <div className="text-center py-10 text-gray-400 text-sm">Nenhuma importação registada.</div>
-                    ) : importHistory.map((imp) => {
-                      const isReverted = imp.activeMovements === 0
-                      const isReverting = revertImportMutation.isPending && revertConfirmId === imp.id
-                      const confirmingThis = revertConfirmId === imp.id && !revertImportMutation.isPending
-                      return (
-                        <div key={imp.id} className={`border rounded-xl p-4 transition-colors ${isReverted ? 'border-gray-100 bg-gray-50' : 'border-gray-200 bg-white'}`}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <FileText className={`w-4 h-4 flex-shrink-0 ${isReverted ? 'text-gray-300' : 'text-primary-400'}`} />
-                                <span className={`text-sm font-medium truncate ${isReverted ? 'text-gray-400 line-through' : 'text-gray-800'}`}>{imp.originalFileName ?? 'Ficheiro sem nome'}</span>
-                                {isReverted && <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full flex-shrink-0">Revertido</span>}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${meta.color}`}>{meta.label}</span>
+                                {ev.user && <span className="text-xs text-gray-400">por {ev.user}</span>}
+                                <span className="text-xs text-gray-300 ml-auto">{new Date(ev.date).toLocaleString('pt-PT')}</span>
                               </div>
-                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-400">
-                                <span>{new Date(imp.createdAt).toLocaleString('pt-PT')}</span>
-                                <span>por {imp.createdBy}</span>
-                                <span className="text-green-600">{imp.rowsImported} importados</span>
-                                {imp.rowsDuplicated > 0 && <span className="text-amber-500">{imp.rowsDuplicated} duplicados</span>}
-                                {imp.rowsFailed > 0 && <span className="text-red-500">{imp.rowsFailed} com erro</span>}
-                                {!isReverted && <span className="text-primary-600 font-medium">{imp.activeMovements} ativos</span>}
+                              {/* Payload details */}
+                              <div className="mt-1 text-xs text-gray-500 space-y-0.5">
+                                {ev.type === 'import.complete' && imp && (
+                                  <div className="mt-1.5 space-y-1.5">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="space-y-0.5 min-w-0">
+                                        {imp.originalFileName && (
+                                          <div className="flex items-center gap-1.5 text-gray-600">
+                                            <FileText className="w-3.5 h-3.5 flex-shrink-0 text-primary-400" />
+                                            <span className="font-medium truncate">{imp.originalFileName}</span>
+                                            {isReverted && <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-400 rounded-full flex-shrink-0">Revertido</span>}
+                                          </div>
+                                        )}
+                                        <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                                          <span className="text-green-600">{imp.rowsImported} importados</span>
+                                          {imp.rowsDuplicated > 0 && <span className="text-amber-500">{imp.rowsDuplicated} duplicados</span>}
+                                          {imp.rowsFailed > 0 && <span className="text-red-500">{imp.rowsFailed} com erro</span>}
+                                          {!isReverted && <span className="text-primary-600">{imp.activeMovements} ativos</span>}
+                                        </div>
+                                      </div>
+                                      {!isReverted && !confirmingThis && (
+                                        <button onClick={() => setRevertConfirmId(ev.entityId!)} disabled={isReverting}
+                                          className="flex-shrink-0 flex items-center gap-1 text-xs px-2.5 py-1 border border-amber-300 text-amber-700 hover:bg-amber-50 rounded-lg transition-colors">
+                                          <RotateCcw className="w-3 h-3" /> Reverter
+                                        </button>
+                                      )}
+                                    </div>
+                                    {confirmingThis && (
+                                      <div className="flex items-center gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+                                        <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                                        <span className="flex-1 text-amber-700">Serão eliminados <strong>{imp.activeMovements}</strong> movimento(s).</span>
+                                        <button onClick={() => setRevertConfirmId(null)} className="px-2 py-0.5 border border-gray-300 rounded hover:bg-gray-50">Cancelar</button>
+                                        <button onClick={() => revertImportMutation.mutate(imp.id)} className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Confirmar</button>
+                                      </div>
+                                    )}
+                                    {isReverting && <div className="flex items-center gap-1.5 text-gray-400"><RefreshCw className="w-3 h-3 animate-spin" /> A reverter...</div>}
+                                  </div>
+                                )}
+                                {ev.type === 'import.complete' && !imp && <span>{p.imported as number} importados · {p.duplicated as number} duplicados · {p.failed as number} erros</span>}
+                                {ev.type === 'import.revert' && <span>{p.reverted as number} movimento(s) revertidos</span>}
+                                {ev.type === 'movement.create' && <span>Valor: {formatCurrency(p.amount as number)} · Data: {formatDate(p.date as string)}</span>}
+                                {ev.type === 'movement.delete' && <span>Valor: {formatCurrency(p.amount as number)} · Origem: {p.source as string}</span>}
+                                {ev.type === 'movement.edit' && <><span className="line-through text-gray-400">{p.before as string}</span><span className="ml-1">→ {p.after as string}</span></>}
+                                {ev.type === 'account.create' && <span>Saldo inicial: {formatCurrency(p.openingBalance as number)}</span>}
+                                {ev.type === 'account.update' && <span>{Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>}
+                                {ev.type === 'account.deduplicate' && <span>{p.removed as number} duplicado(s) removido(s)</span>}
+                                {ev.type === 'reconciliation.confirm' && recon && (
+                                  <div className="mt-0.5 space-y-0.5">
+                                    <div className="flex flex-wrap gap-x-3">
+                                      <span>{recon.direction === 'INCOME' ? 'Receita' : 'Despesa'}</span>
+                                      <span>{recon.movementsCount} movimento(s)</span>
+                                      <span className="font-medium text-gray-700">{formatCurrency(recon.totalAllocated)} alocados</span>
+                                      {recon.isDryRun && <span className="text-yellow-600">Dry-run</span>}
+                                    </div>
+                                    {recon.reversedAt && <div className="text-amber-600">Revertida em {new Date(recon.reversedAt).toLocaleString('pt-PT')}{recon.reversedBy ? ` por ${recon.reversedBy}` : ''}</div>}
+                                  </div>
+                                )}
+                                {ev.type === 'reconciliation.confirm' && !recon && <span>{p.movementsCount as number} movimento(s) · {p.allocationsCount as number} alocação(ões){(p.isDryRun as boolean) ? ' · Dry-run' : ''}</span>}
+                                {ev.type === 'reconciliation.reverse' && Boolean(p.reason) && <span>Motivo: {String(p.reason)}</span>}
+                                {ev.type === 'movement.restore' && <span>Valor: {formatCurrency(p.amount as number)}</span>}
                               </div>
+                              {ev.type === 'movement.edit' && ev.entityId && (p.before as string) && (
+                                <button
+                                  onClick={() => revertDescriptionMutation.mutate({ movementId: ev.entityId!, description: p.before as string })}
+                                  disabled={revertDescriptionMutation.isPending}
+                                  className="mt-1.5 flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 hover:underline"
+                                >
+                                  <RotateCcw className="w-3 h-3" /> Reverter descrição
+                                </button>
+                              )}
+                              {ev.type === 'movement.delete' && ev.entityId && (
+                                <button
+                                  onClick={() => restoreMovementMutation.mutate(ev.entityId!)}
+                                  disabled={restoreMovementMutation.isPending}
+                                  className="mt-1.5 flex items-center gap-1 text-xs text-green-600 hover:text-green-700 hover:underline"
+                                >
+                                  <RotateCcw className="w-3 h-3" /> Restaurar movimento
+                                </button>
+                              )}
                             </div>
-                            {!isReverted && !confirmingThis && (
-                              <button onClick={() => setRevertConfirmId(imp.id)} disabled={isReverting}
-                                className="flex-shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 border border-amber-300 text-amber-700 hover:bg-amber-50 rounded-lg transition-colors">
-                                <RotateCcw className="w-3.5 h-3.5" /> Reverter
-                              </button>
-                            )}
                           </div>
-                          {confirmingThis && (
-                            <div className="mt-3 flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                              <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                              <span className="text-xs text-amber-700 flex-1">Serão eliminados <strong>{imp.activeMovements}</strong> movimento(s). Esta ação não pode ser desfeita.</span>
-                              <button onClick={() => setRevertConfirmId(null)} className="text-xs px-2.5 py-1 border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
-                              <button onClick={() => revertImportMutation.mutate(imp.id)} className="text-xs px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">Confirmar</button>
-                            </div>
-                          )}
-                          {isReverting && <div className="mt-3 flex items-center gap-2 text-xs text-gray-400"><RefreshCw className="w-3.5 h-3.5 animate-spin" /> A reverter...</div>}
-                        </div>
-                      )
-                    })
+                        )
+                      })}
+                    </div>
                   )}
-
-                  {/* ── Reconciliações ── */}
-                  {historyTab === 'reconciliations' && (
-                    accountHistory?.reconciliations.length === 0 ? (
-                      <div className="text-center py-10 text-gray-400 text-sm">Nenhuma reconciliação registada.</div>
-                    ) : accountHistory?.reconciliations.map((r) => (
-                      <div key={r.id} className={`border rounded-xl p-4 space-y-1 ${r.reversedAt ? 'border-gray-100 bg-gray-50' : 'border-gray-200 bg-white'}`}>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${r.reversedAt ? 'bg-gray-100 text-gray-400' : r.isDryRun ? 'bg-yellow-100 text-yellow-700' : 'bg-teal-100 text-teal-700'}`}>
-                            {r.reversedAt ? 'Revertida' : r.isDryRun ? 'Dry-run' : 'Confirmada'}
-                          </span>
-                          <span className="text-xs text-gray-500">{r.direction === 'INCOME' ? 'Receita' : 'Despesa'}</span>
-                          <span className="text-xs text-gray-400 ml-auto">{new Date(r.createdAt).toLocaleString('pt-PT')}</span>
-                        </div>
-                        <div className="text-xs text-gray-500 flex flex-wrap gap-x-3">
-                          <span>por {r.createdBy}</span>
-                          <span>{r.movementsCount} movimento(s)</span>
-                          <span className="font-medium text-gray-700">{formatCurrency(r.totalAllocated)} alocados</span>
-                        </div>
-                        {r.reversedAt && <div className="text-xs text-amber-600">Revertida em {new Date(r.reversedAt).toLocaleString('pt-PT')}{r.reversedBy ? ` por ${r.reversedBy}` : ''}{r.reversedReason ? ` — ${r.reversedReason}` : ''}</div>}
-                      </div>
-                    ))
-                  )}
-
-
                 </div>
               )}
 
-              <button onClick={() => { setHistoryAccountId(null); setRevertConfirmId(null); setHistoryTab('timeline') }} className="btn-secondary w-full">Fechar</button>
+              <button onClick={() => { setHistoryAccountId(null); setRevertConfirmId(null) }} className="btn-secondary w-full">Fechar</button>
             </div>
           </Modal>
         )

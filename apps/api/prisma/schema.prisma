@@ -63,6 +63,8 @@ enum TreasuryMovementSource {
 }
 
 enum TreasuryRecurrenceFrequency {
+  DAILY
+  WEEKLY
   MONTHLY
   QUARTERLY
   SEMIANNUAL
@@ -367,7 +369,6 @@ model TreasuryBankMovement {
   import              TreasuryBankImport?              @relation(fields: [importId], references: [id], onDelete: SetNull)
   reconciliationLinks TreasuryReconciliationMovement[]
 
-  @@unique([clientId, dedupeHash])
   @@index([clientId, bankAccountId, date(sort: Desc)])
   @@index([clientId, status])
   @@index([clientId, categoryId])
@@ -379,13 +380,13 @@ model TreasuryReceivable {
   clientId   String
   categoryId String?
 
-  entityName    String  @db.VarChar(200)
+  entityName    String? @db.VarChar(200)
   entityNif     String? @db.VarChar(20)
   tocCustomerId String?
 
-  reference    String   @db.VarChar(80)
+  reference    String?  @db.VarChar(80)
   description  String?  @db.VarChar(500)
-  documentDate DateTime
+  documentDate DateTime?
   dueDate      DateTime
 
   currency       String  @default("EUR") @db.VarChar(3)
@@ -429,13 +430,13 @@ model TreasuryPayable {
   clientId   String
   categoryId String?
 
-  entityName    String  @db.VarChar(200)
+  entityName    String? @db.VarChar(200)
   entityNif     String? @db.VarChar(20)
   tocSupplierId String?
 
-  reference    String   @db.VarChar(80)
+  reference    String?  @db.VarChar(80)
   description  String?  @db.VarChar(500)
-  documentDate DateTime
+  documentDate DateTime?
   dueDate      DateTime
 
   currency      String  @default("EUR") @db.VarChar(3)

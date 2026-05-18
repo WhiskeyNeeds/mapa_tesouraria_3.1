@@ -11,6 +11,8 @@ interface AuthContextValue {
   clearSelectedClientId: () => void
   logout: () => void
   refetch: () => void
+  isTocEnabled: boolean
+  setIsTocEnabled: (v: boolean) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -20,6 +22,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedClientId, setSelectedClientIdState] = useState<string | null>(
     localStorage.getItem('selected_client_id')
+  )
+  const [isTocEnabled, setIsTocEnabledState] = useState<boolean>(
+    localStorage.getItem('toc_enabled') !== 'false'
   )
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -39,6 +44,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearSelectedClientId = () => {
     localStorage.removeItem('selected_client_id')
     setSelectedClientIdState(null)
+  }
+
+  const setIsTocEnabled = (v: boolean) => {
+    localStorage.setItem('toc_enabled', String(v))
+    setIsTocEnabledState(v)
   }
 
   const logout = useCallback(() => {
@@ -65,7 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [logout])
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, selectedClientId, setSelectedClientId, clearSelectedClientId, logout, refetch }}>
+    <AuthContext.Provider value={{ user, isLoading, selectedClientId, setSelectedClientId, clearSelectedClientId, logout, refetch, isTocEnabled, setIsTocEnabled }}>
       {children}
     </AuthContext.Provider>
   )

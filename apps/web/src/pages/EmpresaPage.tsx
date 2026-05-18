@@ -2496,13 +2496,23 @@ function TabTable({
     )
   }
 
+  const { isTocEnabled } = useAuth()
+
+  if (!isTocEnabled) {
+    return (
+      <div className="p-10 flex flex-col items-center gap-3 text-center">
+        <p className="text-sm text-gray-400">Integração TOConline desativada. Ative em <span className="font-medium">Definições → TOConline</span>.</p>
+      </div>
+    )
+  }
+
   if (error) {
     return (
       <div className="p-10 flex flex-col items-center gap-3 text-center">
         <AlertTriangle className="w-8 h-8 text-amber-400" />
         <p className="text-sm text-gray-500">
           Não foi possível carregar os dados do TOConline.<br />
-          Verifique a ligação em <span className="font-medium">Definições â†' TOConline</span>.
+          Verifique a ligação em <span className="font-medium">Definições → TOConline</span>.
         </p>
       </div>
     )
@@ -2825,11 +2835,11 @@ function TabTable({
 // â"€â"€ page â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 export default function EmpresaPage() {
-  const { selectedClientId } = useAuth()
+  const { selectedClientId, isTocEnabled } = useAuth()
   const [activeTab, setActiveTab] = useState<Tab>('clientes')
   const [search, setSearch] = useState('')
 
-  const enabled = !!selectedClientId
+  const enabled = !!selectedClientId && isTocEnabled
 
   const { data: customers, isLoading: loadingCustomers, isError: errorCustomers } = useQuery<TocRow[]>({
     queryKey: ['toc-customers', selectedClientId],
