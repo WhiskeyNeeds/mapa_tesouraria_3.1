@@ -14,7 +14,14 @@ export async function bankAccountsRoutes(fastify: FastifyInstance) {
   fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const body = request.body as Parameters<TreasuryBankAccountsService['create']>[1]
-    return reply.status(201).send(await svc.create(clientId, body))
+    const acc = await svc.create(clientId, body)
+    await fastify.prisma.treasuryAuditLog.create({
+      data: {
+        clientId, userId: request.user.sub, action: 'account.create', entityType: 'BankAccount', entityId: acc.id,
+        payload: { name: acc.name, bankName: acc.bankName, openingBalance: Number(acc.openingBalance) },
+      },
+    })
+    return reply.status(201).send(acc)
   })
 
   fastify.get(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
@@ -25,7 +32,14 @@ export async function bankAccountsRoutes(fastify: FastifyInstance) {
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const body = request.body as Parameters<TreasuryBankAccountsService['update']>[2]
-    return reply.send(await svc.update(clientId, id, body))
+    const acc = await svc.update(clientId, id, body)
+    await fastify.prisma.treasuryAuditLog.create({
+      data: {
+        clientId, userId: request.user.sub, action: 'account.update', entityType: 'BankAccount', entityId: id,
+        payload: body as Record<string, unknown>,
+      },
+    })
+    return reply.send(acc)
   })
 
   fastify.delete(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {

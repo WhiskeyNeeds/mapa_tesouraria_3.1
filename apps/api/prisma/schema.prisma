@@ -87,13 +87,13 @@ enum TreasuryImportStatus {
 // ─── Modelos existentes (ReportsBizzPm) ────────────────────────────────────
 
 model User {
-  id               String    @id @default(cuid())
-  name             String
-  email            String    @unique
-  passwordHash     String?
-  phone            String?
-  isActive         Boolean   @default(true)
-  emailConfirmed   Boolean   @default(false)
+  id             String  @id @default(cuid())
+  name           String
+  email          String  @unique
+  passwordHash   String?
+  phone          String?
+  isActive       Boolean @default(true)
+  emailConfirmed Boolean @default(false)
 
   inviteToken          String?   @unique
   inviteTokenExpiresAt DateTime?
@@ -107,12 +107,12 @@ model User {
   userRoles   UserRole[]
   userClients UserClient[]
 
-  treasuryReceivablesCreated   TreasuryReceivable[]   @relation("ReceivablesCreated")
-  treasuryPayablesCreated      TreasuryPayable[]      @relation("PayablesCreated")
-  treasuryBankImportsCreated   TreasuryBankImport[]
+  treasuryReceivablesCreated      TreasuryReceivable[]     @relation("ReceivablesCreated")
+  treasuryPayablesCreated         TreasuryPayable[]        @relation("PayablesCreated")
+  treasuryBankImportsCreated      TreasuryBankImport[]
   treasuryReconciliationsCreated  TreasuryReconciliation[] @relation("ReconciliationsCreated")
   treasuryReconciliationsReversed TreasuryReconciliation[] @relation("ReconciliationsReversed")
-  treasuryAuditLogs            TreasuryAuditLog[]
+  treasuryAuditLogs               TreasuryAuditLog[]
 
   @@index([email])
   @@index([isActive])
@@ -143,15 +143,15 @@ model UserRole {
 }
 
 model Client {
-  id              String             @id @default(cuid())
-  name            String
-  nif             String             @unique
-  isActive        Boolean            @default(true)
-  companyType     BalancoTipoEmpresa @default(MICRO)
-  countryCode     String             @default("PT")
-  nomeOficial     String?
-  morada          String?
-  codigoPostal    String?            @db.VarChar(20)
+  id           String             @id @default(cuid())
+  name         String
+  nif          String             @unique
+  isActive     Boolean            @default(true)
+  companyType  BalancoTipoEmpresa @default(MICRO)
+  countryCode  String             @default("PT")
+  nomeOficial  String?
+  morada       String?
+  codigoPostal String?            @db.VarChar(20)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -191,9 +191,9 @@ model UserClient {
 }
 
 model ToconlineConfig {
-  id              String          @id @default(cuid())
-  clientId        String          @unique
-  client          Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  clientId String @unique
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   oauthUrl        String
   baseUrl         String
@@ -231,22 +231,22 @@ model ProductAnalytic {
 // ─── Modelos novos (tesouraria) ─────────────────────────────────────────────
 
 model TreasuryCategory {
-  id         String               @id @default(cuid())
-  clientId   String
-  name       String               @db.VarChar(120)
-  type       TreasuryCategoryType
-  launchToc  Boolean              @default(true)
+  id        String               @id @default(cuid())
+  clientId  String
+  name      String               @db.VarChar(120)
+  type      TreasuryCategoryType
+  launchToc Boolean              @default(true)
 
   tocExpenseCategoryId String?
   tocTaxDescriptorId   String?
 
-  color      String?  @db.VarChar(7)
-  icon       String?  @db.VarChar(40)
-  isArchived Boolean  @default(false)
+  color      String? @db.VarChar(7)
+  icon       String? @db.VarChar(40)
+  isArchived Boolean @default(false)
 
-  parentId   String?
-  parent     TreasuryCategory?  @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  children   TreasuryCategory[] @relation("CategoryChildren")
+  parentId String?
+  parent   TreasuryCategory?  @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children TreasuryCategory[] @relation("CategoryChildren")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -266,17 +266,17 @@ model TreasuryCategory {
 }
 
 model TreasuryBankAccount {
-  id             String  @id @default(cuid())
-  clientId       String
-  name           String  @db.VarChar(120)
-  bankName       String? @db.VarChar(80)
-  currency       String  @default("EUR") @db.VarChar(3)
+  id       String  @id @default(cuid())
+  clientId String
+  name     String  @db.VarChar(120)
+  bankName String? @db.VarChar(80)
+  currency String  @default("EUR") @db.VarChar(3)
 
   ibanEnc   String?
   ibanLast4 String? @db.VarChar(4)
 
-  openingBalance Decimal @default(0) @db.Decimal(18, 2)
-  currentBalance Decimal @default(0) @db.Decimal(18, 2)
+  openingBalance Decimal  @default(0) @db.Decimal(18, 2)
+  currentBalance Decimal  @default(0) @db.Decimal(18, 2)
   minBalance     Decimal? @db.Decimal(18, 2)
 
   tocBankAccountId String?
@@ -287,7 +287,7 @@ model TreasuryBankAccount {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  client    Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client    Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
   movements TreasuryBankMovement[]
   imports   TreasuryBankImport[]
 
@@ -297,23 +297,23 @@ model TreasuryBankAccount {
 }
 
 model TreasuryBankImport {
-  id            String               @id @default(cuid())
+  id            String @id @default(cuid())
   clientId      String
   bankAccountId String
 
   source           TreasuryMovementSource
   originalFileName String?
   storageKey       String?
-  fileSha256       String? @db.VarChar(64)
+  fileSha256       String?                @db.VarChar(64)
   fileSize         Int?
-  mimeType         String? @db.VarChar(80)
+  mimeType         String?                @db.VarChar(80)
 
-  status        TreasuryImportStatus @default(PENDING)
-  rowsTotal     Int                  @default(0)
-  rowsImported  Int                  @default(0)
-  rowsDuplicated Int                 @default(0)
-  rowsFailed    Int                  @default(0)
-  errorMessage  String?
+  status         TreasuryImportStatus @default(PENDING)
+  rowsTotal      Int                  @default(0)
+  rowsImported   Int                  @default(0)
+  rowsDuplicated Int                  @default(0)
+  rowsFailed     Int                  @default(0)
+  errorMessage   String?
 
   startedAt   DateTime?
   completedAt DateTime?
@@ -321,9 +321,9 @@ model TreasuryBankImport {
   createdById String
   createdAt   DateTime @default(now())
 
-  client      Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  bankAccount TreasuryBankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
-  createdBy   User                @relation(fields: [createdById], references: [id])
+  client      Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  bankAccount TreasuryBankAccount    @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  createdBy   User                   @relation(fields: [createdById], references: [id])
   movements   TreasuryBankMovement[]
 
   @@index([clientId, bankAccountId, createdAt(sort: Desc)])
@@ -338,19 +338,19 @@ model TreasuryBankMovement {
 
   date            DateTime
   bookingDate     DateTime?
-  amount          Decimal  @db.Decimal(18, 2)
-  currency        String   @default("EUR") @db.VarChar(3)
-  balanceAfter    Decimal? @db.Decimal(18, 2)
-  description     String   @db.VarChar(500)
-  normalizedDesc  String?  @db.VarChar(500)
-  counterpartName String?  @db.VarChar(200)
-  counterpartIban String?  @db.VarChar(50)
+  amount          Decimal   @db.Decimal(18, 2)
+  currency        String    @default("EUR") @db.VarChar(3)
+  balanceAfter    Decimal?  @db.Decimal(18, 2)
+  description     String    @db.VarChar(500)
+  normalizedDesc  String?   @db.VarChar(500)
+  counterpartName String?   @db.VarChar(200)
+  counterpartIban String?   @db.VarChar(50)
 
   categoryId String?
 
-  source      TreasuryMovementSource
-  importId    String?
-  dedupeHash  String @db.VarChar(64)
+  source     TreasuryMovementSource
+  importId   String?
+  dedupeHash String                 @db.VarChar(64)
 
   status           TreasuryMovementStatus @default(UNCLASSIFIED)
   reconciledAmount Decimal                @default(0) @db.Decimal(18, 2)
@@ -361,10 +361,10 @@ model TreasuryBankMovement {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  client      Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  bankAccount TreasuryBankAccount  @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
-  category    TreasuryCategory?    @relation(fields: [categoryId], references: [id])
-  import      TreasuryBankImport?  @relation(fields: [importId], references: [id], onDelete: SetNull)
+  client              Client                           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  bankAccount         TreasuryBankAccount              @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  category            TreasuryCategory?                @relation(fields: [categoryId], references: [id])
+  import              TreasuryBankImport?              @relation(fields: [importId], references: [id], onDelete: SetNull)
   reconciliationLinks TreasuryReconciliationMovement[]
 
   @@unique([clientId, dedupeHash])
@@ -375,7 +375,7 @@ model TreasuryBankMovement {
 }
 
 model TreasuryReceivable {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   clientId   String
   categoryId String?
 
@@ -383,8 +383,8 @@ model TreasuryReceivable {
   entityNif     String? @db.VarChar(20)
   tocCustomerId String?
 
-  reference    String  @db.VarChar(80)
-  description  String? @db.VarChar(500)
+  reference    String   @db.VarChar(80)
+  description  String?  @db.VarChar(500)
   documentDate DateTime
   dueDate      DateTime
 
@@ -408,13 +408,13 @@ model TreasuryReceivable {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  client              Client                            @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  category            TreasuryCategory?                 @relation(fields: [categoryId], references: [id])
-  recurrence          TreasuryRecurrence?               @relation(fields: [recurrenceId], references: [id])
-  parent              TreasuryReceivable?               @relation("ReceivableChildren", fields: [parentId], references: [id])
-  children            TreasuryReceivable[]              @relation("ReceivableChildren")
+  client              Client                             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  category            TreasuryCategory?                  @relation(fields: [categoryId], references: [id])
+  recurrence          TreasuryRecurrence?                @relation(fields: [recurrenceId], references: [id])
+  parent              TreasuryReceivable?                @relation("ReceivableChildren", fields: [parentId], references: [id])
+  children            TreasuryReceivable[]               @relation("ReceivableChildren")
   reconciliationLinks TreasuryReconciliationReceivable[]
-  createdBy           User                              @relation("ReceivablesCreated", fields: [createdById], references: [id])
+  createdBy           User                               @relation("ReceivablesCreated", fields: [createdById], references: [id])
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
@@ -425,7 +425,7 @@ model TreasuryReceivable {
 }
 
 model TreasuryPayable {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   clientId   String
   categoryId String?
 
@@ -433,8 +433,8 @@ model TreasuryPayable {
   entityNif     String? @db.VarChar(20)
   tocSupplierId String?
 
-  reference    String  @db.VarChar(80)
-  description  String? @db.VarChar(500)
+  reference    String   @db.VarChar(80)
+  description  String?  @db.VarChar(500)
   documentDate DateTime
   dueDate      DateTime
 
@@ -458,13 +458,13 @@ model TreasuryPayable {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  client              Client                         @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  category            TreasuryCategory?              @relation(fields: [categoryId], references: [id])
-  recurrence          TreasuryRecurrence?            @relation(fields: [recurrenceId], references: [id])
-  parent              TreasuryPayable?               @relation("PayableChildren", fields: [parentId], references: [id])
-  children            TreasuryPayable[]              @relation("PayableChildren")
+  client              Client                          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  category            TreasuryCategory?               @relation(fields: [categoryId], references: [id])
+  recurrence          TreasuryRecurrence?             @relation(fields: [recurrenceId], references: [id])
+  parent              TreasuryPayable?                @relation("PayableChildren", fields: [parentId], references: [id])
+  children            TreasuryPayable[]               @relation("PayableChildren")
   reconciliationLinks TreasuryReconciliationPayable[]
-  createdBy           User                           @relation("PayablesCreated", fields: [createdById], references: [id])
+  createdBy           User                            @relation("PayablesCreated", fields: [createdById], references: [id])
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
@@ -475,16 +475,16 @@ model TreasuryPayable {
 }
 
 model TreasuryRecurrence {
-  id       String                      @id @default(cuid())
-  clientId String
-  frequency TreasuryRecurrenceFrequency
-  startDate DateTime
-  endDate   DateTime?
+  id          String                      @id @default(cuid())
+  clientId    String
+  frequency   TreasuryRecurrenceFrequency
+  startDate   DateTime
+  endDate     DateTime?
   occurrences Int?
   customRrule String?
   nextRunAt   DateTime?
   lastRunAt   DateTime?
-  isActive  Boolean @default(true)
+  isActive    Boolean                     @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -507,8 +507,8 @@ model TreasuryReconciliation {
   totalMovements Decimal @db.Decimal(18, 2)
   totalAllocated Decimal @db.Decimal(18, 2)
 
-  tocReceiptsCreated Int    @default(0)
-  tocPaymentsCreated Int    @default(0)
+  tocReceiptsCreated Int     @default(0)
+  tocPaymentsCreated Int     @default(0)
   tocFirstError      String?
 
   reversedAt     DateTime?
@@ -588,12 +588,12 @@ model TreasuryClassificationRule {
   id       String @id @default(cuid())
   clientId String
 
-  matchField  String  @db.VarChar(20)
-  matchOp     String  @db.VarChar(20)
-  matchValue  String  @db.VarChar(500)
-  amountMin   Decimal? @db.Decimal(18, 2)
-  amountMax   Decimal? @db.Decimal(18, 2)
-  direction   TreasuryCategoryType?
+  matchField String                @db.VarChar(20)
+  matchOp    String                @db.VarChar(20)
+  matchValue String                @db.VarChar(500)
+  amountMin  Decimal?              @db.Decimal(18, 2)
+  amountMax  Decimal?              @db.Decimal(18, 2)
+  direction  TreasuryCategoryType?
 
   categoryId String
   priority   Int     @default(100)
@@ -616,15 +616,15 @@ model TreasurySettings {
   id       String @id @default(cuid())
   clientId String @unique
 
-  reconciliationDryRun  Boolean @default(true)
-  autoMatchEnabled      Boolean @default(false)
-  autoMatchThreshold    Decimal @default(0.95) @db.Decimal(3, 2)
+  reconciliationDryRun Boolean @default(true)
+  autoMatchEnabled     Boolean @default(false)
+  autoMatchThreshold   Decimal @default(0.95) @db.Decimal(3, 2)
 
   lowBalanceEnabled  Boolean  @default(true)
   lowBalanceChannels String[]
 
-  importFileRetentionDays Int @default(30)
-  syncIntervalMinutes     Int @default(15)
+  importFileRetentionDays Int       @default(30)
+  syncIntervalMinutes     Int       @default(15)
   lastFullSyncAt          DateTime?
 
   createdAt DateTime @default(now())

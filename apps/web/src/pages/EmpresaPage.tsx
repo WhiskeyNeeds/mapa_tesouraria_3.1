@@ -893,7 +893,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
   // ── fornecedor ──
   const [forn_nif,          setForn_nif]          = useState(() => forn ? sv(forn.tax_registration_number) : '')
   const [forn_nome,         setForn_nome]         = useState(() => forn ? sv(forn.business_name) : '')
-  const [forn_subconta,     setForn_subconta]     = useState('')
+  const [forn_subconta,     _setForn_subconta]     = useState('')
   const [forn_contacto,     setForn_contacto]     = useState('')
   const [forn_cargo,        setForn_cargo]        = useState('')
   const [forn_email,        setForn_email]        = useState('')

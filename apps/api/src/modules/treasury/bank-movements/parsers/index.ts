@@ -7,10 +7,11 @@ import { parseBankinter } from './bankinter.js'
 import { parseSantander } from './santander.js'
 import { parseNovoBanco } from './novobanco.js'
 import { parsePDF } from './pdf.js'
+import { parseTemplate } from './template.js'
 
 export { parsePDF }
 
-export type SupportedBank = 'CGD' | 'BCP' | 'BPI' | 'Bankinter' | 'Santander' | 'NovoBanco'
+export type SupportedBank = 'CGD' | 'BCP' | 'BPI' | 'Bankinter' | 'Santander' | 'NovoBanco' | 'TEMPLATE'
 
 export function detectBank(buffer: Buffer): SupportedBank | null {
   // CGD: CSV in latin1, first line contains "Consultar saldos"
@@ -48,6 +49,8 @@ export function detectBank(buffer: Buffer): SupportedBank | null {
 }
 
 export function parseStatementFile(buffer: Buffer, bank: SupportedBank): CsvMovement[] {
+  if (bank === 'TEMPLATE') return parseTemplate(buffer)
+
   const detected = detectBank(buffer)
 
   if (detected && detected !== bank) {
@@ -62,6 +65,14 @@ export function parseStatementFile(buffer: Buffer, bank: SupportedBank): CsvMove
     throw new Error(
       `O ficheiro parece ser do ${names[detected] ?? detected}, mas selecionou ${names[bank] ?? bank}.`
     )
+  }
+
+  // Nenhum banco reconhecido — tentar template como fallback
+  if (!detected) {
+    try {
+      const templateResult = parseTemplate(buffer)
+      if (templateResult.length > 0) return templateResult
+    } catch {}
   }
 
   switch (bank) {

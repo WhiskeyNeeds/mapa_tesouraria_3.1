@@ -7,7 +7,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatIbanInput, sanitizeIban, validateIban } from '@/lib/iban'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, FileUp, FileText, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, FileText, FileSpreadsheet, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw, History, RotateCcw } from 'lucide-react'
 
 const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander', 'NovoBanco'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
@@ -63,7 +63,7 @@ function BankAvatar({ bankName }: { bankName: string }) {
   )
 }
 
-interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean }
+interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean; importedCount: number }
 interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { id: string; name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
 
 interface ReconciliationLink {
@@ -162,9 +162,8 @@ function MovementReconciliationsSubRows({ clientId, movementId, movementAmount, 
           <td colSpan={colSpan} className="pl-10 pr-4 py-1.5">
             <div className="flex items-center gap-2 text-xs">
               <ChevronRight className="w-3 h-3 text-primary-400 flex-shrink-0" />
-              <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${
-                row.type === 'receivable' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-              }`}>
+              <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${row.type === 'receivable' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}>
                 {row.type === 'receivable' ? 'A Receber' : 'A Pagar'}
               </span>
               <span className="font-medium text-gray-700">{row.reference}</span>
@@ -208,6 +207,8 @@ export default function BanksPage() {
   const [showNewAccount, setShowNewAccount] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [historyAccountId, setHistoryAccountId] = useState<string | null>(null)
+  const [revertConfirmId, setRevertConfirmId] = useState<string | null>(null)
   const [confirmDeleteMovementId, setConfirmDeleteMovementId] = useState<string | null>(null)
   const [editAccountId, setEditAccountId] = useState<string | null>(null)
   const [editAccountForm, setEditAccountForm] = useState({ name: '', minBalance: '' })
@@ -230,6 +231,7 @@ export default function BanksPage() {
   const [importPdfFile, setImportPdfFile] = useState<File | null>(null)
   const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
   const [replaceConfirm, setReplaceConfirm] = useState<{ file: File; bank: string; bankAccountId: string; existingCount: number } | null>(null)
+  const [previewWarning, setPreviewWarning] = useState<{ issues: Array<{ row: number; field: string; message: string }>; uploadArgs: { file: File; bank: string; bankAccountId: string } } | null>(null)
   const [showNewMovement, setShowNewMovement] = useState(false)
   const [newMovement, setNewMovement] = useState({ bankAccountId: '', date: new Date().toISOString().slice(0, 10), description: '', amount: '', direction: 'income' as 'income' | 'expense' })
   const [editDescId, setEditDescId] = useState<string | null>(null)
@@ -368,6 +370,7 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['movements-summary'] })
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
       qc.invalidateQueries({ queryKey: ['balance-check'] })
+      qc.invalidateQueries({ queryKey: ['account-history', selectedClientId, historyAccountId] })
       setConfirmDeleteMovementId(null)
     },
   })
@@ -407,6 +410,73 @@ export default function BanksPage() {
       qc.invalidateQueries({ queryKey: ['dashboard-cash-positioning', selectedClientId] })
       setClassifyMovementId(null)
       toast.success(categoryId === null ? 'Categoria removida.' : 'Movimento classificado.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  type HistoryTab = 'timeline' | 'imports' | 'reconciliations'
+  const [historyTab, setHistoryTab] = useState<HistoryTab>('timeline')
+
+  interface ImportRecord {
+    id: string; originalFileName: string | null; createdAt: string
+    rowsImported: number; rowsDuplicated: number; rowsFailed: number
+    createdBy: string; activeMovements: number
+  }
+  interface AccountHistory {
+    account: { name: string; bankName: string; createdAt: string; openingBalance: number; ibanLast4: string }
+    timeline: Array<{ id: string; entityId: string | null; type: string; date: string; user: string | null; payload: Record<string, unknown> }>
+    reconciliations: Array<{ id: string; status: string; isDryRun: boolean; direction: string; totalMovements: number; totalAllocated: number; createdAt: string; createdBy: string; reversedAt: string | null; reversedBy: string | null; reversedReason: string | null; movementsCount: number }>
+    monthlySummary: Array<{ month: string; income: number; expense: number; net: number }>
+  }
+
+  const { data: importHistory = [], isLoading: importsLoading } = useQuery<ImportRecord[]>({
+    queryKey: ['import-history', selectedClientId, historyAccountId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/movements/imports?bankAccountId=${historyAccountId}`),
+    enabled: !!historyAccountId && !!selectedClientId,
+  })
+
+  const { data: accountHistory, isLoading: accountHistoryLoading } = useQuery<AccountHistory>({
+    queryKey: ['account-history', selectedClientId, historyAccountId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/movements/history?bankAccountId=${historyAccountId}`),
+    enabled: !!historyAccountId && !!selectedClientId,
+  })
+
+  const revertDescriptionMutation = useMutation({
+    mutationFn: ({ movementId, description }: { movementId: string; description: string }) =>
+      api.patch(`/treasury/${selectedClientId}/movements/${movementId}`, { description }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['account-history', selectedClientId, historyAccountId] })
+      toast.success('Descrição revertida.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const restoreMovementMutation = useMutation({
+    mutationFn: (movementId: string) =>
+      api.patch(`/treasury/${selectedClientId}/movements/${movementId}/restore`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      qc.invalidateQueries({ queryKey: ['balance-check'] })
+      qc.invalidateQueries({ queryKey: ['account-history', selectedClientId, historyAccountId] })
+      toast.success('Movimento restaurado.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  const revertImportMutation = useMutation({
+    mutationFn: (importId: string) =>
+      api.delete<{ reverted: number }>(`/treasury/${selectedClientId}/movements/imports/${importId}`),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['movements'] })
+      qc.invalidateQueries({ queryKey: ['movements-summary'] })
+      qc.invalidateQueries({ queryKey: ['bank-accounts'] })
+      qc.invalidateQueries({ queryKey: ['balance-check'] })
+      qc.invalidateQueries({ queryKey: ['import-history', selectedClientId, historyAccountId] })
+      setRevertConfirmId(null)
+      toast.success(`Importação revertida (${data.reverted} movimento(s) eliminado(s)).`)
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -477,6 +547,34 @@ export default function BanksPage() {
         toast.error(err.message)
       }
     },
+  })
+
+  const previewMutation = useMutation({
+    mutationFn: async ({ file, bank, bankAccountId }: { file: File; bank: string; bankAccountId: string }) => {
+      const token = localStorage.getItem('access_token')
+      const form = new FormData()
+      form.append('file', file)
+      form.append('bank', bank)
+      form.append('bankAccountId', bankAccountId)
+      const res = await fetch(`/api/v1/treasury/${selectedClientId}/movements/upload/preview`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Erro desconhecido' }))
+        throw new Error(err.error ?? 'Erro ao validar ficheiro')
+      }
+      return res.json() as Promise<{ parsed: number; issues: Array<{ row: number; field: string; message: string }> }>
+    },
+    onSuccess: (data, variables) => {
+      if (data.issues.length === 0) {
+        uploadStatementMutation.mutate(variables)
+      } else {
+        setPreviewWarning({ issues: data.issues, uploadArgs: variables })
+      }
+    },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   const selectedAccountData = accounts.find((a) => a.id === selectedAccount)
@@ -599,53 +697,61 @@ export default function BanksPage() {
             {accounts.map((acc) => {
               const accGapCount = balanceCheckAll.find((r) => r.accountId === acc.id)?.gaps.length ?? 0
               return (
-              <div
-                key={acc.id}
-                onClick={() => { setSelectedAccount(selectedAccount === acc.id ? '' : acc.id); setPage(1) }}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === 'Enter' && (setSelectedAccount(selectedAccount === acc.id ? '' : acc.id), setPage(1))}
-                className={`snap-start flex-none w-72 card p-4 text-left transition-all cursor-pointer relative group ${selectedAccount === acc.id ? 'border-primary-400 bg-primary-50' : 'hover:border-gray-300'}`}
-              >
-                <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); setEditAccountId(acc.id); setEditAccountForm({ name: acc.name, minBalance: acc.minBalance != null ? String(acc.minBalance) : '' }) }}
-                    className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-all"
-                    title="Editar conta"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(acc.id) }}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                    title="Remover conta"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <div className="flex items-center gap-3 mb-3">
-                  <BankAvatar bankName={acc.bankName} />
-                  <div className="min-w-0 pr-6">
-                    <div className="font-medium text-gray-900 text-sm truncate">{acc.name}</div>
-                    <div className="text-xs text-gray-400">{acc.bankName} •••• {acc.ibanLast4}</div>
+                <div
+                  key={acc.id}
+                  onClick={() => { setSelectedAccount(selectedAccount === acc.id ? '' : acc.id); setPage(1) }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === 'Enter' && (setSelectedAccount(selectedAccount === acc.id ? '' : acc.id), setPage(1))}
+                  className={`snap-start flex-none w-72 card pt-4 px-4 pb-0 text-left transition-all cursor-pointer flex flex-col group ${selectedAccount === acc.id ? 'border-primary-400 bg-primary-50' : 'hover:border-gray-300'}`}
+                >
+                  <div className="flex items-center gap-3 mb-3">
+                    <BankAvatar bankName={acc.bankName} />
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-900 text-sm truncate">{acc.name}</div>
+                      <div className="text-xs text-gray-400">{acc.bankName} •••• {acc.ibanLast4}</div>
+                    </div>
+                  </div>
+                  <div className={`text-xl font-bold ${acc.currentBalance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(acc.currentBalance)}</div>
+                  {acc.lowBalanceWarning && (
+                    <div className="flex items-center gap-1 mt-2 text-xs text-amber-700 bg-white border border-amber-200 rounded px-2 py-1">
+                      <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                      Saldo abaixo do mínimo ({formatCurrency(acc.minBalance ?? 0)})
+                    </div>
+                  )}
+                  {accGapCount > 0 && (
+                    <div className="flex items-center gap-1 mt-2 text-xs text-red-700 bg-white border border-red-200 rounded px-2 py-1">
+                      <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                      {accGapCount} inconsistência{accGapCount !== 1 ? 's' : ''} detetada{accGapCount !== 1 ? 's' : ''}
+                    </div>
+                  )}
+                  <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setEditAccountId(acc.id); setEditAccountForm({ name: acc.name, minBalance: acc.minBalance != null ? String(acc.minBalance) : '' }) }}
+                      className="p-1.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-all"
+                      title="Editar conta"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setHistoryAccountId(acc.id) }}
+                      className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-all"
+                      title="Histórico da conta"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(acc.id) }}
+                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                      title="Remover conta"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
-                <div className={`text-xl font-bold ${acc.currentBalance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(acc.currentBalance)}</div>
-                {acc.lowBalanceWarning && (
-                  <div className="flex items-center gap-1 mt-2 text-xs text-amber-700 bg-white border border-amber-200 rounded px-2 py-1">
-                    <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-                    Saldo abaixo do mínimo ({formatCurrency(acc.minBalance ?? 0)})
-                  </div>
-                )}
-                {accGapCount > 0 && (
-                  <div className="flex items-center gap-1 mt-2 text-xs text-red-700 bg-white border border-red-200 rounded px-2 py-1">
-                    <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-                    {accGapCount} inconsistência{accGapCount !== 1 ? 's' : ''} detetada{accGapCount !== 1 ? 's' : ''}
-                  </div>
-                )}
-              </div>
               )
             })}
           </div>
@@ -1209,6 +1315,208 @@ export default function BanksPage() {
         </div>
       </Modal>
 
+      {/* Account history modal */}
+      {(() => {
+        const acc = accounts.find((a) => a.id === historyAccountId)
+        const isLoading = importsLoading || accountHistoryLoading
+
+        const TIMELINE_LABELS: Record<string, { label: string; color: string }> = {
+          'account.create':           { label: 'Conta criada',               color: 'bg-green-100 text-green-700' },
+          'account.update':           { label: 'Conta atualizada',           color: 'bg-blue-100 text-blue-700' },
+          'account.deduplicate':      { label: 'Deduplicação executada',     color: 'bg-purple-100 text-purple-700' },
+          'import.complete':          { label: 'Extrato importado',          color: 'bg-primary-100 text-primary-700' },
+          'import.revert':            { label: 'Importação revertida',       color: 'bg-amber-100 text-amber-700' },
+          'movement.create':          { label: 'Movimento manual criado',    color: 'bg-green-100 text-green-700' },
+          'movement.delete':          { label: 'Movimento eliminado',        color: 'bg-red-100 text-red-700' },
+          'movement.edit':            { label: 'Descrição editada',          color: 'bg-gray-100 text-gray-600' },
+          'reconciliation.confirm':   { label: 'Reconciliação confirmada',   color: 'bg-teal-100 text-teal-700' },
+          'reconciliation.reverse':   { label: 'Reconciliação revertida',    color: 'bg-amber-100 text-amber-700' },
+          'movement.restore':          { label: 'Movimento restaurado',       color: 'bg-green-100 text-green-700' },
+          'statement.delete':         { label: 'Extrato eliminado',          color: 'bg-red-100 text-red-700' },
+        }
+
+        const tabs: { id: HistoryTab; label: string; count?: number }[] = [
+          { id: 'timeline',        label: 'Linha do tempo', count: accountHistory?.timeline.length },
+          { id: 'imports',         label: 'Importações',    count: importHistory.length },
+          { id: 'reconciliations', label: 'Reconciliações', count: accountHistory?.reconciliations.length },
+        ]
+
+        return (
+          <Modal open={!!historyAccountId} onClose={() => { setHistoryAccountId(null); setRevertConfirmId(null); setHistoryTab('timeline') }} title={`Histórico — ${acc?.name ?? ''}`} size="lg">
+            <div className="space-y-4">
+              {/* Tabs */}
+              <div className="flex gap-1 border-b border-gray-200">
+                {tabs.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setHistoryTab(t.id)}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${historyTab === t.id ? 'border-primary-500 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  >
+                    {t.label}
+                    {t.count != null && t.count > 0 && (
+                      <span className={`text-xs px-1.5 py-0.5 rounded-full ${historyTab === t.id ? 'bg-primary-100 text-primary-600' : 'bg-gray-100 text-gray-500'}`}>{t.count}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {isLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-400">
+                  <RefreshCw className="w-5 h-5 animate-spin mr-2" /> A carregar...
+                </div>
+              ) : (
+                <div className="max-h-[55vh] overflow-y-auto pr-1 space-y-2">
+
+                  {/* ── Linha do tempo ── */}
+                  {historyTab === 'timeline' && (
+                    accountHistory?.timeline.length === 0 ? (
+                      <div className="text-center py-10 text-gray-400 text-sm">Sem eventos registados.</div>
+                    ) : (
+                      <div className="relative">
+                        <div className="absolute left-3 top-0 bottom-0 w-px bg-gray-100" />
+                        {accountHistory?.timeline.map((ev) => {
+                          const meta = TIMELINE_LABELS[ev.type] ?? { label: ev.type, color: 'bg-gray-100 text-gray-500' }
+                          const p = ev.payload
+                          return (
+                            <div key={ev.id} className="relative flex gap-3 pb-4 pl-8">
+                              <div className="absolute left-0 w-6 h-6 rounded-full bg-white border-2 border-gray-200 flex items-center justify-center">
+                                <div className="w-2 h-2 rounded-full bg-gray-300" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${meta.color}`}>{meta.label}</span>
+                                  {ev.user && <span className="text-xs text-gray-400">por {ev.user}</span>}
+                                  <span className="text-xs text-gray-300 ml-auto">{new Date(ev.date).toLocaleString('pt-PT')}</span>
+                                </div>
+                                {/* Payload details */}
+                                <div className="mt-1 text-xs text-gray-500 space-y-0.5">
+                                  {ev.type === 'import.complete' && <span>{p.imported as number} importados · {p.duplicated as number} duplicados · {p.failed as number} erros</span>}
+                                  {ev.type === 'import.revert' && <span>{p.reverted as number} movimento(s) revertidos</span>}
+                                  {ev.type === 'movement.create' && <span>Valor: {formatCurrency(p.amount as number)} · Data: {formatDate(p.date as string)}</span>}
+                                  {ev.type === 'movement.delete' && <span>Valor: {formatCurrency(p.amount as number)} · Origem: {p.source as string}</span>}
+                                  {ev.type === 'movement.edit' && <><span className="line-through text-gray-400">{p.before as string}</span><span className="ml-1">→ {p.after as string}</span></>}
+                                  {ev.type === 'account.create' && <span>Saldo inicial: {formatCurrency(p.openingBalance as number)}</span>}
+                                  {ev.type === 'account.update' && <span>{Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>}
+                                  {ev.type === 'account.deduplicate' && <span>{p.removed as number} duplicado(s) removido(s)</span>}
+                                  {ev.type === 'reconciliation.confirm' && <span>{p.movementsCount as number} movimento(s) · {p.allocationsCount as number} alocação(ões){p.isDryRun ? ' · Dry-run' : ''}</span>}
+                                  {ev.type === 'reconciliation.reverse' && p.reason && <span>Motivo: {p.reason as string}</span>}
+                                  {ev.type === 'movement.restore' && <span>Valor: {formatCurrency(p.amount as number)}</span>}
+                                </div>
+                                {ev.type === 'movement.edit' && ev.entityId && (p.before as string) && (
+                                  <button
+                                    onClick={() => revertDescriptionMutation.mutate({ movementId: ev.entityId!, description: p.before as string })}
+                                    disabled={revertDescriptionMutation.isPending}
+                                    className="mt-1.5 flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 hover:underline"
+                                  >
+                                    <RotateCcw className="w-3 h-3" /> Reverter descrição
+                                  </button>
+                                )}
+                                {ev.type === 'movement.delete' && ev.entityId && (
+                                  <button
+                                    onClick={() => restoreMovementMutation.mutate(ev.entityId!)}
+                                    disabled={restoreMovementMutation.isPending}
+                                    className="mt-1.5 flex items-center gap-1 text-xs text-green-600 hover:text-green-700 hover:underline"
+                                  >
+                                    <RotateCcw className="w-3 h-3" /> Restaurar movimento
+                                  </button>
+                                )}
+                                {ev.type === 'movement.create' && ev.entityId && (
+                                  <button
+                                    onClick={() => deleteMovement.mutate(ev.entityId!)}
+                                    disabled={deleteMovement.isPending}
+                                    className="mt-1.5 flex items-center gap-1 text-xs text-red-600 hover:text-red-700 hover:underline"
+                                  >
+                                    <RotateCcw className="w-3 h-3" /> Eliminar movimento
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  )}
+
+                  {/* ── Importações ── */}
+                  {historyTab === 'imports' && (
+                    importHistory.length === 0 ? (
+                      <div className="text-center py-10 text-gray-400 text-sm">Nenhuma importação registada.</div>
+                    ) : importHistory.map((imp) => {
+                      const isReverted = imp.activeMovements === 0
+                      const isReverting = revertImportMutation.isPending && revertConfirmId === imp.id
+                      const confirmingThis = revertConfirmId === imp.id && !revertImportMutation.isPending
+                      return (
+                        <div key={imp.id} className={`border rounded-xl p-4 transition-colors ${isReverted ? 'border-gray-100 bg-gray-50' : 'border-gray-200 bg-white'}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <FileText className={`w-4 h-4 flex-shrink-0 ${isReverted ? 'text-gray-300' : 'text-primary-400'}`} />
+                                <span className={`text-sm font-medium truncate ${isReverted ? 'text-gray-400 line-through' : 'text-gray-800'}`}>{imp.originalFileName ?? 'Ficheiro sem nome'}</span>
+                                {isReverted && <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full flex-shrink-0">Revertido</span>}
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-400">
+                                <span>{new Date(imp.createdAt).toLocaleString('pt-PT')}</span>
+                                <span>por {imp.createdBy}</span>
+                                <span className="text-green-600">{imp.rowsImported} importados</span>
+                                {imp.rowsDuplicated > 0 && <span className="text-amber-500">{imp.rowsDuplicated} duplicados</span>}
+                                {imp.rowsFailed > 0 && <span className="text-red-500">{imp.rowsFailed} com erro</span>}
+                                {!isReverted && <span className="text-primary-600 font-medium">{imp.activeMovements} ativos</span>}
+                              </div>
+                            </div>
+                            {!isReverted && !confirmingThis && (
+                              <button onClick={() => setRevertConfirmId(imp.id)} disabled={isReverting}
+                                className="flex-shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 border border-amber-300 text-amber-700 hover:bg-amber-50 rounded-lg transition-colors">
+                                <RotateCcw className="w-3.5 h-3.5" /> Reverter
+                              </button>
+                            )}
+                          </div>
+                          {confirmingThis && (
+                            <div className="mt-3 flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                              <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                              <span className="text-xs text-amber-700 flex-1">Serão eliminados <strong>{imp.activeMovements}</strong> movimento(s). Esta ação não pode ser desfeita.</span>
+                              <button onClick={() => setRevertConfirmId(null)} className="text-xs px-2.5 py-1 border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
+                              <button onClick={() => revertImportMutation.mutate(imp.id)} className="text-xs px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">Confirmar</button>
+                            </div>
+                          )}
+                          {isReverting && <div className="mt-3 flex items-center gap-2 text-xs text-gray-400"><RefreshCw className="w-3.5 h-3.5 animate-spin" /> A reverter...</div>}
+                        </div>
+                      )
+                    })
+                  )}
+
+                  {/* ── Reconciliações ── */}
+                  {historyTab === 'reconciliations' && (
+                    accountHistory?.reconciliations.length === 0 ? (
+                      <div className="text-center py-10 text-gray-400 text-sm">Nenhuma reconciliação registada.</div>
+                    ) : accountHistory?.reconciliations.map((r) => (
+                      <div key={r.id} className={`border rounded-xl p-4 space-y-1 ${r.reversedAt ? 'border-gray-100 bg-gray-50' : 'border-gray-200 bg-white'}`}>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${r.reversedAt ? 'bg-gray-100 text-gray-400' : r.isDryRun ? 'bg-yellow-100 text-yellow-700' : 'bg-teal-100 text-teal-700'}`}>
+                            {r.reversedAt ? 'Revertida' : r.isDryRun ? 'Dry-run' : 'Confirmada'}
+                          </span>
+                          <span className="text-xs text-gray-500">{r.direction === 'INCOME' ? 'Receita' : 'Despesa'}</span>
+                          <span className="text-xs text-gray-400 ml-auto">{new Date(r.createdAt).toLocaleString('pt-PT')}</span>
+                        </div>
+                        <div className="text-xs text-gray-500 flex flex-wrap gap-x-3">
+                          <span>por {r.createdBy}</span>
+                          <span>{r.movementsCount} movimento(s)</span>
+                          <span className="font-medium text-gray-700">{formatCurrency(r.totalAllocated)} alocados</span>
+                        </div>
+                        {r.reversedAt && <div className="text-xs text-amber-600">Revertida em {new Date(r.reversedAt).toLocaleString('pt-PT')}{r.reversedBy ? ` por ${r.reversedBy}` : ''}{r.reversedReason ? ` — ${r.reversedReason}` : ''}</div>}
+                      </div>
+                    ))
+                  )}
+
+
+                </div>
+              )}
+
+              <button onClick={() => { setHistoryAccountId(null); setRevertConfirmId(null); setHistoryTab('timeline') }} className="btn-secondary w-full">Fechar</button>
+            </div>
+          </Modal>
+        )
+      })()}
+
       {/* New movement modal */}
       <Modal open={showNewMovement} onClose={() => { setShowNewMovement(false); createMovement.reset() }} title="Novo Movimento Manual">
         <div className="space-y-4">
@@ -1294,7 +1602,7 @@ export default function BanksPage() {
       </Modal>
 
       {/* Import modal */}
-      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setReplaceConfirm(null); setImportBank('CGD'); setImportAccountId('') }} title="Importar Extrato Bancário" size="lg">
+      <Modal open={showImport} onClose={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setReplaceConfirm(null); setPreviewWarning(null); setImportBank('CGD'); setImportAccountId('') }} title="Importar Extrato Bancário" size="lg">
         {importResult ? (
           <div className="space-y-5">
             <div className="flex flex-col items-center gap-3 py-4">
@@ -1347,6 +1655,37 @@ export default function BanksPage() {
               </button>
             </div>
           </div>
+        ) : previewWarning ? (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+              <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800">Foram detetadas inconsistências no ficheiro</p>
+                <p className="text-sm text-amber-700 mt-1">Verifique os problemas abaixo antes de importar. Pode importar mesmo assim, mas os dados podem estar incorretos.</p>
+              </div>
+            </div>
+            <div className="max-h-64 overflow-y-auto space-y-1">
+              {previewWarning.issues.map((issue, i) => (
+                <div key={i} className="flex items-start gap-2 text-sm px-3 py-2 bg-red-50 border border-red-100 rounded-lg">
+                  <span className="font-semibold text-red-700 flex-shrink-0">Linha {issue.row}</span>
+                  <span className="text-red-600 flex-shrink-0">{issue.field}:</span>
+                  <span className="text-red-700">{issue.message}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setPreviewWarning(null)} className="btn-secondary flex-1" disabled={uploadStatementMutation.isPending}>
+                Voltar
+              </button>
+              <button
+                onClick={() => uploadStatementMutation.mutate(previewWarning.uploadArgs)}
+                className="flex-1 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-medium transition-colors disabled:opacity-50"
+                disabled={uploadStatementMutation.isPending}
+              >
+                {uploadStatementMutation.isPending ? 'A importar...' : 'Importar mesmo assim'}
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
@@ -1361,6 +1700,7 @@ export default function BanksPage() {
                     const bankName = BANK_CODE_TO_NAME[bank]
                     const first = accounts.find((a) => a.bankName === bankName)
                     setImportAccountId(first?.id ?? '')
+                    if (bank !== 'BPI' && bank !== 'Santander') setImportPdfFile(null)
                   }}
                 >
                   {BANK_IMPORT_OPTIONS.map((b) => (
@@ -1391,8 +1731,8 @@ export default function BanksPage() {
             <div>
               <label className="label">Ficheiro</label>
               <div className="grid grid-cols-2 gap-3">
-                {/* CSV / Excel */}
-                <div>
+                {/* CSV / Excel (inclui template) */}
+                <div className="flex flex-col gap-2">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -1403,40 +1743,66 @@ export default function BanksPage() {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className={`w-full h-full border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-2 transition-colors ${importFile ? 'border-primary-400 bg-primary-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    className={`w-full border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-2 transition-colors ${importFile ? 'border-primary-400 bg-primary-50' : 'border-gray-200 hover:border-gray-300'}`}
                   >
-                    <FileUp className={`w-7 h-7 ${importFile ? 'text-primary-500' : 'text-gray-400'}`} />
-                    <span className="text-xs font-medium text-gray-500">CSV / Excel</span>
+                    {importFile && /\.(xls|xlsx)$/i.test(importFile.name)
+                      ? <FileSpreadsheet className="w-7 h-7 text-primary-500" />
+                      : <FileUp className={`w-7 h-7 ${importFile ? 'text-primary-500' : 'text-gray-400'}`} />
+                    }
+                    <span className="text-xs font-medium text-gray-500">
+                      {importFile
+                        ? /\.csv$/i.test(importFile.name) ? 'CSV detetado' : 'Excel detetado'
+                        : 'CSV / Excel'}
+                    </span>
                     {importFile ? (
                       <span className="text-xs font-semibold text-primary-700 text-center break-all">{importFile.name}</span>
                     ) : (
-                      <span className="text-xs text-gray-400 text-center">Clique para selecionar<br/>.csv, .xls ou .xlsx</span>
+                      <span className="text-xs text-gray-400 text-center">Clique para selecionar<br />.csv, .xls ou .xlsx</span>
                     )}
                   </button>
+                  <a
+                    href="/Template Extratos.xlsx"
+                    download
+                    className="flex items-center gap-1 text-xs text-primary-600 hover:underline self-start"
+                  >
+                    <Download className="w-7 h-7" /> Não tem um ficheiro de extrato? Clique aqui para descarregar o template e preencher.
+                  </a>
                 </div>
 
-                {/* PDF */}
+                {/* PDF — BPI e Santander */}
                 <div>
-                  <input
-                    ref={pdfFileInputRef}
-                    type="file"
-                    accept=".pdf"
-                    className="hidden"
-                    onChange={(e) => { setImportPdfFile(e.target.files?.[0] ?? null); setImportFile(null) }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => pdfFileInputRef.current?.click()}
-                    className={`w-full h-full border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-2 transition-colors ${importPdfFile ? 'border-rose-400 bg-rose-50' : 'border-gray-200 hover:border-gray-300'}`}
-                  >
-                    <FileText className={`w-7 h-7 ${importPdfFile ? 'text-rose-500' : 'text-gray-400'}`} />
-                    <span className="text-xs font-medium text-gray-500">PDF</span>
-                    {importPdfFile ? (
-                      <span className="text-xs font-semibold text-rose-700 text-center break-all">{importPdfFile.name}</span>
-                    ) : (
-                      <span className="text-xs text-gray-400 text-center">Clique para selecionar<br/>extrato em PDF</span>
-                    )}
-                  </button>
+                  {(importBank === 'BPI' || importBank === 'Santander') ? (
+                    <>
+                      <input
+                        ref={pdfFileInputRef}
+                        type="file"
+                        accept=".pdf"
+                        className="hidden"
+                        onChange={(e) => { setImportPdfFile(e.target.files?.[0] ?? null); setImportFile(null) }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => pdfFileInputRef.current?.click()}
+                        className={`w-full h-full border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-2 transition-colors ${importPdfFile ? 'border-rose-400 bg-rose-50' : 'border-gray-200 hover:border-gray-300'}`}
+                      >
+                        <FileText className={`w-7 h-7 ${importPdfFile ? 'text-rose-500' : 'text-gray-400'}`} />
+                        <span className="text-xs font-medium text-gray-500">
+                          {importPdfFile ? 'PDF detetado' : 'PDF'}
+                        </span>
+                        {importPdfFile ? (
+                          <span className="text-xs font-semibold text-rose-700 text-center break-all">{importPdfFile.name}</span>
+                        ) : (
+                          <span className="text-xs text-gray-400 text-center">Clique para selecionar<br />extrato em PDF</span>
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <div className="w-full h-full border-2 border-dashed border-gray-100 rounded-xl p-5 flex flex-col items-center gap-2 bg-gray-50 cursor-not-allowed select-none">
+                      <FileText className="w-7 h-7 text-gray-300" />
+                      <span className="text-xs font-medium text-gray-300">PDF</span>
+                      <span className="text-xs text-gray-400 text-center">Não disponível<br />para este banco</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1453,22 +1819,23 @@ export default function BanksPage() {
                 onClick={() => {
                   const file = importFile ?? importPdfFile
                   if (!file) return
+                  const bank = importBank
                   const bankName = BANK_CODE_TO_NAME[importBank]
                   const filtered = bankName ? accounts.filter((a) => a.bankName === bankName) : accounts
                   const targetId = (importAccountId && filtered.find((a) => a.id === importAccountId))
                     ? importAccountId
                     : filtered[0]?.id
                   if (!targetId) return
-                  uploadStatementMutation.mutate({ file, bank: importBank, bankAccountId: targetId })
+                  previewMutation.mutate({ file, bank, bankAccountId: targetId })
                 }}
                 className="btn-primary flex-1"
-                disabled={uploadStatementMutation.isPending || (!importFile && !importPdfFile) || (() => {
+                disabled={previewMutation.isPending || uploadStatementMutation.isPending || (!importFile && !importPdfFile) || (() => {
                   const bankName = BANK_CODE_TO_NAME[importBank]
                   const filtered = bankName ? accounts.filter((a) => a.bankName === bankName) : accounts
                   return filtered.length === 0
                 })()}
               >
-                {uploadStatementMutation.isPending ? 'A importar...' : 'Importar'}
+                {previewMutation.isPending ? 'A validar...' : uploadStatementMutation.isPending ? 'A importar...' : 'Importar'}
               </button>
             </div>
           </div>

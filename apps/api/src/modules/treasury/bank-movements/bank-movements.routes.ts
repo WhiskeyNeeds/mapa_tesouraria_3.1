@@ -104,6 +104,76 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     return reply.status(201).send(result)
   })
 
+  // File upload preview — parse and validate without importing
+  fastify.post(`${prefix}/upload/preview`, { onRequest: auth }, async (request, reply) => {
+    const { clientId: _clientId } = request.params as { clientId: string }
+
+    let bank = ''
+    let fileBuffer: Buffer | null = null
+    let originalFileName: string | null = null
+
+    for await (const part of request.parts()) {
+      if (part.type === 'file') {
+        originalFileName = part.filename ?? null
+        const chunks: Buffer[] = []
+        for await (const chunk of part.file) chunks.push(chunk)
+        fileBuffer = Buffer.concat(chunks)
+      } else {
+        if (part.fieldname === 'bank') bank = part.value as string
+      }
+    }
+
+    if (!fileBuffer || fileBuffer.length === 0) throw httpError(400, 'No file uploaded')
+    if (!bank) throw httpError(400, 'bank is required')
+
+    const isPDF = originalFileName?.toLowerCase().endsWith('.pdf') ||
+      (fileBuffer.length >= 4 && fileBuffer.slice(0, 4).toString('ascii') === '%PDF')
+
+    let movements: Awaited<ReturnType<typeof parsePDF>>
+    try {
+      movements = isPDF
+        ? await parsePDF(fileBuffer, bank as SupportedBank)
+        : parseStatementFile(fileBuffer, bank as SupportedBank)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao processar ficheiro'
+      return reply.status(422).send({ error: msg })
+    }
+
+    if (movements.length === 0) return reply.status(422).send({ error: 'Nenhum movimento encontrado no ficheiro.' })
+
+    type Issue = { row: number; field: string; message: string }
+    const issues: Issue[] = []
+    let prevBalance: number | null = null
+
+    for (let i = 0; i < movements.length; i++) {
+      const m = movements[i]
+      const row = i + 1
+
+      if (!m.date || !/^\d{4}-\d{2}-\d{2}$/.test(m.date))
+        issues.push({ row, field: 'Data', message: 'Data em falta ou inválida' })
+
+      if (!m.description?.trim())
+        issues.push({ row, field: 'Descrição', message: 'Descrição em falta' })
+
+      if (isNaN(m.amount) || m.amount === 0)
+        issues.push({ row, field: 'Valor', message: 'Valor em falta ou igual a zero' })
+
+      if (m.balanceAfter != null && prevBalance !== null && !isNaN(m.amount)) {
+        const expected = Math.round((prevBalance + m.amount) * 100) / 100
+        if (Math.abs(expected - m.balanceAfter) > 0.02)
+          issues.push({
+            row,
+            field: 'Saldo pós movimento',
+            message: `Saldo inconsistente: esperado ${expected.toFixed(2)} €, tem ${m.balanceAfter.toFixed(2)} €`,
+          })
+      }
+
+      if (m.balanceAfter != null && !isNaN(m.balanceAfter)) prevBalance = m.balanceAfter
+    }
+
+    return reply.send({ parsed: movements.length, issues })
+  })
+
   // File upload import (multipart: file + bankAccountId + bank)
   fastify.post(`${prefix}/upload`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
@@ -128,7 +198,7 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
 
     if (!fileBuffer || fileBuffer.length === 0) throw httpError(400, 'No file uploaded')
     if (!bankAccountId) throw httpError(400, 'bankAccountId is required')
-    if (!bank) throw httpError(400, 'bank is required (CGD | BCP | BPI | Bankinter | Santander | NovoBanco)')
+    if (!bank) throw httpError(400, 'bank is required (CGD | BCP | BPI | Bankinter | Santander | NovoBanco | TEMPLATE)')
 
     // Check if account already has imported movements
     const existingCount = await fastify.prisma.treasuryBankMovement.count({
@@ -242,6 +312,162 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({ ...result, parsed: movements.length, bank })
   })
 
+  // Unified account history: timeline + reconciliations + monthly summary
+  fastify.get(`${prefix}/history`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { bankAccountId } = request.query as { bankAccountId?: string }
+    if (!bankAccountId) throw httpError(400, 'bankAccountId is required')
+
+    const [account, auditEntries, reconciliations, movements] = await Promise.all([
+      fastify.prisma.treasuryBankAccount.findFirst({
+        where: { id: bankAccountId, clientId },
+        select: { id: true, name: true, bankName: true, createdAt: true, openingBalance: true, ibanLast4: true },
+      }),
+      // Audit log entries related to this account (by payload.bankAccountId or entityId)
+      fastify.prisma.treasuryAuditLog.findMany({
+        where: {
+          clientId,
+          OR: [
+            { payload: { path: ['bankAccountId'], equals: bankAccountId } },
+            { entityType: 'BankAccount', entityId: bankAccountId },
+          ],
+        },
+        include: { user: { select: { name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      }),
+      // Reconciliations linked to movements of this account
+      fastify.prisma.treasuryReconciliation.findMany({
+        where: {
+          clientId,
+          movements: { some: { movement: { bankAccountId, deletedAt: null } } },
+        },
+        include: {
+          createdBy: { select: { name: true } },
+          reversedBy: { select: { name: true } },
+          movements: {
+            include: { movement: { select: { date: true, amount: true, description: true } } },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      // All non-deleted movements for monthly summary
+      fastify.prisma.treasuryBankMovement.findMany({
+        where: { clientId, bankAccountId, deletedAt: null },
+        select: { date: true, amount: true },
+        orderBy: { date: 'asc' },
+      }),
+    ])
+
+    if (!account) throw httpError(404, 'Bank account not found')
+
+    // Build timeline
+    const timeline = auditEntries.map((e) => {
+      const p = (e.payload ?? {}) as Record<string, unknown>
+      return {
+        id: e.id,
+        entityId: e.entityId,
+        type: e.action,
+        date: e.createdAt,
+        user: e.user?.name ?? null,
+        payload: p,
+      }
+    })
+
+    // Build monthly summary
+    const monthMap = new Map<string, { income: number; expense: number }>()
+    for (const m of movements) {
+      const key = m.date.toISOString().slice(0, 7) // "YYYY-MM"
+      const entry = monthMap.get(key) ?? { income: 0, expense: 0 }
+      const amt = Number(m.amount)
+      if (amt > 0) entry.income += amt
+      else entry.expense += Math.abs(amt)
+      monthMap.set(key, entry)
+    }
+    const monthlySummary = Array.from(monthMap.entries())
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([month, data]) => ({
+        month,
+        income: Math.round(data.income * 100) / 100,
+        expense: Math.round(data.expense * 100) / 100,
+        net: Math.round((data.income - data.expense) * 100) / 100,
+      }))
+
+    const reconSummary = reconciliations.map((r) => ({
+      id: r.id,
+      status: r.status,
+      isDryRun: r.isDryRun,
+      direction: r.direction,
+      totalMovements: Number(r.totalMovements),
+      totalAllocated: Number(r.totalAllocated),
+      createdAt: r.createdAt,
+      createdBy: r.createdBy.name,
+      reversedAt: r.reversedAt,
+      reversedBy: r.reversedBy?.name ?? null,
+      reversedReason: r.reversedReason,
+      movementsCount: r.movements.length,
+    }))
+
+    return reply.send({
+      account: { ...account, openingBalance: Number(account.openingBalance) },
+      timeline,
+      reconciliations: reconSummary,
+      monthlySummary,
+    })
+  })
+
+  // Import history for a bank account
+  fastify.get(`${prefix}/imports`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { bankAccountId } = request.query as { bankAccountId?: string }
+    if (!bankAccountId) throw httpError(400, 'bankAccountId is required')
+
+    const imports = await fastify.prisma.treasuryBankImport.findMany({
+      where: { clientId, bankAccountId, status: { in: ['DONE', 'PENDING', 'PROCESSING'] } },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        createdBy: { select: { name: true } },
+        _count: { select: { movements: { where: { deletedAt: null } } } },
+      },
+    })
+
+    return reply.send(imports.map((imp) => ({
+      id: imp.id,
+      originalFileName: imp.originalFileName,
+      createdAt: imp.createdAt,
+      rowsImported: imp.rowsImported,
+      rowsDuplicated: imp.rowsDuplicated,
+      rowsFailed: imp.rowsFailed,
+      createdBy: imp.createdBy.name,
+      activeMovements: imp._count.movements,
+    })))
+  })
+
+  // Revert a specific import (soft-delete its active movements)
+  fastify.delete(`${prefix}/imports/:importId`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, importId } = request.params as { clientId: string; importId: string }
+
+    const imp = await fastify.prisma.treasuryBankImport.findFirst({
+      where: { id: importId, clientId },
+    })
+    if (!imp) throw httpError(404, 'Import not found')
+
+    const { count } = await fastify.prisma.treasuryBankMovement.updateMany({
+      where: { clientId, importId, deletedAt: null },
+      data: { deletedAt: new Date() },
+    })
+
+    await fastify.prisma.treasuryAuditLog.create({
+      data: {
+        clientId, userId: request.user.sub,
+        action: 'import.revert', entityType: 'BankImport', entityId: importId,
+        payload: { reverted: count, bankAccountId: imp.bankAccountId },
+      },
+    })
+
+    return reply.send({ reverted: count })
+  })
+
   fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     return reply.send(await svc.applyRulesToExisting(clientId))
@@ -251,6 +477,15 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const { clientId } = request.params as { clientId: string }
     const { bankAccountId } = request.body as { bankAccountId?: string }
     const result = await svc.deduplicateMovements(clientId, bankAccountId)
+    if (result.removed > 0) {
+      await fastify.prisma.treasuryAuditLog.create({
+        data: {
+          clientId, userId: request.user.sub, action: 'account.deduplicate', entityType: 'BankAccount',
+          entityId: bankAccountId ?? null,
+          payload: { bankAccountId: bankAccountId ?? null, removed: result.removed },
+        },
+      })
+    }
     return reply.send(result)
   })
 
@@ -295,7 +530,31 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const { description } = request.body as { description?: string }
     if (description === undefined) throw httpError(400, 'description is required')
-    return reply.send(await svc.updateDescription(clientId, id, description))
+    return reply.send(await svc.updateDescription(clientId, id, description, request.user.sub))
+  })
+
+  // Restore a soft-deleted movement
+  fastify.patch(`${prefix}/:id/restore`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+
+    const mov = await fastify.prisma.treasuryBankMovement.findFirst({
+      where: { id, clientId, deletedAt: { not: null } },
+    })
+    if (!mov) throw httpError(404, 'Movimento eliminado não encontrado')
+
+    await fastify.prisma.treasuryBankMovement.update({
+      where: { id },
+      data: { deletedAt: null },
+    })
+
+    await fastify.prisma.treasuryAuditLog.create({
+      data: {
+        clientId, userId: request.user.sub, action: 'movement.restore', entityType: 'BankMovement', entityId: id,
+        payload: { bankAccountId: mov.bankAccountId, amount: Number(mov.amount) },
+      },
+    })
+
+    return reply.send({ restored: true })
   })
 
   fastify.patch(`${prefix}/:id/classify`, { onRequest: auth }, async (request, reply) => {

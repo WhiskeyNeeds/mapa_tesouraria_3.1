@@ -18,7 +18,12 @@ export function parseDateDMY(s: string, sep: '/' | '-' = '-'): string {
 }
 
 export function cellToDate(val: unknown): string {
-  if (val instanceof Date) return val.toISOString().substring(0, 10)
+  if (val instanceof Date) {
+    const y = val.getFullYear()
+    const m = String(val.getMonth() + 1).padStart(2, '0')
+    const d = String(val.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
   if (typeof val === 'string' && val.trim()) {
     const s = val.trim()
     if (s.includes('/')) return parseDateDMY(s, '/')

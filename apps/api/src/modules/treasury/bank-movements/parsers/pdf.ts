@@ -79,128 +79,161 @@ function parseSantanderPDF(text: string, period: { start: string; end: string })
 }
 
 // ── BPI PDF ───────────────────────────────────────────────────────────────────
-// pdf-parse extracts BPI's 6-column layout (DATA MOV | DATA VAL | DESCRIÇÃO | MOEDA | VALOR | SALDO)
-// column-by-column. Observed line types in the extracted text:
-//   • Description lines  — DESCRIÇÃO column (may start with "DD/MM " purchase-date prefix)
-//   • Signed numbers     — VALOR column: explicit +/- sign  e.g. "-1 232,98" / "+3 137,48"
-//   • Unsigned numbers   — SALDO column: running balance    e.g. "44 919,61"
-//   • Date-only lines    — DD/MM; first half = DATA MOV, second half = DATA VAL
-// Strategy: separate VALOR (signed) from SALDO (unsigned) and use VALOR directly as amounts.
+// BPI "Extracto de Conta" has 6 columns: DATA MOV | DATA VAL | DESCRIÇÃO | MOEDA | VALOR | SALDO
+//
+// Two extraction strategies depending on how pdf-parse reads the PDF:
+//   A) Row-based: each movement appears as one line with both dates + description + amount + balance
+//   B) Column-based: all DATA MOV dates, then all DATA VAL dates, then all descriptions,
+//      then all VALOR values, then all SALDO values (pdf-parse column-stream order)
+//
+// Key fixes vs prior version:
+//   • Credit VALOR amounts have no + sign (e.g. "3 137,48") — cannot rely on sign for detection
+//   • Use running-balance constraint (initBal + valor = saldo) to distinguish VALOR from SALDO
+//   • Extended SKIP set covers BPI header noise: company name, address, postal codes, PI ref lines
 
 function parseBPIPDF(text: string, period: { start: string; end: string }): ParsedMovement[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l)
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
 
-  const SKIP_RE = [
-    /^(data\s+mov|data\s+val|descri[çc][aã]o(?:\s+do\s+movimento)?|moeda|valor|saldo|dep[oó]sitos?\s+[aà]\s+ordem|conta\s+valor|iban|nib|bpi\s+direto|banco\s+bpi|sede:|capital\s+social|extracto\s+de\s+conta|per[íi]odo|extracto|p[áa]g\.?\s*\d)/i,
-    /^\d+\s*[\/|]\s*\d+$/,
+  // ── Strategy A: Row-based ─────────────────────────────────────────────────────
+  // Pattern per line: DD/MM  DD/MM  <description>  [-]amount  balance
+  const ROW_RE = /^(\d{2}\/\d{2})\s+(\d{2}\/\d{2})\s+(.+?)\s+(-?\d{1,3}(?:\s\d{3})*,\d{2})\s+(\d{1,3}(?:\s\d{3})*,\d{2})$/
+  const rowOut: ParsedMovement[] = []
+  for (const line of lines) {
+    const m = ROW_RE.exec(line)
+    if (!m) continue
+    const date   = parseDateDDMM(m[1], '/', period.start, period.end)
+    const bd     = parseDateDDMM(m[2], '/', period.start, period.end)
+    const amount = parseSpaceAmt(m[4])
+    const bal    = parseSpaceAmt(m[5])
+    if (!date || isNaN(amount) || isNaN(bal) || amount === 0) continue
+    const desc = m[3].replace(/^\d{2}\/\d{2}\s+/, '').replace(/\s{2,}/g, ' ').trim()
+    if (!desc) continue
+    rowOut.push({ date, bookingDate: bd !== date ? bd : undefined, description: desc, amount, balanceAfter: bal })
+  }
+  if (rowOut.length >= 3) return rowOut
+
+  // ── Strategy B: Column-based ──────────────────────────────────────────────────
+  const SKIP_RES = [
+    // Table column headers
+    /^(data\s*(mov|val)?|descri[çc][aã]o(\s+do\s+movimento)?|moeda|valor|saldo)$/i,
+    // BPI document structure
+    /^dep[oó]sitos?\s+[aà]\s+ordem/i,
+    /^conta\s+valor\s+bpi/i,
+    /^(iban|nib)[\s:]/i,
+    /^bpi\s+(direto|directo)/i,
+    /^(banco\s+bpi|sede:|capital\s+social)/i,
+    /^(extracto(\s+de\s+conta)?|per[íi]odo)/i,
+    /^p[áa]g\.?\s*\d/i,
+    /^\d+\s*[\/|]\s*\d+$/,   // page refs "1/2", "Pág. 2/2"
     /^[-=*_]{3,}$/,
-    /^(saldo\s+actual|saldo\s+anterior|saldo\s+disponivel|o\s+bpi\s+informa)/i,
-    /^--\s*.+\s*--$/,        // page separators like "-- 2 of 2 --"
-    /^(eur|usd|gbp|chf)$/i, // MOEDA column values
-    /^(data|mov|val)$/i,     // lone column-header words that leak through
+    // Summary lines
+    /^(saldo\s+actual|saldo\s+anterior|saldo\s+disponivel)/i,
+    // Footer legal text
+    /^o\s+bpi\s+informa/i,
+    /^(informa-?se|taxa\s+anual|preç[aã]rio|facilidade\s+de\s+descoberto|taeg)/i,
+    /^(correspondendo|qualquer\s+exemplo|mantêm-?se|considerado)/i,
+    // Standalone currency codes (MOEDA column)
+    /^(eur|usd|gbp|chf)$/i,
+    // Lone column-header words
+    /^(mov|val|data)$/i,
+    // BPI-specific reference lines
+    /^pi\s+\d+/i,               // "PI 00231 EX 000001 2623985502"
+    /^\d-\d{7}-\d{3}-\d{3}$/,  // account number "9-5697074-000-001"
+    /^\d{3}\/\d{4}$/,           // extract sequence "002/2026"
+    // Address / company header area
+    /^\d{4}\s*-\s*\d{3}/,       // postal code "4470 - 157 MAIA"
+    /^(partic\b|rua\s|av(enida)?\s)/i,
   ]
 
-  // Signed standalone number → VALOR column (movement amount, always has explicit + or -)
-  const VALOR_RE = /^([+-]\s*\d{1,3}(?:\s\d{3})*,\d{2})$/
-  // Unsigned standalone number → SALDO column (running balance)
-  const SALDO_RE = /^(\d{1,3}(?:\s\d{3})*,\d{2})$/
-  const DATE_ONLY_RE = /^(\d{2}\/\d{2})$/
+  // Any standalone space-thousands number (signed or unsigned)
+  const NUM_RE  = /^(-?\s*\d{1,3}(?:\s\d{3})*,\d{2})$/
+  const DATE_RE = /^(\d{2}\/\d{2})$/
 
-  // Extract initial balance from "SALDO ANTERIOR" line (used only in the delta fallback)
-  let initialBalance: number | null = null
+  // Extract initial balance from "SALDO ANTERIOR CONTABILISTICO  44 919,61"
+  let initBal: number | null = null
   for (const line of lines) {
-    const m = line.match(/saldo\s+anterior\s+(?:contabilistico\s+)?([\d\s]+,\d{2})\s*$/i)
-    if (m) { initialBalance = parseSpaceAmt(m[1]); break }
+    const m = line.match(/saldo\s+anterior\s+(?:contabilistico\s+)?(\d[\d\s]*,\d{2})\s*$/i)
+    if (m) { initBal = parseSpaceAmt(m[1]); break }
   }
 
-  const descriptions: string[] = []
-  const valors: number[] = []      // signed VALOR amounts
-  const saldos: number[] = []      // unsigned SALDO running balances
-  const rawDates: string[] = []
+  const descs: string[] = []
+  const nums:  number[] = []   // all standalone numbers in appearance order
+  const dates: string[] = []
 
   for (const line of lines) {
-    if (SKIP_RE.some((r) => r.test(line))) continue
-
-    const vMatch = VALOR_RE.exec(line)
-    if (vMatch) { valors.push(parseSpaceAmt(vMatch[1])); continue }
-
-    const sMatch = SALDO_RE.exec(line)
-    if (sMatch) { saldos.push(parseSpaceAmt(sMatch[1])); continue }
-
-    const dMatch = DATE_ONLY_RE.exec(line)
-    if (dMatch) { rawDates.push(dMatch[1]); continue }
-
-    descriptions.push(line)
+    if (SKIP_RES.some((r) => r.test(line))) continue
+    const n = NUM_RE.exec(line)
+    if (n) { nums.push(parseSpaceAmt(n[1])); continue }
+    const d = DATE_RE.exec(line)
+    if (d) { dates.push(d[1]); continue }
+    descs.push(line)
   }
 
-  if (descriptions.length === 0) return []
+  if (!descs.length || !nums.length) return []
 
-  // Dates: first half = DATA MOV, second half = DATA VAL
-  const half = Math.ceil(rawDates.length / 2)
-  const movDates = rawDates.slice(0, half)
-  const valDates = rawDates.slice(half)
+  // ── Identify VALOR / SALDO pairs via running-balance constraint ───────────────
+  // If nums alternates (VALOR, SALDO) and initBal + valor[0] = saldo[0], etc. → valid pairs
+  // Otherwise treat all nums as SALDOs and derive amounts as deltas.
+  let amounts: number[] | null = null
+  let saldos:  number[] = []
 
-  // Primary path: use signed VALOR values directly as amounts
-  if (valors.length > 0) {
-    // If saldos has more entries than valors, leading ones are period-start balances — skip them
-    const saldoOff = Math.max(0, saldos.length - valors.length)
-    const n = Math.min(descriptions.length, valors.length)
-    const out: ParsedMovement[] = []
-
-    for (let i = 0; i < n; i++) {
-      const amount = valors[i]
-      if (isNaN(amount) || amount === 0) continue
-
-      const saldoIdx = saldoOff + i
-      const balanceAfter = saldoIdx < saldos.length ? saldos[saldoIdx] : undefined
-
-      const desc = descriptions[i].replace(/^\d{2}\/\d{2}\s+/, '').replace(/\s{2,}/g, ' ').trim()
-      if (!desc) continue
-
-      const date = movDates[i] ? parseDateDDMM(movDates[i], '/', period.start, period.end) : period.start
-      const bookingDate = valDates[i] ? parseDateDDMM(valDates[i], '/', period.start, period.end) : undefined
-
-      out.push({
-        date,
-        bookingDate: bookingDate && bookingDate !== date ? bookingDate : undefined,
-        description: desc,
-        amount,
-        balanceAfter: balanceAfter != null && !isNaN(balanceAfter) ? balanceAfter : undefined,
-      })
+  if (initBal !== null && nums.length >= 2 && nums.length % 2 === 0) {
+    let valid = true
+    let prev  = initBal
+    const tv: number[] = []
+    const ts: number[] = []
+    for (let i = 0; i < nums.length; i += 2) {
+      const expected = Math.round((prev + nums[i]) * 100) / 100
+      if (Math.abs(expected - nums[i + 1]) > 0.05) { valid = false; break }
+      tv.push(nums[i]); ts.push(nums[i + 1])
+      prev = nums[i + 1]
     }
-
-    if (out.length > 0) return out
+    if (valid && tv.length >= 3) { amounts = tv; saldos = ts }
   }
 
-  // Fallback: balance-delta derivation (for BPI variants without explicit VALOR signs)
-  const allBalances = initialBalance != null ? [initialBalance, ...saldos] : saldos
-  if (allBalances.length < 2) return []
+  if (!amounts) {
+    saldos  = nums
+    const chain = initBal !== null ? [initBal, ...saldos] : saldos
+    if (chain.length < 2) return []
+    amounts = []
+    for (let i = 1; i < chain.length; i++) {
+      amounts.push(Math.round((chain[i] - chain[i - 1]) * 100) / 100)
+    }
+  }
 
-  const n2 = Math.min(descriptions.length, allBalances.length - 1)
-  const out2: ParsedMovement[] = []
+  // ── Align dates: first ceil(N/2) = DATA MOV, rest = DATA VAL ─────────────────
+  const half    = Math.ceil(dates.length / 2)
+  const movDates = dates.slice(0, half)
+  const valDates = dates.slice(half)
 
-  for (let i = 0; i < n2; i++) {
-    const balBefore = allBalances[i]
-    const balAfter  = allBalances[i + 1]
-    const amount    = Math.round((balAfter - balBefore) * 100) / 100
-    if (amount === 0) continue
+  // ── Build output ──────────────────────────────────────────────────────────────
+  const n   = Math.min(descs.length, amounts.length)
+  const out: ParsedMovement[] = []
 
-    const desc = descriptions[i].replace(/^\d{2}\/\d{2}\s+/, '').replace(/\s{2,}/g, ' ').trim()
+  for (let i = 0; i < n; i++) {
+    const amount = amounts[i]
+    if (isNaN(amount) || amount === 0) continue
+
+    const desc = descs[i].replace(/^\d{2}\/\d{2}\s+/, '').replace(/\s{2,}/g, ' ').trim()
     if (!desc) continue
 
-    const date = movDates[i] ? parseDateDDMM(movDates[i], '/', period.start, period.end) : period.start
-    const bookingDate = valDates[i] ? parseDateDDMM(valDates[i], '/', period.start, period.end) : undefined
+    const date = movDates[i]
+      ? parseDateDDMM(movDates[i], '/', period.start, period.end)
+      : period.start
+    const bd = valDates[i]
+      ? parseDateDDMM(valDates[i], '/', period.start, period.end)
+      : undefined
 
-    out2.push({
+    out.push({
       date,
-      bookingDate: bookingDate && bookingDate !== date ? bookingDate : undefined,
+      bookingDate: bd && bd !== date ? bd : undefined,
       description: desc,
       amount,
-      balanceAfter: balAfter,
+      balanceAfter: saldos[i] != null && !isNaN(saldos[i]) ? saldos[i] : undefined,
     })
   }
 
-  return out2
+  return out
 }
 
 // ── Generic PDF parser (fallback) ─────────────────────────────────────────────

@@ -10,7 +10,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Bar, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine, ReferenceArea,
 } from 'recharts'
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 
 interface UpcomingDue { entityName: string; reference: string; dueDate: string; pendingAmount: number }

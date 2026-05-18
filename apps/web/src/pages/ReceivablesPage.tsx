@@ -419,11 +419,6 @@ export default function ReceivablesPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showCustomerDropdown])
 
-  const selectedCategory = useMemo(
-    () => categories.find((c) => c.id === form.categoryId) ?? null,
-    [categories, form.categoryId],
-  )
-
   const hasIseLines = tocCreate && tocLines.some((l) => l.tax_code === 'ISE')
 
   const tocLinesTotal = useMemo(() => {
@@ -736,11 +731,6 @@ export default function ReceivablesPage() {
 
         {activeTab === 'clientes' && (
           <div className="space-y-4 pt-5">
-            <div className="flex justify-end">
-              <button onClick={() => { setShowNew(true); setTocCreate(true) }} className="btn-primary flex items-center gap-2">
-                <Plus className="w-4 h-4" />Nova Conta a Receber
-              </button>
-            </div>
             <div className="card">
               <div className="px-5 py-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
                 <div className="relative">
@@ -1693,22 +1683,6 @@ export default function ReceivablesPage() {
               )}
             </div>
           </div>
-          {outrasContact && (outrasContact.phone || outrasContact.mobile) && (
-            <div className="col-span-2 grid grid-cols-2 gap-4">
-              {outrasContact.phone && (
-                <div>
-                  <label className="label">Telefone</label>
-                  <input className="input bg-gray-50" value={outrasContact.phone} readOnly inputMode="numeric" maxLength={9} />
-                </div>
-              )}
-              {outrasContact.mobile && (
-                <div>
-                  <label className="label">Telemóvel</label>
-                  <input className="input bg-gray-50" value={outrasContact.mobile} readOnly inputMode="numeric" maxLength={9} />
-                </div>
-              )}
-            </div>
-          )}
           <div>
             <label className="label">NIF <span className="text-red-500">*</span></label>
             <input

@@ -50,15 +50,21 @@ export class TreasuryBankAccountsService {
       this.prisma.treasurySettings.findUnique({ where: { clientId } }),
     ])
 
-    const balances = await Promise.all(
-      accounts.map((a) => this.resolveFinalBalance(a.id, Number(a.openingBalance)))
-    )
+    const [balances, importCounts] = await Promise.all([
+      Promise.all(accounts.map((a) => this.resolveFinalBalance(a.id, Number(a.openingBalance)))),
+      Promise.all(accounts.map((a) =>
+        this.prisma.treasuryBankMovement.count({
+          where: { clientId, bankAccountId: a.id, deletedAt: null, source: { not: 'MANUAL' } },
+        })
+      )),
+    ])
 
     const lowBalanceEnabled = settings?.lowBalanceEnabled ?? true
 
     return accounts.map(({ ibanEnc: _enc, ...acc }, i) => ({
       ...acc,
       currentBalance: balances[i],
+      importedCount: importCounts[i],
       lowBalanceWarning: lowBalanceEnabled && acc.minBalance != null && balances[i] < Number(acc.minBalance),
     }))
   }

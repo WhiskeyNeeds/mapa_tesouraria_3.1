@@ -378,11 +378,20 @@ export class TreasuryBankMovementsService {
     return { removed: toRemove.length }
   }
 
-  async updateDescription(clientId: string, id: string, description: string) {
+  async updateDescription(clientId: string, id: string, description: string, userId?: string) {
     const mov = await this.prisma.treasuryBankMovement.findFirst({ where: { id, clientId, deletedAt: null } })
     if (!mov) throw httpError(404, 'Movement not found')
     if (!description.trim()) throw httpError(400, 'Description cannot be empty')
-    return this.prisma.treasuryBankMovement.update({ where: { id }, data: { description: description.trim() } })
+    const updated = await this.prisma.treasuryBankMovement.update({ where: { id }, data: { description: description.trim() } })
+    if (userId) {
+      await this.prisma.treasuryAuditLog.create({
+        data: {
+          clientId, userId, action: 'movement.edit', entityType: 'BankMovement', entityId: id,
+          payload: { bankAccountId: mov.bankAccountId, before: mov.description, after: description.trim() },
+        },
+      })
+    }
+    return updated
   }
 
   async classify(clientId: string, id: string, categoryId: string | null) {
