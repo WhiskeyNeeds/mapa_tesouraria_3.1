@@ -401,8 +401,9 @@ model TreasuryReceivable {
   tocSyncedAt   DateTime?
   tocSyncError  String?
 
-  recurrenceId String?
-  parentId     String?
+  recurrenceId        String?
+  parentId            String?
+  promisedPaymentDate DateTime?
 
   createdById String
   createdAt   DateTime  @default(now())
@@ -451,8 +452,9 @@ model TreasuryPayable {
   tocSyncedAt       DateTime?
   tocSyncError      String?
 
-  recurrenceId String?
-  parentId     String?
+  recurrenceId        String?
+  parentId            String?
+  promisedPaymentDate DateTime?
 
   createdById String
   createdAt   DateTime  @default(now())

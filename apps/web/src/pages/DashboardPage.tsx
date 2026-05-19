@@ -54,7 +54,7 @@ interface CashflowStatementData {
 }
 interface CashPositioningWeek {
   label: string; start: string; end: string
-  isCurrent: boolean; isFuture: boolean
+  isCurrent: boolean; isFuture: boolean; hasData: boolean
   openingBalance: number; closingBalance: number
   income: number; expense: number
   catIncome: Record<string, number>; catExpense: Record<string, number>
@@ -404,12 +404,11 @@ function CashflowStatementTable() {
     // ── Stacked chart calculations (same logic as monthly view)
     let maxNetPos = 1, maxGrossNeg = 0
     for (const wk of weeks) {
-      if (wk.isFuture) continue
+      if (!wk.hasData) continue
       const accs = wk.accountBalances ?? []
-      const net = accs.reduce((s, a) => s + a.balance, 0)
       const gp = accs.reduce((s, a) => s + Math.max(0, a.balance), 0)
       const gn = accs.reduce((s, a) => s + Math.max(0, -a.balance), 0)
-      if (Math.max(net, gp) > maxNetPos) maxNetPos = Math.max(net, gp)
+      if (gp > maxNetPos) maxNetPos = gp
       if (gn > maxGrossNeg) maxGrossNeg = gn
     }
     const sHasNeg = maxGrossNeg > 0
@@ -444,14 +443,14 @@ function CashflowStatementTable() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {/* Chart row — stacked bars + smooth grossPos line */}
+            {/* Chart row — stacked bars + smooth netTotal line */}
             {(() => {
               const colW = 100 / weeks.length
               const grossPosPts = weeks.map((wk, wkIdx) => {
-                if (wk.isFuture) return null
+                if (wk.isFuture || !wk.hasData) return null
                 const accs = wk.accountBalances ?? []
-                const gp = accs.reduce((s, a) => s + Math.max(0, a.balance), 0)
-                return gp > 0 ? { wkIdx, gp } : null
+                const net = accs.reduce((s, a) => s + a.balance, 0)
+                return net !== 0 ? { wkIdx, gp: net } : null
               }).filter((p): p is { wkIdx: number; gp: number } => p !== null)
               return (
                 <tr>
@@ -469,10 +468,10 @@ function CashflowStatementTable() {
                       ))}
                       {weeks.map((wk, wkIdx) => {
                         const accs = wk.accountBalances ?? []
-                        const netTotal = !wk.isFuture ? accs.reduce((s, a) => s + a.balance, 0) : 0
-                        const grossPos = accs.reduce((s, a) => s + Math.max(0, a.balance), 0)
-                        const grossNeg = !wk.isFuture ? accs.reduce((s, a) => s + Math.max(0, -a.balance), 0) : 0
-                        const barH = netTotal > 0 ? Math.round((netTotal / sChartMaxPos) * sPosAreaH) : 0
+                        const netTotal = wk.hasData ? accs.reduce((s, a) => s + a.balance, 0) : 0
+                        const grossPos = wk.hasData ? accs.reduce((s, a) => s + Math.max(0, a.balance), 0) : 0
+                        const grossNeg = wk.hasData ? accs.reduce((s, a) => s + Math.max(0, -a.balance), 0) : 0
+                        const barH = grossPos > 0 ? Math.round((grossPos / sChartMaxPos) * sPosAreaH) : 0
                         const negBarH = grossNeg > 0 && sChartMaxNeg > 0 ? Math.round((grossNeg / sChartMaxNeg) * sNegAreaH) : 0
                         return (
                           <div key={wk.label} className={`absolute cursor-pointer select-none group ${activeColKey === wk.label ? 'bg-blue-50' : ''}`}
@@ -505,10 +504,10 @@ function CashflowStatementTable() {
                                 </div>
                               )}
                             </div>
-                            {!wk.isFuture && grossPos > 0 && (
-                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(grossPos) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
+                            {wk.hasData && netTotal !== 0 && (
+                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(netTotal) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
                             )}
-                            {!wk.isFuture && netTotal !== 0 && (
+                            {wk.hasData && (grossPos > 0 || netTotal !== 0) && (
                               <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
                                 <div className="font-medium text-gray-700 mb-1">{wk.label}</div>
                                 {accs.map((acc) => (
@@ -519,16 +518,10 @@ function CashflowStatementTable() {
                                   </div>
                                 ))}
                                 <div className="border-t border-gray-100 mt-1 pt-1 flex items-center gap-2">
+                                  <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
                                   <span className="text-gray-600">Total:</span>
                                   <span className={`font-semibold ${netTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(netTotal)}</span>
                                 </div>
-                                {grossPos !== netTotal && (
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
-                                    <span className="text-gray-600">Saldo Final.:</span>
-                                    <span className="font-semibold text-blue-700">{formatCurrency(grossPos)}</span>
-                                  </div>
-                                )}
                               </div>
                             )}
                           </div>
@@ -620,10 +613,9 @@ function CashflowStatementTable() {
       if (col.isFuture) continue
       const d = getBalYearData(col.colYear)
       if (!d) continue
-      const net = d.accounts.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0)
       const gp = d.accounts.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
       const gn = d.accounts.reduce((s, a) => s + Math.max(0, -a.monthlyBalances[col.monthIndices[0]]), 0)
-      if (Math.max(net, gp) > maxNetPos) maxNetPos = Math.max(net, gp)
+      if (gp > maxNetPos) maxNetPos = gp
       if (gn > maxGrossNeg) maxGrossNeg = gn
     }
     const sHasNeg = maxGrossNeg > 0
@@ -664,8 +656,8 @@ function CashflowStatementTable() {
               const grossPosPts = cols.map((col, colIdx) => {
                 if (col.isFuture) return null
                 const accs = getBalYearData(col.colYear)?.accounts ?? []
-                const gp = accs.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
-                return gp > 0 ? { colIdx, gp } : null
+                const net = accs.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0)
+                return net !== 0 ? { colIdx, gp: net } : null
               }).filter((p): p is { colIdx: number; gp: number } => p !== null)
               return (
                 <tr>
@@ -687,9 +679,9 @@ function CashflowStatementTable() {
                         const d = getBalYearData(col.colYear)
                         const accs = d?.accounts ?? []
                         const netTotal = !col.isFuture ? accs.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0) : 0
-                        const grossPos = accs.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
+                        const grossPos = !col.isFuture ? accs.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0) : 0
                         const grossNeg = !col.isFuture ? accs.reduce((s, a) => s + Math.max(0, -a.monthlyBalances[col.monthIndices[0]]), 0) : 0
-                        const barH = netTotal > 0 ? Math.round((netTotal / sChartMaxPos) * sPosAreaH) : 0
+                        const barH = grossPos > 0 ? Math.round((grossPos / sChartMaxPos) * sPosAreaH) : 0
                         const negBarH = grossNeg > 0 && sChartMaxNeg > 0 ? Math.round((grossNeg / sChartMaxNeg) * sNegAreaH) : 0
                         return (
                           <div key={col.key} className={`absolute cursor-pointer select-none group ${activeColKey === col.label ? 'bg-blue-50' : ''}`}
@@ -722,10 +714,10 @@ function CashflowStatementTable() {
                                 </div>
                               )}
                             </div>
-                            {!col.isFuture && grossPos > 0 && (
-                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(grossPos) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
-                            )}
                             {!col.isFuture && netTotal !== 0 && (
+                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(netTotal) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
+                            )}
+                            {!col.isFuture && (grossPos > 0 || netTotal !== 0) && (
                               <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
                                 <div className="font-medium text-gray-700 mb-1">{col.label}</div>
                                 {accs.map((acc) => {
@@ -739,16 +731,10 @@ function CashflowStatementTable() {
                                   )
                                 })}
                                 <div className="border-t border-gray-100 mt-1 pt-1 flex items-center gap-2">
+                                  <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
                                   <span className="text-gray-600">Total:</span>
                                   <span className={`font-semibold ${netTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(netTotal)}</span>
                                 </div>
-                                {grossPos !== netTotal && (
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
-                                    <span className="text-gray-600">Saldo Final.:</span>
-                                    <span className="font-semibold text-blue-700">{formatCurrency(grossPos)}</span>
-                                  </div>
-                                )}
                               </div>
                             )}
                           </div>

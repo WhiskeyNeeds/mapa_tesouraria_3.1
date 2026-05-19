@@ -191,6 +191,15 @@ export class TreasuryPayablesService {
     })
   }
 
+  async unsettle(clientId: string, id: string) {
+    const item = await this.getById(clientId, id)
+    if (item.status !== 'SETTLED') throw httpError(409, 'Apenas documentos liquidados podem ser revertidos')
+    return this.prisma.treasuryPayable.update({
+      where: { id },
+      data: { status: 'OPEN', pendingAmount: item.totalAmount, paidAmount: 0 },
+    })
+  }
+
   async partialPayment(clientId: string, id: string, amount: number) {
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
@@ -214,6 +223,50 @@ export class TreasuryPayablesService {
   async delete(clientId: string, id: string) {
     await this.getById(clientId, id)
     return this.prisma.treasuryPayable.update({ where: { id }, data: { deletedAt: new Date() } })
+  }
+
+  async setPromisedDate(clientId: string, id: string, date: string | null) {
+    await this.getById(clientId, id)
+    return this.prisma.treasuryPayable.update({
+      where: { id },
+      data: { promisedPaymentDate: date ? new Date(date) : null },
+    })
+  }
+
+  async split(clientId: string, userId: string, id: string, installments: Array<{ dueDate: string; amount: number; description?: string }>) {
+    const item = await this.getById(clientId, id)
+    if (item.status !== 'OPEN') throw httpError(409, 'Só é possível dividir documentos em aberto')
+    const total = installments.reduce((s, i) => s + i.amount, 0)
+    if (Math.abs(total - Number(item.totalAmount)) > 0.001) throw httpError(400, 'A soma das parcelas não corresponde ao valor original')
+
+    await this.prisma.treasuryPayable.update({ where: { id }, data: { status: 'VOID', deletedAt: new Date() } })
+
+    const children: unknown[] = []
+    for (const inst of installments) {
+      const idx: number = children.length + 1
+      const child = await this.prisma.treasuryPayable.create({
+        data: {
+          clientId,
+          createdById: userId,
+          origin: item.origin,
+          categoryId: item.categoryId,
+          entityName: item.entityName,
+          entityNif: item.entityNif ?? undefined,
+          tocSupplierId: item.tocSupplierId ?? undefined,
+          tocPurchasesDocId: item.tocPurchasesDocId ?? undefined,
+          reference: `${item.reference}-${idx}`,
+          description: inst.description ?? item.description ?? undefined,
+          documentDate: item.documentDate,
+          dueDate: new Date(inst.dueDate),
+          currency: item.currency,
+          totalAmount: inst.amount,
+          pendingAmount: inst.amount,
+          parentId: id,
+        },
+      })
+      children.push(child)
+    }
+    return children
   }
 
   async deleteByTocSupplierId(clientId: string, tocSupplierId: string) {

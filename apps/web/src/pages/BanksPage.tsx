@@ -1333,18 +1333,18 @@ export default function BanksPage() {
         const isLoading = importsLoading || accountHistoryLoading
 
         const TIMELINE_LABELS: Record<string, { label: string; color: string }> = {
-          'account.create':           { label: 'Conta criada',               color: 'bg-green-100 text-green-700' },
-          'account.update':           { label: 'Conta atualizada',           color: 'bg-blue-100 text-blue-700' },
-          'account.deduplicate':      { label: 'Deduplicação executada',     color: 'bg-purple-100 text-purple-700' },
-          'import.complete':          { label: 'Extrato importado',          color: 'bg-primary-100 text-primary-700' },
-          'import.revert':            { label: 'Importação revertida',       color: 'bg-amber-100 text-amber-700' },
-          'movement.create':          { label: 'Movimento manual criado',    color: 'bg-green-100 text-green-700' },
-          'movement.delete':          { label: 'Movimento eliminado',        color: 'bg-red-100 text-red-700' },
-          'movement.edit':            { label: 'Descrição editada',          color: 'bg-gray-100 text-gray-600' },
-          'reconciliation.confirm':   { label: 'Reconciliação confirmada',   color: 'bg-teal-100 text-teal-700' },
-          'reconciliation.reverse':   { label: 'Reconciliação revertida',    color: 'bg-amber-100 text-amber-700' },
-          'movement.restore':          { label: 'Movimento restaurado',       color: 'bg-green-100 text-green-700' },
-          'statement.delete':         { label: 'Extrato eliminado',          color: 'bg-red-100 text-red-700' },
+          'account.create': { label: 'Conta criada', color: 'bg-green-100 text-green-700' },
+          'account.update': { label: 'Conta atualizada', color: 'bg-blue-100 text-blue-700' },
+          'account.deduplicate': { label: 'Deduplicação executada', color: 'bg-purple-100 text-purple-700' },
+          'import.complete': { label: 'Extrato importado', color: 'bg-primary-100 text-primary-700' },
+          'import.revert': { label: 'Importação revertida', color: 'bg-amber-100 text-amber-700' },
+          'movement.create': { label: 'Movimento manual criado', color: 'bg-green-100 text-green-700' },
+          'movement.delete': { label: 'Movimento eliminado', color: 'bg-red-100 text-red-700' },
+          'movement.edit': { label: 'Descrição editada', color: 'bg-gray-100 text-gray-600' },
+          'reconciliation.confirm': { label: 'Reconciliação confirmada', color: 'bg-teal-100 text-teal-700' },
+          'reconciliation.reverse': { label: 'Reconciliação revertida', color: 'bg-amber-100 text-amber-700' },
+          'movement.restore': { label: 'Movimento restaurado', color: 'bg-green-100 text-green-700' },
+          'statement.delete': { label: 'Extrato eliminado', color: 'bg-red-100 text-red-700' },
         }
 
         return (
@@ -1659,7 +1659,7 @@ export default function BanksPage() {
                     const bankName = BANK_CODE_TO_NAME[bank]
                     const first = accounts.find((a) => a.bankName === bankName)
                     setImportAccountId(first?.id ?? '')
-                    if (bank !== 'BPI' && bank !== 'Santander') setImportPdfFile(null)
+                    if (bank !== 'Santander') setImportPdfFile(null)
                   }}
                 >
                   {BANK_IMPORT_OPTIONS.map((b) => (
@@ -1724,13 +1724,13 @@ export default function BanksPage() {
                     download
                     className="flex items-center gap-1 text-xs text-primary-600 hover:underline self-start"
                   >
-                    <Download className="w-7 h-7" /> Não tem um ficheiro de extrato? Clique aqui para descarregar o template e preencher.
+                    <Download className="w-7 h-7" /> Não tem um ficheiro de extrato? Clique aqui para descarregar o template e preencher
                   </a>
                 </div>
 
-                {/* PDF — BPI e Santander */}
+                {/* PDF — Santander */}
                 <div>
-                  {(importBank === 'BPI' || importBank === 'Santander') ? (
+                  {importBank === 'Santander' ? (
                     <>
                       <input
                         ref={pdfFileInputRef}

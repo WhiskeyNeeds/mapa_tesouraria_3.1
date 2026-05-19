@@ -429,7 +429,7 @@ export class TreasuryDashboardService {
     const rangeStart = weekList[0].start
     const rangeEnd = weekList[weekList.length - 1].end
 
-    const [bankAccounts, pastMovements, pendingReceivables, pendingPayables, categories] = await Promise.all([
+    const [bankAccounts, pastMovements, firstMovement, pendingReceivables, pendingPayables, categories] = await Promise.all([
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
         select: { id: true, name: true },
@@ -438,6 +438,11 @@ export class TreasuryDashboardService {
       this.prisma.treasuryBankMovement.findMany({
         where: { clientId, deletedAt: null, date: { gte: rangeStart, lte: endOfToday } },
         select: { date: true, amount: true, categoryId: true, bankAccountId: true },
+      }),
+      this.prisma.treasuryBankMovement.findFirst({
+        where: { clientId, deletedAt: null },
+        orderBy: { date: 'asc' },
+        select: { date: true },
       }),
       // Only fetch pending docs due AFTER today — docs due today belong to actuals, not forecast
       this.prisma.treasuryReceivable.findMany({
@@ -512,10 +517,13 @@ export class TreasuryDashboardService {
 
       // Per-account balances for this week (past only)
       const accountBalances: Array<{ id: string; name: string; balance: number }> = []
+      // hasData = week is at or after the earliest imported movement (even if this specific week has no movements)
+      const hasData = !wk.isFuture && firstMovement !== null && wk.end >= firstMovement.date
       if (!wk.isFuture) {
+        const weekMovements = pastMovements.filter((m) => m.date >= wk.start && m.date <= wk.end)
         for (const acc of bankAccounts) {
-          const weekChange = pastMovements
-            .filter((m) => (m as { bankAccountId?: string }).bankAccountId === acc.id && m.date >= wk.start && m.date <= wk.end)
+          const weekChange = weekMovements
+            .filter((m) => (m as { bankAccountId?: string }).bankAccountId === acc.id)
             .reduce((s, m) => s + Number(m.amount), 0)
           const newBal = (accRunning.get(acc.id) ?? 0) + weekChange
           accRunning.set(acc.id, newBal)
@@ -529,6 +537,7 @@ export class TreasuryDashboardService {
         end: wk.end.toISOString().slice(0, 10),
         isCurrent: wk.isCurrent,
         isFuture: wk.isFuture,
+        hasData,
         openingBalance,
         closingBalance,
         income,

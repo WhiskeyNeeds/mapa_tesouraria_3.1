@@ -146,6 +146,11 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.settle(clientId, id))
   })
 
+  fastify.post(`${prefix}/:id/unsettle`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    return reply.send(await svc.unsettle(clientId, id))
+  })
+
   fastify.post(`${prefix}/:id/partial-payment`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const { amount } = request.body as { amount: number }
@@ -167,5 +172,17 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const { clientId, tocSupplierId } = request.params as { clientId: string; tocSupplierId: string }
     await svc.deleteByTocSupplierId(clientId, tocSupplierId)
     return reply.status(204).send()
+  })
+
+  fastify.patch(`${prefix}/:id/promised-date`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const { date } = request.body as { date: string | null }
+    return reply.send(await svc.setPromisedDate(clientId, id, date))
+  })
+
+  fastify.post(`${prefix}/:id/split`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const { installments } = request.body as { installments: Array<{ dueDate: string; amount: number; description?: string }> }
+    return reply.status(201).send(await svc.split(clientId, request.user.sub, id, installments))
   })
 }
