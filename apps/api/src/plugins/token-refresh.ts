@@ -53,7 +53,13 @@ const tokenRefreshPlugin: FastifyPluginAsync = fp(async (fastify) => {
   }
 
   fastify.addHook('onReady', async () => {
-    await refreshTokens()
+    // Fire-and-forget: force-refresh every config with a refresh_token to guarantee
+    // a clean baseline before the dashboard hits us with parallel API calls. The
+    // per-client mutex in ToconlineService serialises against any concurrent request.
+    svc.refreshAllOnStartup().catch((err) => {
+      fastify.log.error({ err }, '[token-refresh] startup refresh error')
+    })
+
     await purgeOldImports()
 
     let timer: ReturnType<typeof setTimeout>

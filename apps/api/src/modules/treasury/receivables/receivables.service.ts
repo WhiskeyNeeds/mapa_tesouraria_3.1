@@ -31,6 +31,7 @@ export class TreasuryReceivablesService {
     const where: Prisma.TreasuryReceivableWhereInput = {
       clientId,
       deletedAt: null,
+      NOT: { parentId: { not: null }, recurrenceId: null },
       ...effectiveStatusFilter,
       ...(origin ? { origin } : {}),
       ...(categoryId ? { categoryId } : {}),
@@ -76,6 +77,7 @@ export class TreasuryReceivablesService {
         category: true,
         recurrence: true,
         reconciliationLinks: { include: { reconciliation: true } },
+        children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
       },
     })
     if (!item) throw httpError(404, 'Receivable not found')
@@ -185,23 +187,41 @@ export class TreasuryReceivablesService {
     return this.prisma.treasuryReceivable.update({ where: { id }, data: updateData })
   }
 
+  private async syncParentStatus(clientId: string, parentId: string) {
+    const children = await this.prisma.treasuryReceivable.findMany({
+      where: { parentId, deletedAt: null, recurrenceId: null },
+      select: { status: true, receivedAmount: true, pendingAmount: true },
+    })
+    if (children.length === 0) return
+    const receivedAmount = children.reduce((s, c) => s + Number(c.receivedAmount ?? 0), 0)
+    const pendingAmount = children.reduce((s, c) => s + Number(c.pendingAmount ?? 0), 0)
+    const allSettled = children.every((c) => c.status === 'SETTLED')
+    const someSettledOrPartial = children.some((c) => c.status === 'SETTLED' || c.status === 'PARTIAL')
+    const status: TreasuryDocStatus = allSettled ? 'SETTLED' : someSettledOrPartial ? 'PARTIAL' : 'OPEN'
+    await this.prisma.treasuryReceivable.update({ where: { id: parentId }, data: { status, receivedAmount, pendingAmount } })
+  }
+
   async settle(clientId: string, id: string) {
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided receivable')
-    return this.prisma.treasuryReceivable.update({
+    const result = await this.prisma.treasuryReceivable.update({
       where: { id },
       data: { status: 'SETTLED', pendingAmount: 0, receivedAmount: item.totalAmount },
     })
+    if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
+    return result
   }
 
   async unsettle(clientId: string, id: string) {
     const item = await this.getById(clientId, id)
     if (item.status !== 'SETTLED') throw httpError(409, 'Apenas documentos liquidados podem ser revertidos')
-    return this.prisma.treasuryReceivable.update({
+    const result = await this.prisma.treasuryReceivable.update({
       where: { id },
       data: { status: 'OPEN', pendingAmount: item.totalAmount, receivedAmount: 0 },
     })
+    if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
+    return result
   }
 
   async partialPayment(clientId: string, id: string, amount: number) {
@@ -212,10 +232,12 @@ export class TreasuryReceivablesService {
     const newReceived = Number(item.receivedAmount ?? 0) + amount
     const newPending = Math.max(0, Number(item.totalAmount) - newReceived)
     const newStatus = newPending < 0.005 ? 'SETTLED' : 'PARTIAL'
-    return this.prisma.treasuryReceivable.update({
+    const result = await this.prisma.treasuryReceivable.update({
       where: { id },
       data: { receivedAmount: newReceived, pendingAmount: newPending, status: newStatus },
     })
+    if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
+    return result
   }
 
   async void(clientId: string, id: string) {
@@ -240,10 +262,11 @@ export class TreasuryReceivablesService {
   async split(clientId: string, userId: string, id: string, installments: Array<{ dueDate: string; amount: number; description?: string }>) {
     const item = await this.getById(clientId, id)
     if (item.status !== 'OPEN') throw httpError(409, 'Só é possível dividir documentos em aberto')
+    if (item.parentId) throw httpError(409, 'Não é possível dividir uma parcela')
+    const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
+    if (splitChildren.length > 0) throw httpError(409, 'Esta fatura já está dividida')
     const total = installments.reduce((s, i) => s + i.amount, 0)
     if (Math.abs(total - Number(item.totalAmount)) > 0.001) throw httpError(400, 'A soma das parcelas não corresponde ao valor original')
-
-    await this.prisma.treasuryReceivable.update({ where: { id }, data: { status: 'VOID', deletedAt: new Date() } })
 
     const children: unknown[] = []
     for (const inst of installments) {
@@ -271,6 +294,19 @@ export class TreasuryReceivablesService {
       children.push(child)
     }
     return children
+  }
+
+  async unsplit(clientId: string, id: string) {
+    const item = await this.getById(clientId, id)
+    const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
+    if (splitChildren.length === 0) throw httpError(409, 'Este documento não tem parcelas para desfazer')
+    const nonOpen = splitChildren.filter((c) => c.status !== 'OPEN')
+    if (nonOpen.length > 0) throw httpError(409, 'Não é possível desfazer: algumas parcelas já foram pagas ou anuladas')
+    await this.prisma.treasuryReceivable.deleteMany({ where: { parentId: id } })
+    return this.prisma.treasuryReceivable.update({
+      where: { id },
+      data: { status: 'OPEN', receivedAmount: 0, pendingAmount: item.totalAmount },
+    })
   }
 
   async deleteByTocCustomerId(clientId: string, tocCustomerId: string) {

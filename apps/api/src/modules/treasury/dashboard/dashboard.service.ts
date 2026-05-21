@@ -38,6 +38,8 @@ export class TreasuryDashboardService {
   }
 
   async getOverview(clientId: string, days = 30) {
+    await this.recurrencesSvc.processForClient(clientId, 30)
+
     const now = new Date()
     const from = new Date(Date.now() - days * 86400000)
 
@@ -191,7 +193,49 @@ export class TreasuryDashboardService {
       return { id: acc.id, name: acc.name, monthlyBalances }
     })
 
-    return { year, accounts: result }
+    const now = new Date()
+    const forecastTotals: (number | null)[] = new Array(12).fill(null)
+
+    if (endOfYear > now) {
+      const horizonDays = Math.ceil((endOfYear.getTime() - now.getTime()) / 86400000) + 30
+      await this.recurrencesSvc.processForClient(clientId, Math.min(horizonDays, 365))
+
+      const futureStart = year === now.getFullYear()
+        ? new Date(now.getFullYear(), now.getMonth() + 1, 1)
+        : new Date(year, 0, 1)
+
+      const [pendingRec, pendingPay] = await Promise.all([
+        this.prisma.treasuryReceivable.findMany({
+          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: futureStart, lte: endOfYear } },
+          select: { dueDate: true, pendingAmount: true },
+        }),
+        this.prisma.treasuryPayable.findMany({
+          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: futureStart, lte: endOfYear } },
+          select: { dueDate: true, pendingAmount: true },
+        }),
+      ])
+
+      const monthlyDelta = new Array(12).fill(0)
+      for (const r of pendingRec) {
+        if (r.dueDate.getFullYear() === year) monthlyDelta[r.dueDate.getMonth()] += Number(r.pendingAmount)
+      }
+      for (const p of pendingPay) {
+        if (p.dueDate.getFullYear() === year) monthlyDelta[p.dueDate.getMonth()] -= Number(p.pendingAmount)
+      }
+
+      const lastRealMonthIdx = year === now.getFullYear() ? now.getMonth() : 11
+      let running = result.reduce((s, a) => s + a.monthlyBalances[lastRealMonthIdx], 0)
+
+      for (let i = 0; i < 12; i++) {
+        const isFuture = year > now.getFullYear() || (year === now.getFullYear() && i > now.getMonth())
+        if (isFuture) {
+          running += monthlyDelta[i]
+          forecastTotals[i] = running
+        }
+      }
+    }
+
+    return { year, accounts: result, forecastTotals }
   }
 
   async getCashFlowMonthly(clientId: string, year: number) {
@@ -250,6 +294,13 @@ export class TreasuryDashboardService {
   async getCashflowStatement(clientId: string, year: number) {
     const start = new Date(year, 0, 1)
     const end = new Date(year, 11, 31, 23, 59, 59)
+    const now = new Date()
+
+    // Generate recurring entries up to end of the requested year when in future
+    if (end > now) {
+      const horizonDays = Math.ceil((end.getTime() - now.getTime()) / 86400000) + 30
+      await this.recurrencesSvc.processForClient(clientId, Math.min(horizonDays, 365))
+    }
 
     const [movements, categories, bankAccounts] = await Promise.all([
       this.prisma.treasuryBankMovement.findMany({
@@ -283,6 +334,29 @@ export class TreasuryDashboardService {
       const amt = Number(m.amount)
       if (amt > 0) monthlyIncome[idx] += amt
       else monthlyExpense[idx] += Math.abs(amt)
+    }
+
+    // Inject pending receivables/payables into future months as forecast
+    if (end > now) {
+      const forecastStart = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+      if (forecastStart <= end) {
+        const [pendingRec, pendingPay] = await Promise.all([
+          this.prisma.treasuryReceivable.findMany({
+            where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: forecastStart, lte: end } },
+            select: { dueDate: true, pendingAmount: true },
+          }),
+          this.prisma.treasuryPayable.findMany({
+            where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: forecastStart, lte: end } },
+            select: { dueDate: true, pendingAmount: true },
+          }),
+        ])
+        for (const r of pendingRec) {
+          if (r.dueDate.getFullYear() === year) monthlyIncome[r.dueDate.getMonth()] += Number(r.pendingAmount)
+        }
+        for (const p of pendingPay) {
+          if (p.dueDate.getFullYear() === year) monthlyExpense[p.dueDate.getMonth()] += Number(p.pendingAmount)
+        }
+      }
     }
 
     const endingBalances = new Array(12).fill(0)
@@ -381,6 +455,8 @@ export class TreasuryDashboardService {
   }
 
   async getCashPositioning(clientId: string, count = 12, startDate?: string) {
+    await this.recurrencesSvc.processForClient(clientId, count * 7 + 14)
+
     const now = new Date()
     now.setHours(0, 0, 0, 0)
 
@@ -446,11 +522,11 @@ export class TreasuryDashboardService {
       }),
       // Only fetch pending docs due AFTER today — docs due today belong to actuals, not forecast
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
+        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
         select: { dueDate: true, pendingAmount: true, categoryId: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
+        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
         select: { dueDate: true, pendingAmount: true, categoryId: true },
       }),
       this.prisma.treasuryCategory.findMany({
@@ -572,11 +648,11 @@ export class TreasuryDashboardService {
 
     const [pendingReceivables, pendingPayables] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: now, lte: new Date(Date.now() + days * 86400000) } },
+        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: now, lte: new Date(Date.now() + days * 86400000) } },
         select: { dueDate: true, pendingAmount: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: now, lte: new Date(Date.now() + days * 86400000) } },
+        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: now, lte: new Date(Date.now() + days * 86400000) } },
         select: { dueDate: true, pendingAmount: true },
       }),
     ])

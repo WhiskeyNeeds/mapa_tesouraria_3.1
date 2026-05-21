@@ -38,6 +38,7 @@ const ACCOUNT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '
 interface AccountMonthlyData {
   year: number
   accounts: Array<{ id: string; name: string; monthlyBalances: number[] }>
+  forecastTotals?: (number | null)[]
 }
 
 interface CashflowStatCategory {
@@ -404,6 +405,10 @@ function CashflowStatementTable() {
     // ── Stacked chart calculations (same logic as monthly view)
     let maxNetPos = 1, maxGrossNeg = 0
     for (const wk of weeks) {
+      if (wk.isFuture) {
+        if (wk.closingBalance > maxNetPos) maxNetPos = wk.closingBalance
+        continue
+      }
       if (!wk.hasData) continue
       const accs = wk.accountBalances ?? []
       const gp = accs.reduce((s, a) => s + Math.max(0, a.balance), 0)
@@ -471,6 +476,7 @@ function CashflowStatementTable() {
                         const netTotal = wk.hasData ? accs.reduce((s, a) => s + a.balance, 0) : 0
                         const grossPos = wk.hasData ? accs.reduce((s, a) => s + Math.max(0, a.balance), 0) : 0
                         const grossNeg = wk.hasData ? accs.reduce((s, a) => s + Math.max(0, -a.balance), 0) : 0
+                        const forecastBarH = wk.isFuture && wk.closingBalance > 0 ? Math.round((wk.closingBalance / sChartMaxPos) * sPosAreaH) : 0
                         const barH = grossPos > 0 ? Math.round((grossPos / sChartMaxPos) * sPosAreaH) : 0
                         const negBarH = grossNeg > 0 && sChartMaxNeg > 0 ? Math.round((grossNeg / sChartMaxNeg) * sNegAreaH) : 0
                         return (
@@ -479,6 +485,9 @@ function CashflowStatementTable() {
                             {...hoverProps(wk.label)}>
                             <div style={{ position: 'absolute', top: CHART_TOP, left: '50%', transform: 'translateX(-13px)', width: 26 }}>
                               <div style={{ height: sPosAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                                {wk.isFuture && forecastBarH > 0 && (
+                                  <div style={{ height: forecastBarH, backgroundColor: '#3b82f6', opacity: 0.22, borderRadius: '2px 2px 0 0' }} />
+                                )}
                                 {barH > 0 && (
                                   <div style={{ height: barH, display: 'flex', flexDirection: 'column-reverse', overflow: 'hidden', borderRadius: '2px 2px 0 0' }}>
                                     {accs.map((acc) => {
@@ -507,6 +516,9 @@ function CashflowStatementTable() {
                             {wk.hasData && netTotal !== 0 && (
                               <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(netTotal) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
                             )}
+                            {wk.isFuture && wk.closingBalance > 0 && (
+                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(wk.closingBalance) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', opacity: 0.4, zIndex: 10 }} />
+                            )}
                             {wk.hasData && (grossPos > 0 || netTotal !== 0) && (
                               <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
                                 <div className="font-medium text-gray-700 mb-1">{wk.label}</div>
@@ -521,6 +533,16 @@ function CashflowStatementTable() {
                                   <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
                                   <span className="text-gray-600">Total:</span>
                                   <span className={`font-semibold ${netTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(netTotal)}</span>
+                                </div>
+                              </div>
+                            )}
+                            {wk.isFuture && (
+                              <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
+                                <div className="font-medium text-gray-500 italic mb-1">{wk.label} (previsão)</div>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
+                                  <span className="text-gray-600">Saldo previsto:</span>
+                                  <span className={`font-semibold ${wk.closingBalance < 0 ? 'text-red-600' : 'text-blue-600'}`}>{formatCurrency(wk.closingBalance)}</span>
                                 </div>
                               </div>
                             )}
@@ -582,8 +604,8 @@ function CashflowStatementTable() {
             <tr className="bg-white border-t-2 border-gray-300">
               <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
               {weeks.map((wk) => (
-                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs font-bold whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${wk.isFuture ? 'text-gray-300' : wk.closingBalance < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(wk.label)}>
-                  {wk.isFuture ? '—' : formatCurrency(wk.closingBalance)}
+                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs font-bold whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${wk.isFuture ? (wk.closingBalance < 0 ? 'text-red-400 italic' : 'text-blue-400 italic') : wk.closingBalance < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(wk.label)}>
+                  {formatCurrency(wk.closingBalance)}
                 </td>
               ))}
               <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
@@ -610,9 +632,13 @@ function CashflowStatementTable() {
     // ── Stacked chart calculations
     let maxNetPos = 1, maxGrossNeg = 0
     for (const col of cols) {
-      if (col.isFuture) continue
       const d = getBalYearData(col.colYear)
       if (!d) continue
+      if (col.isFuture) {
+        const ft = d.forecastTotals?.[col.monthIndices[0]] ?? null
+        if (ft !== null && ft > maxNetPos) maxNetPos = ft
+        continue
+      }
       const gp = d.accounts.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0)
       const gn = d.accounts.reduce((s, a) => s + Math.max(0, -a.monthlyBalances[col.monthIndices[0]]), 0)
       if (gp > maxNetPos) maxNetPos = gp
@@ -678,9 +704,11 @@ function CashflowStatementTable() {
                       {cols.map((col, colIdx) => {
                         const d = getBalYearData(col.colYear)
                         const accs = d?.accounts ?? []
+                        const forecastTotal = col.isFuture ? (d?.forecastTotals?.[col.monthIndices[0]] ?? null) : null
                         const netTotal = !col.isFuture ? accs.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0) : 0
                         const grossPos = !col.isFuture ? accs.reduce((s, a) => s + Math.max(0, a.monthlyBalances[col.monthIndices[0]]), 0) : 0
                         const grossNeg = !col.isFuture ? accs.reduce((s, a) => s + Math.max(0, -a.monthlyBalances[col.monthIndices[0]]), 0) : 0
+                        const forecastBarH = forecastTotal !== null && forecastTotal > 0 ? Math.round((forecastTotal / sChartMaxPos) * sPosAreaH) : 0
                         const barH = grossPos > 0 ? Math.round((grossPos / sChartMaxPos) * sPosAreaH) : 0
                         const negBarH = grossNeg > 0 && sChartMaxNeg > 0 ? Math.round((grossNeg / sChartMaxNeg) * sNegAreaH) : 0
                         return (
@@ -689,6 +717,9 @@ function CashflowStatementTable() {
                             {...hoverProps(col.label)}>
                             <div style={{ position: 'absolute', top: CHART_TOP, left: '50%', transform: 'translateX(-13px)', width: 26 }}>
                               <div style={{ height: sPosAreaH, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                                {col.isFuture && forecastBarH > 0 && (
+                                  <div style={{ height: forecastBarH, backgroundColor: '#3b82f6', opacity: 0.22, borderRadius: '2px 2px 0 0' }} />
+                                )}
                                 {barH > 0 && (
                                   <div style={{ height: barH, display: 'flex', flexDirection: 'column-reverse', overflow: 'hidden', borderRadius: '2px 2px 0 0' }}>
                                     {accs.map((acc) => {
@@ -717,6 +748,9 @@ function CashflowStatementTable() {
                             {!col.isFuture && netTotal !== 0 && (
                               <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(netTotal) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', zIndex: 10 }} />
                             )}
+                            {col.isFuture && forecastTotal !== null && forecastTotal > 0 && (
+                              <div className="absolute left-1/2 -translate-x-1/2 rounded-full pointer-events-none" style={{ top: sTickY(forecastTotal) - 3, width: 6, height: 6, backgroundColor: '#3b82f6', opacity: 0.4, zIndex: 10 }} />
+                            )}
                             {!col.isFuture && (grossPos > 0 || netTotal !== 0) && (
                               <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
                                 <div className="font-medium text-gray-700 mb-1">{col.label}</div>
@@ -734,6 +768,16 @@ function CashflowStatementTable() {
                                   <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
                                   <span className="text-gray-600">Total:</span>
                                   <span className={`font-semibold ${netTotal < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(netTotal)}</span>
+                                </div>
+                              </div>
+                            )}
+                            {col.isFuture && forecastTotal !== null && (
+                              <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-30 text-xs transition-opacity">
+                                <div className="font-medium text-gray-500 italic mb-1">{col.label} (previsão)</div>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-3 h-0.5 rounded flex-shrink-0" style={{ backgroundColor: '#3b82f6' }} />
+                                  <span className="text-gray-600">Saldo previsto:</span>
+                                  <span className={`font-semibold ${forecastTotal < 0 ? 'text-red-600' : 'text-blue-600'}`}>{formatCurrency(forecastTotal)}</span>
                                 </div>
                               </div>
                             )}
@@ -797,9 +841,11 @@ function CashflowStatementTable() {
               {cols.map((col) => {
                 const d = getBalYearData(col.colYear)
                 const total = col.isFuture ? null : d ? d.accounts.reduce((s, a) => s + a.monthlyBalances[col.monthIndices[0]], 0) : null
+                const forecast = col.isFuture ? (d?.forecastTotals?.[col.monthIndices[0]] ?? null) : null
+                const displayVal = total ?? forecast
                 return (
-                  <td key={col.key} className={`px-3 py-2.5 text-right tabular-nums text-xs font-bold whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${col.isFuture ? 'text-gray-300' : total !== null && total < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(col.label)}>
-                    {total === null ? '—' : formatCurrency(total)}
+                  <td key={col.key} className={`px-3 py-2.5 text-right tabular-nums text-xs font-bold whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${col.isFuture ? (forecast !== null ? (forecast < 0 ? 'text-red-400 italic' : 'text-blue-400 italic') : 'text-gray-300') : total !== null && total < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(col.label)}>
+                    {displayVal === null ? '—' : formatCurrency(displayVal)}
                   </td>
                 )
               })}

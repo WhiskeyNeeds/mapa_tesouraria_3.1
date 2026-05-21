@@ -7,6 +7,8 @@ import type { RedisClient } from '../../plugins/redis.js'
 const TOC_STATE_PREFIX = 'toconline:state:'
 
 export class ToconlineService {
+  private refreshLocks = new Map<string, Promise<void>>()
+
   constructor(private prisma: PrismaClient) { }
 
   // ── Config ────────────────────────────────────────────────────────────────
@@ -35,6 +37,7 @@ export class ToconlineService {
     // Strip trailing slashes so paths never double up
     rest.oauthUrl = rest.oauthUrl.trim().replace(/\/+$/, '')
     rest.baseUrl = rest.baseUrl.trim().replace(/\/+$/, '')
+    rest.tocClientId = rest.tocClientId.trim()
     return this.prisma.toconlineConfig.upsert({
       where: { clientId },
       update: { ...rest, tocClientSecret: secretEnc, status: 'UNCONFIGURED', accessToken: null, refreshToken: null },
@@ -53,9 +56,10 @@ export class ToconlineService {
       response_type: 'code',
       client_id: cfg.tocClientId,
       redirect_uri: redirectUri,
+      scope: 'commercial',
       state,
     })
-    return `${cfg.oauthUrl}/oauth/authorize?${params}`
+    return `${cfg.oauthUrl}/auth?${params}`
   }
 
   async handleCallback(code: string, state: string, redis: RedisClient): Promise<void> {
@@ -64,18 +68,20 @@ export class ToconlineService {
     await redis.del(`${TOC_STATE_PREFIX}${state}`)
 
     const cfg = await this.requireConfig(clientId)
-    const redirectUri = this.getRedirectUri()
     const secret = decrypt(cfg.tocClientSecret)
+    const credentials = Buffer.from(`${cfg.tocClientId}:${secret}`).toString('base64')
 
-    const res = await fetch(`${cfg.oauthUrl}/oauth/token`, {
+    const res = await fetch(`${cfg.oauthUrl}/token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'Authorization': `Basic ${credentials}`,
+      },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code,
-        redirect_uri: redirectUri,
-        client_id: cfg.tocClientId,
-        client_secret: secret,
+        scope: 'commercial',
       }),
     })
     if (!res.ok) throw httpError(502, 'TOConline token exchange failed')
@@ -260,7 +266,33 @@ export class ToconlineService {
     return res.json() as Promise<T>
   }
 
-  private async tryRefreshToken(clientId: string, cfg: Awaited<ReturnType<typeof this.requireConfig>>) {
+  private async tryRefreshToken(
+    clientId: string,
+    cfg: Awaited<ReturnType<typeof this.requireConfig>>,
+    force = false,
+  ) {
+    // Serialise refreshes per clientId: parallel callers wait for the in-flight one,
+    // then re-read fresh config — TOConline invalidates the previous refresh_token on each use.
+    const inFlight = this.refreshLocks.get(clientId)
+    if (inFlight) {
+      await inFlight
+      return
+    }
+
+    const job = (async () => {
+      const fresh = await this.requireConfig(clientId)
+      if (!force && fresh.tokenExpiresAt && fresh.tokenExpiresAt.getTime() - Date.now() > 60_000 && fresh.status === 'ACTIVE') {
+        // Another caller already refreshed while we were queued.
+        return
+      }
+      await this.doRefresh(clientId, fresh)
+    })().finally(() => this.refreshLocks.delete(clientId))
+
+    this.refreshLocks.set(clientId, job)
+    await job
+  }
+
+  private async doRefresh(clientId: string, cfg: Awaited<ReturnType<typeof this.requireConfig>>) {
     if (!cfg.refreshToken) {
       const msg = 'Sem refresh token — o access token expirou e não é possível renovar automaticamente. Insira um novo token manualmente.'
       console.error(`[TOConline] no refresh_token for ${clientId}`)
@@ -270,28 +302,36 @@ export class ToconlineService {
 
     const secret = decrypt(cfg.tocClientSecret)
     const rt = decrypt(cfg.refreshToken)
+    const credentials = Buffer.from(`${cfg.tocClientId}:${secret}`).toString('base64')
 
-    const res = await fetch(`${cfg.oauthUrl}/oauth/token`, {
+    const res = await fetch(`${cfg.oauthUrl}/token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'Authorization': `Basic ${credentials}`,
+      },
       body: new URLSearchParams({
         grant_type: 'refresh_token',
         refresh_token: rt,
-        client_id: cfg.tocClientId,
-        client_secret: secret,
+        scope: 'commercial',
       }),
     })
 
     if (!res.ok) {
       let detail = `HTTP ${res.status} ${res.statusText}`
+      let rawBody = ''
+      try { rawBody = await res.clone().text() } catch { /* ignore */ }
       try {
-        const body = await res.json() as Record<string, unknown>
+        const body = JSON.parse(rawBody) as Record<string, unknown>
         detail = body.error_description as string
           ?? body.message as string
           ?? body.error as string
           ?? JSON.stringify(body)
       } catch { /* body não é JSON */ }
-      console.error(`[TOConline] refresh_token failed for ${clientId}: ${detail}`)
+      console.error(`[TOConline] refresh_token failed for ${clientId} (HTTP ${res.status}): ${detail}`)
+      console.error(`[TOConline] refresh raw response body: ${rawBody}`)
+      console.error(`[TOConline] refresh request: oauthUrl=${cfg.oauthUrl}, tocClientId=${cfg.tocClientId}, rt_preview=${rt.slice(0, 4)}...${rt.slice(-4)} (len=${rt.length})`)
       await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: `Refresh falhou: ${detail}` } })
       throw httpError(401, `TOConline refresh falhou: ${detail}`)
     }
@@ -809,6 +849,25 @@ export class ToconlineService {
         console.info(`[TOConline] background token refreshed for ${cfg.clientId}`)
       } catch {
         // error already persisted to DB as ERROR status inside tryRefreshToken
+      }
+    }
+  }
+
+  // Aggressive refresh at server startup: forces a refresh on every config that
+  // still has a refresh_token, regardless of status or expiry. Self-heals ERROR
+  // configs whose refresh_token is still valid, and guarantees a clean baseline
+  // before the dashboard fires its parallel API calls.
+  async refreshAllOnStartup(): Promise<void> {
+    const configs = await this.prisma.toconlineConfig.findMany({
+      where: { refreshToken: { not: null } },
+    })
+    console.info(`[TOConline] startup refresh: ${configs.length} config(s) to process`)
+    for (const cfg of configs) {
+      try {
+        await this.tryRefreshToken(cfg.clientId, cfg, true)
+        console.info(`[TOConline] startup refresh OK for ${cfg.clientId}`)
+      } catch {
+        // error already persisted to DB inside doRefresh
       }
     }
   }

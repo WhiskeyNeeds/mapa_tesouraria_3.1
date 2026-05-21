@@ -65,7 +65,9 @@ interface Receivable {
   tocSalesDocId?: string
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
+  parentId?: string | null
   category?: { id: string; name: string; color: string; launchToc: boolean } | null
+  children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; receivedAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null }>
 }
 interface Category { id: string; name: string; type: string; launchToc: boolean }
 interface TocCustomer { id: string | number; business_name?: string; tax_identification_number?: string;[key: string]: unknown }
@@ -79,6 +81,8 @@ const emptyRecurrence = {
   frequency: 'MONTHLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL',
   dayOfMonth: 1,
   daysOfWeek: [1] as number[],
+  startDayOfMonth: 1,
+  endDayOfMonth: 1,
   endType: 'none' as 'none' | 'date' | 'occurrences',
   endDate: '',
   occurrences: '',
@@ -345,7 +349,7 @@ export default function ReceivablesPage() {
   const [selectedTocCustomer, setSelectedTocCustomer] = useState<TocCustomer | null>(null)
   const customerInputRef = useRef<HTMLDivElement>(null)
   const [panelDoc, setPanelDoc] = useState<Receivable | null>(null)
-  const [splitResult, setSplitResult] = useState<Receivable[] | null>(null)
+  const [panelTocDoc, setPanelTocDoc] = useState<TocSalesDoc | null>(null)
   const [panelTab, setPanelTab] = useState<'details' | 'followups'>('details')
   const [panelSection, setPanelSection] = useState<null | 'promised' | 'split'>(null)
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
@@ -401,6 +405,12 @@ export default function ReceivablesPage() {
     enabled: !!selectedClientId && isTocEnabled,
     retry: false,
     throwOnError: false,
+  })
+
+  const { data: panelDocDetail } = useQuery<Receivable>({
+    queryKey: ['receivable-detail', selectedClientId, panelDoc?.id],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/receivables/${panelDoc!.id}`),
+    enabled: !!selectedClientId && !!panelDoc?.id && panelDoc.origin !== 'TOC',
   })
 
   const { data: tocCustomers = [] } = useQuery<TocCustomer[]>({
@@ -566,14 +576,27 @@ export default function ReceivablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  const unsplitReceivable = useMutation({
+    mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/unsplit`, {}),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['receivables'] })
+      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
+      qc.invalidateQueries({ queryKey: ['receivable-detail', selectedClientId, id] })
+      setPanelDoc((prev) => prev ? { ...prev, status: 'OPEN', children: [] } : prev)
+      toast.success('Divisão desfeita com sucesso.')
+    },
+    onError: () => toast.error('Não foi possível desfazer a divisão.'),
+  })
+
   const splitReceivable = useMutation({
     mutationFn: ({ id, installments }: { id: string; installments: Array<{ dueDate: string; amount: number }> }) =>
       api.post(`/treasury/${selectedClientId}/receivables/${id}/split`, { installments }),
-    onSuccess: (children) => {
+    onSuccess: (children, { id }) => {
       qc.invalidateQueries({ queryKey: ['receivables'] })
       qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
-      setPanelDoc(null)
-      setSplitResult(children as Receivable[])
+      qc.invalidateQueries({ queryKey: ['receivable-detail', selectedClientId, id] })
+      setPanelDoc((prev) => prev ? { ...prev, children: children as Receivable['children'] } : prev)
+      setPanelSection(null)
       toast.success('Fatura dividida com sucesso.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -606,22 +629,59 @@ export default function ReceivablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  const [isAutoImporting, setIsAutoImporting] = useState(false)
+
+  const autoImportAndRun = async (action: (localDoc: Receivable) => void) => {
+    if (!panelDoc || !panelTocDoc || !selectedClientId) return
+    setIsAutoImporting(true)
+    try {
+      const d = panelTocDoc
+      const localDoc = await api.post<Receivable>(`/treasury/${selectedClientId}/receivables`, {
+        entityName: d.customer_business_name,
+        entityNif: d.customer_tax_registration_number ?? undefined,
+        tocCustomerId: d.customer_id ? String(d.customer_id) : undefined,
+        tocSalesDocId: String(d.id),
+        reference: d.document_no,
+        documentDate: d.date,
+        dueDate: d.due_date ?? d.date,
+        totalAmount: d.gross_total,
+        currency: d.currency_iso_code ?? 'EUR',
+      })
+      qc.invalidateQueries({ queryKey: ['receivables'] })
+      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
+      qc.invalidateQueries({ queryKey: ['toc-sales', selectedClientId] })
+      setPanelDoc(localDoc)
+      setPanelTocDoc(null)
+      toast.success('Documento importado do TOConline.')
+      action(localDoc)
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setIsAutoImporting(false)
+    }
+  }
+
   const createOutras = useMutation({
     mutationFn: () => {
+      const recurrentDueDate = (() => {
+        const now = new Date()
+        const d = new Date(now.getFullYear(), now.getMonth(), recForm.startDayOfMonth)
+        if (d <= now) d.setMonth(d.getMonth() + 1)
+        return d.toISOString().slice(0, 10)
+      })()
       const body: Record<string, unknown> = {
         ...(outrasForm.categoryId ? { categoryId: outrasForm.categoryId } : {}),
         entityName: outrasForm.entityName || undefined,
         entityNif: outrasForm.entityNif || undefined,
         reference: outrasForm.reference || undefined,
         description: outrasForm.description || undefined,
-        dueDate: outrasForm.dueDate,
+        dueDate: recForm.isRecurrent ? recurrentDueDate : outrasForm.dueDate,
         totalAmount: parseFloat(outrasForm.totalAmount) || 0,
       }
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
-          ...(recForm.frequency === 'WEEKLY' ? { daysOfWeek: recForm.daysOfWeek.length ? recForm.daysOfWeek : [1] } : {}),
-          ...(['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) ? { dayOfMonth: recForm.dayOfMonth } : {}),
+          dayOfMonth: recForm.startDayOfMonth,
           ...(recForm.endType === 'date' && recForm.endDate ? { endDate: recForm.endDate } : {}),
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
@@ -639,9 +699,7 @@ export default function ReceivablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const outrasRows = isTocEnabled
-    ? (data?.items ?? []).filter((r) => !r.tocSalesDocId)
-    : []
+  const outrasRows = (data?.items ?? []).filter((r) => !r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
 
   const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || isRecurrentFilter || isOverdueFilter)
   function clearFilters() {
@@ -725,9 +783,7 @@ export default function ReceivablesPage() {
     return map
   }, [tocDocs])
 
-  const localForRows = isTocEnabled
-    ? (data?.items ?? []).filter((r) => !!r.tocSalesDocId)
-    : (data?.items ?? [])
+  const localForRows = (data?.items ?? []).filter((r) => !!r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
 
   const rows: Row[] = [
     ...localForRows.map((r) => ({ _src: 'local' as const, r })),
@@ -904,7 +960,7 @@ export default function ReceivablesPage() {
                       if (row._src === 'local') {
                         const r = row.r
                         return (
-                          <tr key={`l-${r.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                          <tr key={`l-${r.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                             <td className="px-5 py-3">
                               <div className="flex items-start gap-1.5">
                                 <span className="w-4 flex-shrink-0" />
@@ -913,7 +969,7 @@ export default function ReceivablesPage() {
                                     <span className="font-medium text-gray-900">{r.reference}</span>
                                     {r.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
                                   </div>
-                                  <div className="text-xs text-gray-400">{formatDate(r.documentDate)}{r.description ? ` · ${r.description}` : ''}</div>
+                                  <div className="text-xs text-gray-400">{r.documentDate ? formatDate(r.documentDate) : ''}{r.description ? ` · ${r.description}` : ''}</div>
                                 </div>
                               </div>
                             </td>
@@ -954,7 +1010,7 @@ export default function ReceivablesPage() {
                                       categoryId: r.category?.id ?? '',
                                       entityName: r.entityName,
                                       reference: r.reference,
-                                      documentDate: r.documentDate.slice(0, 10),
+                                      documentDate: r.documentDate?.slice(0, 10) ?? '',
                                       dueDate: r.dueDate.slice(0, 10),
                                       totalAmount: String(r.totalAmount),
                                       description: r.description ?? '',
@@ -1019,7 +1075,30 @@ export default function ReceivablesPage() {
                       const expandCount = receiptCount + ncs.length
                       return (
                         <Fragment key={key}>
-                          <tr className="hover:bg-green-50 bg-green-50/30 group">
+                          <tr
+                          className="hover:bg-green-50 bg-green-50/30 group cursor-pointer"
+                          onClick={() => {
+                            const s = Number(d.status)
+                            setPanelDoc({
+                              id: String(d.id),
+                              reference: String(d.document_no ?? ''),
+                              entityName: String(d.customer_business_name ?? ''),
+                              documentDate: String(d.date ?? ''),
+                              dueDate: String(d.due_date ?? d.date ?? ''),
+                              totalAmount: Number(d.gross_total),
+                              pendingAmount: Number(d.pending_total),
+                              receivedAmount: Number(d.gross_total) - Number(d.pending_total),
+                              status: s === 3 ? 'SETTLED' : s === 2 ? 'PARTIAL' : s === 4 ? 'VOID' : 'OPEN',
+                              origin: 'TOC',
+                            })
+                            setPanelTocDoc(d)
+                            setPanelTab('details')
+                            setPanelSection(null)
+                            setPanelPromisedDate('')
+                            setSplitCount(2)
+                            setSplitValueMode('EUR')
+                          }}
+                        >
                             <td className="px-5 py-3">
                               <div className="flex items-start gap-1.5">
                                 {expandCount > 0 ? (
@@ -1047,7 +1126,7 @@ export default function ReceivablesPage() {
                             <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
                             <td className="px-5 py-3 text-right font-semibold text-green-700">{formatCurrency(pending)}</td>
                             <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
-                            <td className="px-3 py-3">
+                            <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                               <button
                                 onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
                                 className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg border border-green-200 transition-all whitespace-nowrap"
@@ -1175,7 +1254,7 @@ export default function ReceivablesPage() {
                       const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
                       const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
                       return (
-                        <tr key={`o-${r.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                        <tr key={`o-${r.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                           <td className="px-5 py-3">
                             <div className="flex items-start gap-1.5">
                               <span className="w-4 flex-shrink-0" />
@@ -1691,7 +1770,7 @@ export default function ReceivablesPage() {
                 <select className="input" value={recForm.endType} onChange={(e) => setRecForm({ ...recForm, endType: e.target.value as typeof recForm.endType, endDate: '', occurrences: '' })}>
                   <option value="none">Sem data de fim</option>
                   <option value="date">Na data</option>
-                  <option value="occurrences">Após N ocorrências</option>
+                  <option value="occurrences">Após X ocorrências</option>
                 </select>
               </div>
               {recForm.endType === 'date' && (
@@ -1798,12 +1877,14 @@ export default function ReceivablesPage() {
             <label className="label">Valor (€) <span className="text-red-500">*</span></label>
             <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
           </div>
-          <div>
-            <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
-            <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: e.target.value })} />
-          </div>
+          {!recForm.isRecurrent && (
+            <div>
+              <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
+              <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: e.target.value })} />
+            </div>
+          )}
           <div className="col-span-2">
-            <label className="label">Descrição <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <label className="label">Descrição</label>
             <input className="input" value={outrasForm.description} onChange={(e) => setOutrasForm({ ...outrasForm, description: e.target.value })} placeholder="Notas sobre a operação" />
           </div>
         </div>
@@ -1825,42 +1906,36 @@ export default function ReceivablesPage() {
               <div className="col-span-2">
                 <label className="label">Frequência</label>
                 <select className="input" value={recForm.frequency} onChange={(e) => setRecForm({ ...recForm, frequency: e.target.value as typeof recForm.frequency })}>
-                  <option value="DAILY">Diariamente</option>
-                  <option value="WEEKLY">Semanalmente</option>
                   <option value="MONTHLY">Mensal</option>
                   <option value="QUARTERLY">Trimestral</option>
                   <option value="SEMIANNUAL">Semestral</option>
                   <option value="ANNUAL">Anual</option>
                 </select>
               </div>
-              {recForm.frequency === 'WEEKLY' && (
-                <div className="col-span-2">
-                  <label className="label">Dias da semana</label>
-                  <div className="flex gap-1.5 flex-wrap">
-                    {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((d, i) => (
-                      <button key={i} type="button"
-                        onClick={() => {
-                          const cur = recForm.daysOfWeek
-                          setRecForm({ ...recForm, daysOfWeek: cur.includes(i) ? (cur.length > 1 ? cur.filter(x => x !== i) : cur) : [...cur, i].sort() })
-                        }}
-                        className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${recForm.daysOfWeek.includes(i) ? 'bg-primary-600 border-primary-600 text-white' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
-                      >{d}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
               {['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) && (
-                <div className="col-span-2">
-                  <label className="label">Dia do mês</label>
-                  <input type="number" min="1" max="31" className="input w-24" value={recForm.dayOfMonth} onChange={(e) => setRecForm({ ...recForm, dayOfMonth: parseInt(e.target.value) || 1 })} />
-                </div>
+                <>
+                  <div className="col-span-2">
+                    <label className="label">{recForm.frequency === 'QUARTERLY' ? 'Dia de cobrança' : 'Dia do mês de início de fatura'}</label>
+                    <input type="number" min="1" max="31" className="input w-24" value={recForm.startDayOfMonth} onChange={(e) => {
+                      const val = parseInt(e.target.value) || 1
+                      setRecForm({ ...recForm, startDayOfMonth: val, endDayOfMonth: Math.max(recForm.endDayOfMonth, val) })
+                    }} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="label">Dia do mês de fim de fatura</label>
+                    <input type="number" min={recForm.startDayOfMonth} max="31" className="input w-24" value={recForm.endDayOfMonth} onChange={(e) => setRecForm({ ...recForm, endDayOfMonth: parseInt(e.target.value) || 1 })} />
+                    {recForm.endDayOfMonth < recForm.startDayOfMonth && (
+                      <p className="mt-1 text-xs text-red-600">Deve ser igual ou depois do dia de início ({recForm.startDayOfMonth})</p>
+                    )}
+                  </div>
+                </>
               )}
               <div className="col-span-2">
                 <label className="label">Terminar</label>
                 <select className="input" value={recForm.endType} onChange={(e) => setRecForm({ ...recForm, endType: e.target.value as typeof recForm.endType, endDate: '', occurrences: '' })}>
                   <option value="none">Sem data de fim</option>
                   <option value="date">Na data</option>
-                  <option value="occurrences">Após N ocorrências</option>
+                  <option value="occurrences">Após X ocorrências</option>
                 </select>
               </div>
               {recForm.endType === 'date' && (
@@ -1887,7 +1962,7 @@ export default function ReceivablesPage() {
           <button
             onClick={() => createOutras.mutate()}
             className="btn-primary flex-1"
-            disabled={createOutras.isPending || !outrasForm.totalAmount || !outrasForm.dueDate}
+            disabled={createOutras.isPending || !outrasForm.totalAmount || (!recForm.isRecurrent && !outrasForm.dueDate) || (recForm.isRecurrent && recForm.endDayOfMonth < recForm.startDayOfMonth)}
           >
             {createOutras.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
@@ -1896,42 +1971,30 @@ export default function ReceivablesPage() {
     </div>
     </div>
 
-    {/* ── Painel lateral — resultado de divisão ── */}
-    {splitResult && !panelDoc && (
-      <div className="w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden">
-        <div className="p-5 border-b border-gray-100">
-          <div className="flex items-start justify-between mb-3">
-            <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Fatura dividida</div>
-            <button onClick={() => setSplitResult(null)} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
-          </div>
-          <div className="text-sm font-semibold text-gray-900">{splitResult.length} parcelas criadas</div>
-          <div className="text-xs text-gray-500 mt-1">Clica numa parcela para ver os detalhes.</div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-          {splitResult.map((child, i) => (
-            <button key={child.id}
-              onClick={() => { setPanelDoc(child); setSplitResult(null); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(child.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}
-              className="w-full text-left rounded-xl border border-gray-200 p-3.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-xs font-medium text-gray-400">Parcela {i + 1}</span>
-                <Badge variant={statusVariant(child.status)}>{statusLabel(child.status)}</Badge>
-              </div>
-              <div className="font-semibold text-gray-900">{formatCurrency(child.totalAmount)}</div>
-              <div className="text-xs text-gray-500 mt-0.5">{child.reference} · Venc. {formatDate(child.dueDate)}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-    )}
-
     {/* ── Painel lateral de detalhes ── */}
     {panelDoc && (
       <div className="w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden">
           {/* Cabeçalho */}
           <div className="p-5 border-b border-gray-100">
             <div className="flex items-start justify-between mb-3">
-              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Conta a Receber</div>
-              <button onClick={() => setPanelDoc(null)} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
+              <div className="flex items-center gap-1">
+                {panelDoc.parentId && !panelDoc.recurrenceId && (
+                  <button
+                    onClick={async () => {
+                      const parent = await api.get<Receivable>(`/treasury/${selectedClientId}/receivables/${panelDoc.parentId}`)
+                      setPanelDoc(parent); setPanelTab('details'); setPanelSection(null)
+                      setPanelPromisedDate(parent.promisedPaymentDate?.slice(0, 10) ?? '')
+                      setSplitCount(2); setSplitValueMode('EUR')
+                    }}
+                    className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"
+                    title="Voltar à fatura mãe"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                )}
+                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Conta a Receber</div>
+              </div>
+              <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
             </div>
             <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
             <div className="text-sm font-medium text-primary-700 mt-0.5">{panelDoc.entityName || '—'}</div>
@@ -1943,6 +2006,40 @@ export default function ReceivablesPage() {
               )}
             </div>
           </div>
+
+          {/* Parcelas da fatura dividida */}
+          {((panelDocDetail?.children ?? panelDoc.children) ?? []).length > 0 && (
+            <div className="border-b border-gray-100 px-4 py-3 space-y-2">
+              {(() => { const kids = panelDocDetail?.children ?? panelDoc.children ?? []; return (<>
+              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">{kids.length} parcelas</div>
+              {kids.map((child, i) => (
+                <button key={child.id}
+                  onClick={() => { setPanelDoc(child as Receivable); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(child.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}
+                  className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-xs text-gray-400">Parcela {i + 1}</span>
+                    <Badge variant={statusVariant(child.status)}>{statusLabel(child.status)}</Badge>
+                  </div>
+                  <div className="font-semibold text-sm text-gray-900">{formatCurrency(child.totalAmount)}</div>
+                  <div className="text-xs text-gray-500">{child.reference} · Venc. {formatDate(child.dueDate)}</div>
+                </button>
+              ))}
+              {!panelDoc.recurrenceId && (() => {
+                const allOpen = (panelDocDetail?.children ?? panelDoc.children ?? []).every((c) => c.status === 'OPEN')
+                return (
+                  <button
+                    onClick={() => unsplitReceivable.mutate(panelDoc.id)}
+                    disabled={unsplitReceivable.isPending || !allOpen}
+                    title={!allOpen ? 'Não é possível desfazer: algumas parcelas já foram pagas' : undefined}
+                    className={`w-full text-xs px-3 py-1.5 rounded-lg transition-colors ${allOpen ? 'text-orange-700 hover:text-red-700 border border-orange-200 hover:border-red-300 hover:bg-red-50' : 'text-gray-400 border border-gray-200 cursor-not-allowed'}`}
+                  >
+                    {unsplitReceivable.isPending ? 'A desfazer...' : 'Desfazer divisão'}
+                  </button>
+                )
+              })()}
+              </>); })()}
+            </div>
+          )}
 
           {/* Tabs */}
           <div className="flex border-b border-gray-100">
@@ -1958,6 +2055,16 @@ export default function ReceivablesPage() {
           <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {panelTab === 'details' && (
               <>
+                {/* Banner informativo para documentos TOConline */}
+                {panelDoc.origin === 'TOC' && (
+                  <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl">
+                    <ArrowDownToLine className="w-4 h-4 text-green-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0 text-xs text-green-700">
+                      Documento TOConline — será importado automaticamente ao usar uma acção.
+                    </div>
+                  </div>
+                )}
+
                 {/* Nota de liquidado localmente */}
                 {panelDoc.status === 'SETTLED' && (
                   <div className="flex items-center gap-3 p-3.5 bg-green-50 border border-green-200 rounded-xl">
@@ -1966,12 +2073,15 @@ export default function ReceivablesPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-green-900 text-sm">Marcado como liquidado</div>
-                      <div className="text-xs text-green-600 mt-0.5">Registado manualmente nesta plataforma</div>
+                      <div className="text-xs text-green-600 mt-0.5">
+                        {panelDoc.origin === 'TOC' ? 'Estado do TOConline' : 'Registado manualmente nesta plataforma'}
+                      </div>
                     </div>
                     <button
                       onClick={() => unsettleReceivable.mutate(panelDoc.id)}
-                      disabled={unsettleReceivable.isPending}
-                      className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0"
+                      disabled={unsettleReceivable.isPending || panelDoc.origin === 'TOC'}
+                      title={panelDoc.origin === 'TOC' ? 'Importe este documento para usar esta funcionalidade' : undefined}
+                      className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-green-700 disabled:hover:border-green-200 disabled:hover:bg-transparent"
                     >
                       {unsettleReceivable.isPending ? '...' : 'Anular'}
                     </button>
@@ -1981,9 +2091,15 @@ export default function ReceivablesPage() {
                 {/* Marcar como liquidada */}
                 {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (
                   <button
-                    onClick={() => settleReceivable.mutate(panelDoc.id)}
-                    disabled={settleReceivable.isPending}
-                    className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group"
+                    onClick={() => {
+                      if (panelDoc.origin === 'TOC') {
+                        autoImportAndRun((doc) => settleReceivable.mutate(doc.id))
+                      } else {
+                        settleReceivable.mutate(panelDoc.id)
+                      }
+                    }}
+                    disabled={settleReceivable.isPending || isAutoImporting}
+                    className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
                       <CreditCard className="w-4 h-4 text-green-700" />
@@ -1998,8 +2114,15 @@ export default function ReceivablesPage() {
                 {/* Data prometida */}
                 <div className="rounded-xl border border-gray-200 overflow-hidden">
                   <button
-                    onClick={() => setPanelSection(panelSection === 'promised' ? null : 'promised')}
-                    className="w-full flex items-center gap-3 p-3.5 hover:bg-blue-50 text-left transition-colors group"
+                    onClick={() => {
+                      if (panelDoc.origin === 'TOC') {
+                        autoImportAndRun(() => setPanelSection(panelSection === 'promised' ? null : 'promised'))
+                      } else {
+                        setPanelSection(panelSection === 'promised' ? null : 'promised')
+                      }
+                    }}
+                    disabled={isAutoImporting}
+                    className="w-full flex items-center gap-3 p-3.5 hover:bg-blue-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200 transition-colors">
                       <Clock className="w-4 h-4 text-blue-700" />
@@ -2032,10 +2155,27 @@ export default function ReceivablesPage() {
                 </div>
 
                 {/* Dividir Fatura */}
-                {panelDoc.status === 'OPEN' && (
+                {panelDoc.status === 'OPEN' && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
                   <div className="rounded-xl border border-gray-200 overflow-hidden">
                     <button
                       onClick={() => {
+                        if (panelDoc.origin === 'TOC') {
+                          autoImportAndRun((doc) => {
+                            const n = splitCount
+                            const total = Number(doc.totalAmount)
+                            const tCents = Math.round(total * 100)
+                            const bCents = Math.floor(tCents / n)
+                            const rCents = tCents - bCents * n
+                            const inst = Array.from({ length: n }, (_, i) => {
+                              const dd = new Date(doc.dueDate); dd.setMonth(dd.getMonth() + i)
+                              return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), dueDate: dd.toISOString().slice(0, 10) }
+                            })
+                            setSplitInstallments(inst)
+                            setSplitValueMode('EUR')
+                            setPanelSection('split')
+                          })
+                          return
+                        }
                         if (panelSection !== 'split') {
                           const n = splitCount
                           const total = Number(panelDoc.totalAmount)
@@ -2051,7 +2191,8 @@ export default function ReceivablesPage() {
                         }
                         setPanelSection(panelSection === 'split' ? null : 'split')
                       }}
-                      className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group"
+                      disabled={isAutoImporting}
+                      className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
                         <Scissors className="w-4 h-4 text-purple-700" />
