@@ -1,9 +1,19 @@
 import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { computeNextDate } from '../recurrences/utils.js'
+import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
+import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
+import { audit, diffEntity } from '../../../lib/audit.js'
+import { matchClassificationRule } from '../../../lib/classification.js'
 
 export class TreasuryPayablesService {
-  constructor(private prisma: PrismaClient) {}
+  private recurrencesSvc: TreasuryRecurrencesService
+  private budgetsSvc: TreasuryBudgetsService
+
+  constructor(private prisma: PrismaClient) {
+    this.recurrencesSvc = new TreasuryRecurrencesService(prisma)
+    this.budgetsSvc = new TreasuryBudgetsService(prisma)
+  }
 
   async list(clientId: string, filters: {
     status?: TreasuryDocStatus | TreasuryDocStatus[]
@@ -22,6 +32,11 @@ export class TreasuryPayablesService {
     page?: number
     limit?: number
   }) {
+    // Materialise pending recurrence instances within the 180-day horizon so the list
+    // surfaces the "Futuras" tab content without waiting on a dashboard view to trigger
+    // the engine. Idempotent: returns immediately when there's nothing to generate.
+    await this.recurrencesSvc.processForClient(clientId, 180)
+
     const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const effectiveStatusFilter = overdue
       ? { status: { in: ['OPEN', 'PARTIAL'] as TreasuryDocStatus[] } }
@@ -60,7 +75,10 @@ export class TreasuryPayablesService {
       this.prisma.treasuryPayable.count({ where }),
       this.prisma.treasuryPayable.findMany({
         where,
-        include: { category: { select: { id: true, name: true, color: true, launchToc: true } } },
+        include: {
+          category: { select: { id: true, name: true, color: true, launchToc: true } },
+          children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
+        },
         orderBy: { [sortBy]: sortDir },
         skip: (page - 1) * limit,
         take: limit,
@@ -97,12 +115,67 @@ export class TreasuryPayablesService {
     totalAmount: number
     currency?: string
     recurrenceId?: string
+    budgetId?: string
+    budgetCategoryId?: string
     recurrence?: { frequency: TreasuryRecurrenceFrequency; endDate?: string; occurrences?: number }
   }) {
+    // Auto-categorização (categoria de movimentos): regras primeiro, histórico depois.
+    // Só corre se o utilizador NÃO enviou categoryId explicitamente; um valor manual prevalece.
+    if (!data.categoryId) {
+      const rules = await this.prisma.treasuryClassificationRule.findMany({
+        where: { clientId, isActive: true },
+        orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, direction: true, amountMin: true, amountMax: true, matchField: true, matchOp: true, matchValue: true, categoryId: true },
+      })
+      const matched = matchClassificationRule(rules, {
+        amount: data.totalAmount,
+        type: 'EXPENSE',
+        description: data.description ?? data.reference ?? null,
+        counterpartName: data.entityName ?? null,
+      })
+      if (matched) {
+        data.categoryId = matched.categoryId
+      } else if (data.entityName || data.tocSupplierId) {
+        const last = await this.prisma.treasuryPayable.findFirst({
+          where: {
+            clientId, deletedAt: null,
+            categoryId: { not: null },
+            OR: [
+              ...(data.tocSupplierId ? [{ tocSupplierId: data.tocSupplierId }] : []),
+              ...(data.entityName ? [{ entityName: data.entityName }] : []),
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { categoryId: true, budgetCategoryId: true },
+        })
+        if (last?.categoryId) data.categoryId = last.categoryId
+        if (!data.budgetCategoryId && last?.budgetCategoryId) data.budgetCategoryId = last.budgetCategoryId
+      }
+    }
+
     let category = null
     if (data.categoryId) {
       category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
       if (!category) throw httpError(404, 'Category not found')
+    }
+
+    if (data.budgetCategoryId) {
+      const bc = await this.prisma.treasuryBudgetCategory.findFirst({ where: { id: data.budgetCategoryId, clientId, deletedAt: null } })
+      if (!bc) throw httpError(404, 'Categoria de budget não encontrada')
+      if (bc.type !== 'EXPENSE') throw httpError(400, `Categoria de budget '${bc.name}' é de Receita; não pode ser associada a uma conta a pagar`)
+    }
+
+    if (data.budgetId) {
+      await this.budgetsSvc.assertCompatible(clientId, data.budgetId, 'EXPENSE')
+    }
+
+    // Auto-associação: se o utilizador escolheu uma categoria de budget mas não escolheu budget,
+    // e existir exatamente um budget ativo de despesa que cobre essa categoria de budget, associa-o.
+    // Múltiplos matches → não decide automaticamente (utilizador escolhe).
+    let resolvedBudgetId = data.budgetId
+    if (!resolvedBudgetId && data.budgetCategoryId) {
+      const autoBudget = await this.budgetsSvc.findBudgetForBudgetCategory(clientId, data.budgetCategoryId, 'EXPENSE')
+      if (autoBudget) resolvedBudgetId = autoBudget
     }
 
     if (data.tocPurchasesDocId) {
@@ -129,7 +202,7 @@ export class TreasuryPayablesService {
       recurrenceId = rec.id
     }
 
-    return this.prisma.treasuryPayable.create({
+    const created = await this.prisma.treasuryPayable.create({
       data: {
         clientId,
         createdById: userId,
@@ -147,17 +220,46 @@ export class TreasuryPayablesService {
         reference: data.reference ?? null,
         description: data.description,
         recurrenceId,
+        ...(resolvedBudgetId ? { budgetId: resolvedBudgetId } : {}),
+        ...(data.budgetCategoryId ? { budgetCategoryId: data.budgetCategoryId } : {}),
       },
     })
+
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'payable.create',
+      entityType: 'Payable', entityId: created.id,
+      payload: {
+        source: data.tocPurchasesDocId ? 'TOCONLINE' : 'MANUAL',
+        snapshot: {
+          reference: created.reference,
+          entityName: created.entityName,
+          totalAmount: Number(created.totalAmount.toString()),
+          dueDate: created.dueDate.toISOString(),
+          categoryId: created.categoryId,
+          recurrenceId: created.recurrenceId,
+        },
+      },
+    })
+
+    // When a new recurrence template was just created, kick off the engine immediately
+    // so the user sees the future instances populated in the "Futuras" tab on next list.
+    if (data.recurrence) {
+      await this.recurrencesSvc.processForClient(clientId, 180)
+    }
+
+    return created
   }
 
-  async update(clientId: string, id: string, data: Partial<{
+  async update(clientId: string, userId: string, id: string, data: Partial<{
     entityName: string
     description: string
     reference: string
     documentDate: string
     dueDate: string
     categoryId: string
+    budgetCategoryId: string | null
+    budgetId: string | null
     totalAmount: number
     status: TreasuryDocStatus
   }>) {
@@ -174,8 +276,36 @@ export class TreasuryPayablesService {
     if (data.categoryId) {
       const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
       if (!category) throw httpError(404, 'Category not found')
+      if (category.type !== 'EXPENSE') throw httpError(400, `Categoria '${category.name}' é de Receita; não pode ser associada a uma conta a pagar`)
       updateData.category = { connect: { id: data.categoryId } }
       updateData.origin = category.launchToc ? 'TOCONLINE' : 'LOCAL'
+    }
+
+    if (data.budgetCategoryId !== undefined) {
+      if (data.budgetCategoryId === null) {
+        updateData.budgetCategory = { disconnect: true }
+      } else {
+        const bc = await this.prisma.treasuryBudgetCategory.findFirst({ where: { id: data.budgetCategoryId, clientId, deletedAt: null } })
+        if (!bc) throw httpError(404, 'Categoria de budget não encontrada')
+        if (bc.type !== 'EXPENSE') throw httpError(400, `Categoria de budget '${bc.name}' é de Receita; não pode ser associada a uma conta a pagar`)
+        updateData.budgetCategory = { connect: { id: data.budgetCategoryId } }
+
+        // Auto-associação: se a fatura ainda não tem budget e a categoria de budget
+        // resolver para exatamente um budget ativo, associa.
+        if (!item.budgetId && data.budgetId === undefined) {
+          const autoBudget = await this.budgetsSvc.findBudgetForBudgetCategory(clientId, data.budgetCategoryId, 'EXPENSE')
+          if (autoBudget) updateData.budget = { connect: { id: autoBudget } }
+        }
+      }
+    }
+
+    if (data.budgetId !== undefined) {
+      if (data.budgetId === null) {
+        updateData.budget = { disconnect: true }
+      } else {
+        await this.budgetsSvc.assertCompatible(clientId, data.budgetId, 'EXPENSE')
+        updateData.budget = { connect: { id: data.budgetId } }
+      }
     }
 
     if (data.totalAmount !== undefined) {
@@ -184,13 +314,28 @@ export class TreasuryPayablesService {
       updateData.pendingAmount = data.totalAmount
     }
 
-    return this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
+    const updated = await this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
+
+    const changes = diffEntity(
+      item as unknown as Record<string, unknown>,
+      updated as unknown as Record<string, unknown>,
+    )
+    if (Object.keys(changes).length > 0) {
+      await audit(this.prisma, {
+        clientId, userId,
+        action: 'payable.update',
+        entityType: 'Payable', entityId: id,
+        payload: { changes },
+      })
+    }
+
+    return updated
   }
 
   private async syncParentStatus(clientId: string, parentId: string) {
     const children = await this.prisma.treasuryPayable.findMany({
       where: { parentId, deletedAt: null, recurrenceId: null },
-      select: { status: true, paidAmount: true, pendingAmount: true },
+      select: { status: true, paidAmount: true, pendingAmount: true, promisedPaymentDate: true, dueDate: true },
     })
     if (children.length === 0) return
     const paidAmount = children.reduce((s, c) => s + Number(c.paidAmount ?? 0), 0)
@@ -198,33 +343,95 @@ export class TreasuryPayablesService {
     const allSettled = children.every((c) => c.status === 'SETTLED')
     const someSettledOrPartial = children.some((c) => c.status === 'SETTLED' || c.status === 'PARTIAL')
     const status: TreasuryDocStatus = allSettled ? 'SETTLED' : someSettledOrPartial ? 'PARTIAL' : 'OPEN'
-    await this.prisma.treasuryPayable.update({ where: { id: parentId }, data: { status, paidAmount, pendingAmount } })
+
+    // Earliest pending parcela drives the parent's promisedPaymentDate.
+    // SETTLED/VOID children are excluded (already paid or cancelled).
+    const pendingDates = children
+      .filter((c) => c.status !== 'SETTLED' && c.status !== 'VOID')
+      .map((c) => c.promisedPaymentDate ?? c.dueDate)
+      .filter((d): d is Date => d != null)
+    const promisedPaymentDate = pendingDates.length > 0
+      ? pendingDates.reduce((min, d) => d < min ? d : min, pendingDates[0])
+      : null
+    await this.prisma.treasuryPayable.update({ where: { id: parentId }, data: { status, paidAmount, pendingAmount, promisedPaymentDate } })
   }
 
-  async settle(clientId: string, id: string) {
+  async settle(clientId: string, userId: string, id: string) {
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided payable')
-    const result = await this.prisma.treasuryPayable.update({
-      where: { id },
-      data: { status: 'SETTLED', pendingAmount: 0, paidAmount: item.totalAmount },
+    if (item.recurrenceId && item.parentId) {
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+      if (item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
+    }
+
+    const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status !== 'SETTLED' && c.status !== 'VOID')
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const parent = await tx.treasuryPayable.update({
+        where: { id },
+        data: { status: 'SETTLED', pendingAmount: 0, paidAmount: item.totalAmount, promisedPaymentDate: null },
+      })
+      // Cascade: settling a parent settles all its non-recurring open/partial children at once.
+      if (splitChildren.length > 0) {
+        await tx.$executeRaw`
+          UPDATE "treasury_payables"
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "updatedAt" = NOW()
+          WHERE "parentId" = ${id}
+            AND "recurrenceId" IS NULL
+            AND "deletedAt" IS NULL
+            AND "status" NOT IN ('SETTLED', 'VOID')
+        `
+      }
+      await audit(tx, {
+        clientId, userId,
+        action: 'payable.settle',
+        entityType: 'Payable', entityId: id,
+        payload: { from: item.status, to: 'SETTLED', cascadedChildren: splitChildren.length },
+      })
+      return parent
     })
+
     if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
     return result
   }
 
-  async unsettle(clientId: string, id: string) {
+  async unsettle(clientId: string, userId: string, id: string) {
     const item = await this.getById(clientId, id)
     if (item.status !== 'SETTLED') throw httpError(409, 'Apenas documentos liquidados podem ser revertidos')
-    const result = await this.prisma.treasuryPayable.update({
-      where: { id },
-      data: { status: 'OPEN', pendingAmount: item.totalAmount, paidAmount: 0 },
+
+    const settledChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status === 'SETTLED')
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const parent = await tx.treasuryPayable.update({
+        where: { id },
+        data: { status: 'OPEN', pendingAmount: item.totalAmount, paidAmount: 0 },
+      })
+      // Cascade: reverting the parent reverts every SETTLED non-recurring child.
+      if (settledChildren.length > 0) {
+        await tx.$executeRaw`
+          UPDATE "treasury_payables"
+          SET "status" = 'OPEN', "pendingAmount" = "totalAmount", "paidAmount" = 0, "updatedAt" = NOW()
+          WHERE "parentId" = ${id}
+            AND "recurrenceId" IS NULL
+            AND "deletedAt" IS NULL
+            AND "status" = 'SETTLED'
+        `
+      }
+      await audit(tx, {
+        clientId, userId,
+        action: 'payable.unsettle',
+        entityType: 'Payable', entityId: id,
+        payload: { from: 'SETTLED', to: 'OPEN', cascadedChildren: settledChildren.length },
+      })
+      return parent
     })
+
     if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
     return result
   }
 
-  async partialPayment(clientId: string, id: string, amount: number) {
+  async partialPayment(clientId: string, userId: string, id: string, amount: number) {
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
@@ -236,30 +443,84 @@ export class TreasuryPayablesService {
       where: { id },
       data: { paidAmount: newPaid, pendingAmount: newPending, status: newStatus },
     })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'payable.partial_payment',
+      entityType: 'Payable', entityId: id,
+      payload: { amount, from: item.status, to: newStatus, newPaid, newPending },
+    })
     if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
     return result
   }
 
-  async void(clientId: string, id: string) {
+  async void(clientId: string, userId: string, id: string) {
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Cannot void a settled payable')
-    return this.prisma.treasuryPayable.update({ where: { id }, data: { status: 'VOID' } })
-  }
-
-  async delete(clientId: string, id: string) {
-    await this.getById(clientId, id)
-    return this.prisma.treasuryPayable.update({ where: { id }, data: { deletedAt: new Date() } })
-  }
-
-  async setPromisedDate(clientId: string, id: string, date: string | null) {
-    await this.getById(clientId, id)
-    return this.prisma.treasuryPayable.update({
-      where: { id },
-      data: { promisedPaymentDate: date ? new Date(date) : null },
+    const result = await this.prisma.treasuryPayable.update({ where: { id }, data: { status: 'VOID' } })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'payable.void',
+      entityType: 'Payable', entityId: id,
+      payload: { from: item.status, to: 'VOID' },
     })
+    return result
   }
 
-  async split(clientId: string, userId: string, id: string, installments: Array<{ dueDate: string; amount: number; description?: string }>) {
+  async delete(clientId: string, userId: string, id: string) {
+    const item = await this.getById(clientId, id)
+    // Cascade total when the deleted item is the recurrence root: soft-delete every
+    // sibling instance (past and future) and deactivate the recurrence so nothing
+    // else gets generated. Past instances live on solely through the audit log.
+    if (item.recurrenceId && !item.parentId) {
+      const now = new Date()
+      return this.prisma.$transaction(async (tx) => {
+        const affected = await tx.treasuryPayable.updateMany({
+          where: { clientId, recurrenceId: item.recurrenceId!, deletedAt: null },
+          data: { deletedAt: now },
+        })
+        await tx.treasuryRecurrence.update({
+          where: { id: item.recurrenceId! },
+          data: { isActive: false },
+        })
+        await audit(tx, {
+          clientId, userId,
+          action: 'payable.delete',
+          entityType: 'Payable', entityId: id,
+          payload: { recurrenceCascade: true, affectedCount: affected.count, recurrenceId: item.recurrenceId },
+        })
+        return tx.treasuryPayable.findUnique({ where: { id } })
+      })
+    }
+    const result = await this.prisma.treasuryPayable.update({ where: { id }, data: { deletedAt: new Date() } })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'payable.delete',
+      entityType: 'Payable', entityId: id,
+      payload: { reference: item.reference, totalAmount: Number(item.totalAmount.toString()) },
+    })
+    return result
+  }
+
+  async setPromisedDate(clientId: string, userId: string, id: string, date: string | null) {
+    const item = await this.getById(clientId, id)
+    const newDate = date ? new Date(date) : null
+    const result = await this.prisma.treasuryPayable.update({
+      where: { id },
+      data: { promisedPaymentDate: newDate },
+    })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'payable.set_promised_date',
+      entityType: 'Payable', entityId: id,
+      payload: {
+        from: item.promisedPaymentDate?.toISOString() ?? null,
+        to: newDate?.toISOString() ?? null,
+      },
+    })
+    return result
+  }
+
+  async split(clientId: string, userId: string, id: string, installments: Array<{ promisedPaymentDate: string; amount: number; description?: string }>) {
     const item = await this.getById(clientId, id)
     if (item.status !== 'OPEN') throw httpError(409, 'Só é possível dividir documentos em aberto')
     if (item.parentId) throw httpError(409, 'Não é possível dividir uma parcela')
@@ -268,45 +529,88 @@ export class TreasuryPayablesService {
     const total = installments.reduce((s, i) => s + i.amount, 0)
     if (Math.abs(total - Number(item.totalAmount)) > 0.001) throw httpError(400, 'A soma das parcelas não corresponde ao valor original')
 
-    const children: unknown[] = []
-    for (const inst of installments) {
-      const idx: number = children.length + 1
-      const child = await this.prisma.treasuryPayable.create({
-        data: {
-          clientId,
-          createdById: userId,
-          origin: item.origin,
-          categoryId: item.categoryId,
-          entityName: item.entityName,
-          entityNif: item.entityNif ?? undefined,
-          tocSupplierId: item.tocSupplierId ?? undefined,
-          tocPurchasesDocId: item.tocPurchasesDocId ?? undefined,
-          reference: `${item.reference}-${idx}`,
-          description: inst.description ?? item.description ?? undefined,
-          documentDate: item.documentDate,
-          dueDate: new Date(inst.dueDate),
-          currency: item.currency,
-          totalAmount: inst.amount,
-          pendingAmount: inst.amount,
-          parentId: id,
-        },
+    // Fallback when reference is null/empty (e.g., user-created Outras without reference):
+    // derive a unique base from the parent's id so child refs never collide across documents.
+    const refBase = item.reference?.trim() || `OP-${id.slice(-6)}`
+
+    // Pre-compute the earliest installment payment date — used as the parent's promisedPaymentDate
+    // so the parent reflects when the next payment commitment is due.
+    const paymentDates = installments.map((i) => new Date(i.promisedPaymentDate))
+    const minPaymentDate = paymentDates.reduce((min, d) => d < min ? d : min, paymentDates[0])
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const children = []
+        for (let i = 0; i < installments.length; i++) {
+          const inst = installments[i]
+          const child = await tx.treasuryPayable.create({
+            data: {
+              clientId,
+              createdById: userId,
+              origin: item.origin,
+              categoryId: item.categoryId,
+              entityName: item.entityName,
+              entityNif: item.entityNif ?? undefined,
+              tocSupplierId: item.tocSupplierId ?? undefined,
+              tocPurchasesDocId: item.tocPurchasesDocId ?? undefined,
+              reference: `${refBase}-${i + 1}`,
+              description: inst.description ?? item.description ?? undefined,
+              documentDate: item.documentDate,
+              dueDate: item.dueDate,
+              promisedPaymentDate: new Date(inst.promisedPaymentDate),
+              currency: item.currency,
+              totalAmount: inst.amount,
+              pendingAmount: inst.amount,
+              parentId: id,
+            },
+          })
+          children.push(child)
+        }
+        await tx.treasuryPayable.update({
+          where: { id },
+          data: { promisedPaymentDate: minPaymentDate },
+        })
+        await audit(tx, {
+          clientId, userId,
+          action: 'payable.split',
+          entityType: 'Payable', entityId: id,
+          payload: {
+            installments: installments.map((inst, i) => ({
+              reference: `${refBase}-${i + 1}`,
+              amount: inst.amount,
+              promisedPaymentDate: inst.promisedPaymentDate,
+            })),
+            childIds: children.map((c) => c.id),
+          },
+        })
+        return children
       })
-      children.push(child)
+    } catch (err) {
+      if (err && typeof err === 'object' && 'code' in err && err.code === 'P2002') {
+        throw httpError(409, `Já existe um documento com referência derivada de "${refBase}". Edite a referência do documento original antes de o dividir.`)
+      }
+      throw err
     }
-    return children
   }
 
-  async unsplit(clientId: string, id: string) {
+  async unsplit(clientId: string, userId: string, id: string) {
     const item = await this.getById(clientId, id)
     const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
     if (splitChildren.length === 0) throw httpError(409, 'Este documento não tem parcelas para desfazer')
     const nonOpen = splitChildren.filter((c) => c.status !== 'OPEN')
     if (nonOpen.length > 0) throw httpError(409, 'Não é possível desfazer: algumas parcelas já foram pagas ou anuladas')
     await this.prisma.treasuryPayable.deleteMany({ where: { parentId: id } })
-    return this.prisma.treasuryPayable.update({
+    const result = await this.prisma.treasuryPayable.update({
       where: { id },
       data: { status: 'OPEN', paidAmount: 0, pendingAmount: item.totalAmount },
     })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'payable.unsplit',
+      entityType: 'Payable', entityId: id,
+      payload: { removedChildIds: splitChildren.map((c) => c.id) },
+    })
+    return result
   }
 
   async deleteByTocSupplierId(clientId: string, tocSupplierId: string) {

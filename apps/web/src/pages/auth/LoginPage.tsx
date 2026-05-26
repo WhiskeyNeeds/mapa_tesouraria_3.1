@@ -75,13 +75,8 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-sm font-medium text-gray-700">Password</label>
-                <Link to="/auth/forgot-password" className="text-xs text-primary-600 hover:text-primary-700 font-medium">
-                  Esqueceu?
-                </Link>
-              </div>
+            <div className="relative">
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
@@ -101,6 +96,11 @@ export default function LoginPage() {
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+              {/* Link colocado depois do input no DOM (apesar de aparecer visualmente
+                  alinhado com o label) para que o TAB vá: email → password → link. */}
+              <Link to="/auth/forgot-password" className="absolute top-0 right-0 text-xs text-primary-600 hover:text-primary-700 font-medium">
+                Esqueceu-se da palavra-passe?
+              </Link>
             </div>
 
             {error && (

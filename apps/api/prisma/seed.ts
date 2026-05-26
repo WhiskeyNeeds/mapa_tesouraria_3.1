@@ -40,8 +40,29 @@ async function main() {
   })
   console.log(`✅ Admin user: ${admin.email}`)
 
+  // ── Demo company ───────────────────────────────────────────────────────────
+  const demoClient = await prisma.client.upsert({
+    where: { nif: '500000001' },
+    update: {},
+    create: {
+      name: 'Empresa Demo',
+      nif: '500000001',
+      companyType: 'MICRO',
+      countryCode: 'PT',
+      isActive: true,
+    },
+  })
+
+  await prisma.userClient.upsert({
+    where: { userId_clientId: { userId: admin.id, clientId: demoClient.id } },
+    update: {},
+    create: { userId: admin.id, clientId: demoClient.id },
+  })
+  console.log(`✅ Empresa demo: ${demoClient.name} (NIF ${demoClient.nif})`)
+
   console.log('\n🎉 Seed complete!')
   console.log(`   Admin login: admin@mapa-tesouraria.pt / admin123`)
+  console.log(`   Empresa selecionável após login: ${demoClient.name}`)
 }
 
 main()

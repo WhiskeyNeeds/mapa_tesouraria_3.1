@@ -503,6 +503,54 @@ export class ToconlineService {
     return this.unwrapArray(raw)
   }
 
+  /**
+   * Descarrega o PDF de um documento TOConline (venda ou compra).
+   * Documento tem de estar finalizado (status = 1) para o endpoint devolver o link.
+   * Retorna `null` se o doc ainda não está finalizado ou se o link não vier.
+   */
+  async downloadInvoicePdf(
+    clientId: string,
+    direction: 'RECEIVABLE' | 'PAYABLE',
+    docId: string,
+  ): Promise<Buffer | null> {
+    const filterType = direction === 'RECEIVABLE' ? 'Document' : 'PurchasesDocument'
+    const path = `/api/url_for_print/${docId}?filter[type]=${filterType}&filter[copies]=1`
+
+    const raw = await this.apiGet<unknown>(clientId, path)
+    const link = this.extractPrintLink(raw)
+    if (!link) {
+      console.warn(`[TOConline] sem link de impressão para ${direction} ${docId} (doc finalizado?)`)
+      return null
+    }
+
+    const res = await fetch(link)
+    if (!res.ok) throw httpError(res.status, `Falha a descarregar PDF: ${res.statusText}`)
+    const buf = await res.arrayBuffer()
+    return Buffer.from(buf)
+  }
+
+  private extractPrintLink(raw: unknown): string | null {
+    if (!raw || typeof raw !== 'object') return null
+    const obj = raw as Record<string, unknown>
+    const candidates: Record<string, unknown>[] = []
+    if (obj.data && typeof obj.data === 'object') {
+      const d = obj.data as Record<string, unknown>
+      if (d.attributes && typeof d.attributes === 'object') candidates.push(d.attributes as Record<string, unknown>)
+      candidates.push(d)
+    }
+    candidates.push(obj)
+
+    for (const c of candidates) {
+      const scheme = typeof c.scheme === 'string' ? c.scheme : null
+      const host = typeof c.host === 'string' ? c.host : null
+      const path = typeof c.path === 'string' ? c.path : null
+      if (scheme && host && path) return `${scheme}://${host}${path}`
+      const url = typeof c.url === 'string' ? c.url : null
+      if (url) return url
+    }
+    return null
+  }
+
   // Unwraps common API response envelopes ({ data: [...] }, { items: [...] }, etc.)
   // without touching individual item structure (unlike apiGetFlat which flattens JSON:API attributes).
   private unwrapArray(raw: unknown): Record<string, unknown>[] {

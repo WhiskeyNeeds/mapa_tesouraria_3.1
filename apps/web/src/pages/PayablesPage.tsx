@@ -4,11 +4,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { formatCurrency, formatDate, statusLabel, statusVariant, tocStatusLabel, tocStatusVariant } from '@/lib/utils'
+import { formatCurrency, formatDate, isWeekend, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel, tocStatusVariant } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
+import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, Printer, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
+import FollowupsPanel from '@/components/followups/FollowupsPanel'
 
 interface TocPurchaseDoc {
   id: number
@@ -66,22 +68,24 @@ interface Payable {
   promisedPaymentDate?: string | null
   parentId?: string | null
   category?: { id: string; name: string; color: string; launchToc: boolean } | null
-  children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null }>
+  children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
 }
 interface Category { id: string; name: string; type: string; launchToc: boolean }
+interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
+interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
 interface TocSupplier { id: string | number; business_name?: string; tax_registration_number?: string; [key: string]: unknown }
 
 const emptyForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  dueDate: '', totalAmount: '', currency: 'EUR',
+  dueDate: '', totalAmount: '', currency: 'EUR', budgetId: '', budgetCategoryId: '',
 }
 const emptyRecurrence = {
   isRecurrent: false,
   frequency: 'MONTHLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL',
   dayOfMonth: 1,
   daysOfWeek: [1] as number[],
-  startDayOfMonth: 1,
-  endDayOfMonth: 1,
+  cycleStartDate: '',
+  cycleEndDate: '',
   endType: 'none' as 'none' | 'date' | 'occurrences',
   endDate: '',
   occurrences: '',
@@ -89,20 +93,22 @@ const emptyRecurrence = {
 const emptyTocLine = { description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
 const emptyOutrasForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  dueDate: '', totalAmount: '',
+  dueDate: '', totalAmount: '', budgetId: '', budgetCategoryId: '',
 }
 const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
+
 
 type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc }
 
 function PaymentDetailModal({
-  open, onClose, payment, clientId, entityName,
+  open, onClose, payment, clientId, entityName, onInvoiceClick,
 }: {
   open: boolean
   onClose: () => void
   payment: TocPayment | null
   clientId: string
   entityName: string
+  onInvoiceClick?: (payableId: string | number) => void
 }) {
   const { data: lines = [], isLoading } = useQuery<PaymentLine[]>({
     queryKey: ['toc-payment-lines', clientId, String(payment?.id ?? '')],
@@ -175,8 +181,13 @@ function PaymentDetailModal({
                     const retentionValue = Number(line.retention_total ?? 0)
                     const discountPct = Number(line.settlement_percentage ?? 0)
                     const discountValue = Number(line.settlement_amount ?? 0)
+                    const canNavigate = !!onInvoiceClick && line.payable_id != null
                     return (
-                      <tr key={i} className={i % 2 === 0 ? 'bg-slate-50/60' : 'bg-white'}>
+                      <tr
+                        key={i}
+                        className={`${i % 2 === 0 ? 'bg-slate-50/60' : 'bg-white'} ${canNavigate ? 'cursor-pointer hover:bg-primary-50' : ''}`}
+                        onClick={canNavigate ? () => onInvoiceClick!(line.payable_id as string | number) : undefined}
+                      >
                         <td className="px-3 py-2 border-b border-gray-100">
                           <div className="font-medium text-gray-700">{line.document_no ?? String(line.payable_id)}</div>
                           {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
@@ -226,9 +237,7 @@ function PaymentDetailModal({
   )
 }
 
-function PaymentSubRows({ clientId, tocDocId, entityName }: { clientId: string; tocDocId: string; entityName: string }) {
-  const [detailPayment, setDetailPayment] = useState<TocPayment | null>(null)
-
+function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { clientId: string; tocDocId: string; entityName: string; onPaymentClick: (pm: TocPayment) => void }) {
   const { data: payments = [], isLoading } = useQuery<TocPayment[]>({
     queryKey: ['toc-purchase-payments', clientId, tocDocId],
     queryFn: () => api.get(`/toconline/${clientId}/purchases/${tocDocId}/payments`),
@@ -260,7 +269,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName }: { clientId: string; 
         <tr
           key={String(pm.id)}
           className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-red-50/40"
-          onClick={() => setDetailPayment(pm)}
+          onClick={() => onPaymentClick(pm)}
         >
           <td className="pl-10 pr-3 py-2">
             <div className="flex items-center gap-2 text-xs">
@@ -277,16 +286,6 @@ function PaymentSubRows({ clientId, tocDocId, entityName }: { clientId: string; 
           <td className="px-3 py-2" />
         </tr>
       ))}
-      {createPortal(
-        <PaymentDetailModal
-          open={!!detailPayment}
-          onClose={() => setDetailPayment(null)}
-          payment={detailPayment}
-          clientId={clientId}
-          entityName={entityName}
-        />,
-        document.body
-      )}
     </>
   )
 }
@@ -295,6 +294,15 @@ export default function PayablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
+  // Centralised guard for every <input type="date"> on this page: rejects weekend
+  // selections (treasury operations only land on working days) and surfaces a toast.
+  const pickWorkday = (next: string, fallback: string): string => {
+    if (next && isWeekend(next)) {
+      toast.error('Apenas dias úteis (segunda a sexta) são permitidos')
+      return fallback
+    }
+    return next
+  }
   const [statusFilter, setStatusFilter] = useState('')
   const [entitySearch, setEntitySearch] = useState('')
   const [dueDateFrom, setDueDateFrom] = useState('')
@@ -326,6 +334,7 @@ export default function PayablesPage() {
   const [vatIncludedPrices, setVatIncludedPrices] = useState(false)
   const [retentionPct, setRetentionPct] = useState('')
   const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras'>('fornecedores')
+  const [outrasSubTab, setOutrasSubTab] = useState<'atuais' | 'futuras' | 'programadas'>('atuais')
   const [showNewOutras, setShowNewOutras] = useState(false)
   const [outrasForm, setOutrasForm] = useState(emptyOutrasForm)
   const [outrasContact, setOutrasContact] = useState<TocSupplier | null>(null)
@@ -333,10 +342,11 @@ export default function PayablesPage() {
   const [showOutrasContactDropdown, setShowOutrasContactDropdown] = useState(false)
   const [panelDoc, setPanelDoc] = useState<Payable | null>(null)
   const [panelTocDoc, setPanelTocDoc] = useState<TocPurchaseDoc | null>(null)
-  const [panelTab, setPanelTab] = useState<'details' | 'followups'>('details')
+  const [detailPayment, setDetailPayment] = useState<TocPayment | null>(null)
+  const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
   const [panelSection, setPanelSection] = useState<null | 'promised' | 'split'>(null)
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
-  const [splitInstallments, setSplitInstallments] = useState([{ amount: '', dueDate: '' }, { amount: '', dueDate: '' }])
+  const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
   const [splitCount, setSplitCount] = useState(2)
   const [splitValueMode, setSplitValueMode] = useState<'EUR' | 'PCT'>('EUR')
 
@@ -382,6 +392,18 @@ export default function PayablesPage() {
     enabled: !!selectedClientId,
   })
 
+  const { data: budgets = [] } = useQuery<Budget[]>({
+    queryKey: ['budgets-expense-active', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/budgets?type=EXPENSE&status=ACTIVE`),
+    enabled: !!selectedClientId,
+  })
+
+  const { data: budgetCategories = [] } = useQuery<BudgetCategory[]>({
+    queryKey: ['budget-categories-expense', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/budget-categories?type=EXPENSE`),
+    enabled: !!selectedClientId,
+  })
+
   const { data: tocSuppliers = [] } = useQuery<TocSupplier[]>({
     queryKey: ['toc-suppliers', selectedClientId],
     queryFn: () => api.get(`/toconline/${selectedClientId}/suppliers`),
@@ -404,6 +426,14 @@ export default function PayablesPage() {
     enabled: !!selectedClientId && !!panelDoc?.id && panelDoc.origin !== 'TOC',
   })
 
+  // ID do documento TOC para carregar pagamentos no painel (origem TOC ou local importado)
+  const panelTocDocId = panelTocDoc?.id != null ? String(panelTocDoc.id) : panelDoc?.tocPurchasesDocId ?? null
+  const { data: panelPayments = [] } = useQuery<TocPayment[]>({
+    queryKey: ['toc-purchase-payments', selectedClientId, panelTocDocId],
+    queryFn: () => api.get(`/toconline/${selectedClientId}/purchases/${panelTocDocId}/payments`),
+    enabled: !!selectedClientId && !!panelTocDocId,
+  })
+
 
   const selectedCategory = useMemo(
     () => categories.find((c) => c.id === form.categoryId) ?? null,
@@ -424,16 +454,22 @@ export default function PayablesPage() {
 
   const create = useMutation({
     mutationFn: () => {
+      const isMonthlyRec = recForm.isRecurrent && ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency)
+      const computedDocDate = isMonthlyRec ? shiftToWorkday(recForm.cycleStartDate) : (form as { documentDate?: string }).documentDate
       const body: Record<string, unknown> = {
         ...form,
+        dueDate: form.dueDate,
+        ...(computedDocDate ? { documentDate: computedDocDate } : {}),
         totalAmount: parseFloat(form.totalAmount) || 0,
         entityNif: form.entityNif || undefined,
+        budgetId: form.budgetId || undefined,
+        budgetCategoryId: form.budgetCategoryId || undefined,
       }
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
           ...(recForm.frequency === 'WEEKLY' ? { daysOfWeek: recForm.daysOfWeek.length ? recForm.daysOfWeek : [1] } : {}),
-          ...(['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) ? { dayOfMonth: recForm.dayOfMonth } : {}),
+          ...(isMonthlyRec && recForm.cycleStartDate ? { dayOfMonth: parseInt(recForm.cycleStartDate.slice(8, 10)) } : {}),
           ...(recForm.endType === 'date' && recForm.endDate ? { endDate: recForm.endDate } : {}),
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
@@ -492,9 +528,28 @@ export default function PayablesPage() {
 
   const settlePayable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/settle`, {}),
-    onSuccess: () => {
+    onSuccess: (_, id) => {
       qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] })
-      setPanelDoc((d) => d ? { ...d, status: 'SETTLED', pendingAmount: 0, paidAmount: d.totalAmount } : d)
+      const settleChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
+        (arr ?? []).map((c) => c.recurrenceId || c.status === 'SETTLED' || c.status === 'VOID'
+          ? c
+          : { ...c, status: 'SETTLED', pendingAmount: 0, paidAmount: Number(c.totalAmount) })
+      setPanelDoc((d) => d ? {
+        ...d,
+        status: 'SETTLED',
+        pendingAmount: 0,
+        paidAmount: d.totalAmount,
+        promisedPaymentDate: null,
+        children: settleChildren(d.children),
+      } : d)
+      qc.setQueryData<Payable>(['payable-detail', selectedClientId, id], (old) => old ? {
+        ...old,
+        status: 'SETTLED',
+        pendingAmount: 0,
+        paidAmount: old.totalAmount,
+        promisedPaymentDate: null,
+        children: settleChildren(old.children),
+      } : old)
       toast.success('Documento liquidado.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -502,9 +557,26 @@ export default function PayablesPage() {
 
   const unsettlePayable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/unsettle`, {}),
-    onSuccess: () => {
+    onSuccess: (_, id) => {
       qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] })
-      setPanelDoc((d) => d ? { ...d, status: 'OPEN', pendingAmount: d.totalAmount, paidAmount: 0 } : d)
+      const revertChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
+        (arr ?? []).map((c) => c.recurrenceId || c.status !== 'SETTLED'
+          ? c
+          : { ...c, status: 'OPEN', pendingAmount: Number(c.totalAmount), paidAmount: 0 })
+      setPanelDoc((d) => d ? {
+        ...d,
+        status: 'OPEN',
+        pendingAmount: d.totalAmount,
+        paidAmount: 0,
+        children: revertChildren(d.children),
+      } : d)
+      qc.setQueryData<Payable>(['payable-detail', selectedClientId, id], (old) => old ? {
+        ...old,
+        status: 'OPEN',
+        pendingAmount: old.totalAmount,
+        paidAmount: 0,
+        children: revertChildren(old.children),
+      } : old)
       toast.success('Liquidação anulada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -555,7 +627,7 @@ export default function PayablesPage() {
   })
 
   const splitPayable = useMutation({
-    mutationFn: ({ id, installments }: { id: string; installments: Array<{ dueDate: string; amount: number }> }) =>
+    mutationFn: ({ id, installments }: { id: string; installments: Array<{ promisedPaymentDate: string; amount: number }> }) =>
       api.post(`/treasury/${selectedClientId}/payables/${id}/split`, { installments }),
     onSuccess: (children, { id }) => {
       qc.invalidateQueries({ queryKey: ['payables'] })
@@ -629,25 +701,23 @@ export default function PayablesPage() {
 
   const createOutras = useMutation({
     mutationFn: () => {
-      const recurrentDueDate = (() => {
-        const now = new Date()
-        const d = new Date(now.getFullYear(), now.getMonth(), recForm.startDayOfMonth)
-        if (d <= now) d.setMonth(d.getMonth() + 1)
-        return d.toISOString().slice(0, 10)
-      })()
+      const computedDocDate = recForm.isRecurrent ? shiftToWorkday(recForm.cycleStartDate) : undefined
       const body: Record<string, unknown> = {
         categoryId: outrasForm.categoryId || undefined,
         entityName: outrasForm.entityName || undefined,
         entityNif: outrasForm.entityNif || undefined,
         reference: outrasForm.reference || undefined,
         description: outrasForm.description || undefined,
-        dueDate: recForm.isRecurrent ? recurrentDueDate : outrasForm.dueDate,
+        dueDate: outrasForm.dueDate,
+        ...(computedDocDate ? { documentDate: computedDocDate } : {}),
         totalAmount: parseFloat(outrasForm.totalAmount) || 0,
+        budgetId: outrasForm.budgetId || undefined,
+        budgetCategoryId: outrasForm.budgetCategoryId || undefined,
       }
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
-          dayOfMonth: recForm.startDayOfMonth,
+          ...(recForm.cycleStartDate ? { dayOfMonth: parseInt(recForm.cycleStartDate.slice(8, 10)) } : {}),
           ...(recForm.endType === 'date' && recForm.endDate ? { endDate: recForm.endDate } : {}),
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
@@ -779,7 +849,16 @@ export default function PayablesPage() {
     }
   }, [kpis, tocOnly])
 
-  const outrasRows = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
+  const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
+  const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
+  const outrasCategorise = (p: Payable) => {
+    if (p.recurrenceId && !p.parentId) return 'programadas' as const
+    if (p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd) return 'futuras' as const
+    return 'atuais' as const
+  }
+  const outrasCount = { atuais: 0, futuras: 0, programadas: 0 }
+  for (const p of outrasAll) outrasCount[outrasCategorise(p)]++
+  const outrasRows = outrasAll.filter((p) => outrasCategorise(p) === outrasSubTab)
 
   return (
     <>
@@ -906,6 +985,7 @@ export default function PayablesPage() {
                     <th onClick={() => toggleSort('dueDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                       Vencimento <SortIcon field="dueDate" />
                     </th>
+                    <th className="text-left px-5 py-3">Pagamento</th>
                     <th onClick={() => toggleSort('totalAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                       Total <SortIcon field="totalAmount" />
                     </th>
@@ -921,7 +1001,7 @@ export default function PayablesPage() {
                     if (row._src === 'local') {
                       const p = row.p
                       return (
-                        <tr key={`l-${p.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(p); setPanelTocDoc(null); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(p.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                        <tr key={`l-${p.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(p); setPanelTocDoc(null); setPanelTab((p.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(p.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                           <td className="px-5 py-3">
                             <div className="flex items-start gap-1.5">
                               <span className="w-4 flex-shrink-0" />
@@ -929,6 +1009,15 @@ export default function PayablesPage() {
                                 <div className="flex items-center gap-1.5">
                                   <span className="font-medium text-gray-900">{p.reference}</span>
                                   {p.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
+                                  {(() => {
+                                    const n = (p.children ?? []).filter((c) => !c.recurrenceId).length
+                                    return n > 0 ? (
+                                      <span title={`Dividida em ${n} parcelas`} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[11px] font-semibold whitespace-nowrap">
+                                        <Scissors className="w-3 h-3" />
+                                        {n}
+                                      </span>
+                                    ) : null
+                                  })()}
                                 </div>
                                 <div className="text-xs text-gray-400">{p.documentDate ? formatDate(p.documentDate) : ''}{p.description ? ` · ${p.description}` : ''}</div>
                               </div>
@@ -937,21 +1026,24 @@ export default function PayablesPage() {
                           <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
                           <td className="px-5 py-3 whitespace-nowrap">
                             {(() => {
+                              const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
+                              const displayDate = isSplit && p.promisedPaymentDate ? p.promisedPaymentDate : p.dueDate
                               const now = Date.now()
-                              const due = new Date(p.dueDate).getTime()
+                              const due = new Date(displayDate).getTime()
                               const isActive = p.status !== 'SETTLED' && p.status !== 'VOID'
                               const overdue = isActive && due < now
                               const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
                               const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
                               return (
                                 <>
-                                  <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(p.dueDate)}</div>
+                                  <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(displayDate)}</div>
                                   {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
                                   {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
                                 </>
                               )
                             })()}
                           </td>
+                          <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(p.promisedPaymentDate ?? p.dueDate)}</td>
                           <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(p.totalAmount)}</td>
                           <td className="px-5 py-3 text-right">
                             <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
@@ -990,15 +1082,19 @@ export default function PayablesPage() {
                                   <DollarSign className="w-3.5 h-3.5" />
                                 </button>
                               )}
-                              {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
-                                <button
-                                  title="Liquidar totalmente"
-                                  onClick={() => settlePayable.mutate(p.id)}
-                                  className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-                                >
-                                  <CheckCircle className="w-3.5 h-3.5" />
-                                </button>
-                              )}
+                              {(p.status === 'OPEN' || p.status === 'PARTIAL') && (() => {
+                                const isFutureRec = !!(p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd)
+                                return (
+                                  <button
+                                    title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : 'Liquidar totalmente'}
+                                    onClick={() => { if (!isFutureRec) settlePayable.mutate(p.id) }}
+                                    disabled={isFutureRec}
+                                    className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
+                                  >
+                                    <CheckCircle className="w-3.5 h-3.5" />
+                                  </button>
+                                )
+                              })()}
                               {p.status !== 'VOID' && p.status !== 'SETTLED' && (
                                 <button
                                   title="Anular"
@@ -1084,6 +1180,7 @@ export default function PayablesPage() {
                           <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() && Number(d.status) !== 3 && Number(d.status) !== 4 ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
                             {dueDate ? formatDate(dueDate) : '—'}
                           </td>
+                          <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{dueDate ? formatDate(dueDate) : '—'}</td>
                           <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
                           <td className="px-5 py-3 text-right font-semibold text-red-700">{formatCurrency(pending)}</td>
                           <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
@@ -1125,6 +1222,7 @@ export default function PayablesPage() {
                                 clientId={selectedClientId!}
                                 tocDocId={docId}
                                 entityName={supplier}
+                                onPaymentClick={setDetailPayment}
                               />
                             )}
                           </>
@@ -1133,7 +1231,7 @@ export default function PayablesPage() {
                     )
                   })}
                   {rows.length === 0 && (
-                    <tr><td colSpan={7} className="px-5 py-10 text-center text-sm text-gray-400">Sem documentos</td></tr>
+                    <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">Sem documentos</td></tr>
                   )}
                 </tbody>
                 {rows.length > 0 && (() => {
@@ -1145,6 +1243,7 @@ export default function PayablesPage() {
                         <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
                           <td colSpan={2} className="px-5 py-2">Total ({globalCount} doc.)</td>
                           <td className="px-5 py-2 text-right text-gray-500 normal-case font-normal">Em aberto: {combinedKpis.countOpen}</td>
+                          <td className="px-5 py-2 text-right text-gray-400">—</td>
                           <td className="px-5 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
                           <td className="px-5 py-2 text-right text-gray-400">—</td>
                           <td className="px-5 py-2 text-right text-red-700">{formatCurrency(combinedKpis.totalPending)}</td>
@@ -1159,7 +1258,7 @@ export default function PayablesPage() {
                   return (
                     <tfoot>
                       <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
-                        <td colSpan={3} className="px-5 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
+                        <td colSpan={4} className="px-5 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
                         <td className="px-5 py-2 text-right">{formatCurrency(totalAmt)}</td>
                         <td className="px-5 py-2 text-right text-red-700">{formatCurrency(pendingAmt)}</td>
                         <td colSpan={2} />
@@ -1185,7 +1284,20 @@ export default function PayablesPage() {
 
       {activeTab === 'outras' && (
         <div className="space-y-4 pt-1">
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between">
+            <div className="inline-flex rounded-lg border border-gray-200 bg-white overflow-hidden text-sm">
+              {([
+                { key: 'atuais', label: 'Atuais' },
+                { key: 'futuras', label: 'Futuras' },
+                { key: 'programadas', label: 'Programadas' },
+              ] as const).map((t) => (
+                <button key={t.key}
+                  onClick={() => setOutrasSubTab(t.key)}
+                  className={`px-4 py-1.5 font-medium transition-colors ${outrasSubTab === t.key ? 'bg-primary-50 text-primary-700' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  {t.label} <span className="ml-1 text-xs text-gray-400">{outrasCount[t.key]}</span>
+                </button>
+              ))}
+            </div>
             <button onClick={() => setShowNewOutras(true)} className="btn-primary flex items-center gap-2">
               <Plus className="w-4 h-4" />Nova Operação
             </button>
@@ -1199,6 +1311,7 @@ export default function PayablesPage() {
                     <th className="text-left px-5 py-3">Documento</th>
                     <th className="text-left px-5 py-3">Fornecedor</th>
                     <th className="text-left px-5 py-3">Vencimento</th>
+                    <th className="text-left px-5 py-3">Pagamento</th>
                     <th className="text-right px-5 py-3">Total</th>
                     <th className="text-right px-5 py-3">Pendente</th>
                     <th className="text-left px-5 py-3">Estado</th>
@@ -1208,34 +1321,48 @@ export default function PayablesPage() {
                 <tbody className="divide-y divide-gray-50">
                   {outrasRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-5 py-16 text-center text-sm text-gray-400">
+                      <td colSpan={8} className="px-5 py-16 text-center text-sm text-gray-400">
                         Sem operações registadas. Usa o botão acima para registar a primeira operação.
                       </td>
                     </tr>
                   ) : outrasRows.map((p) => {
+                    const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
+                    const displayDate = isSplit && p.promisedPaymentDate ? p.promisedPaymentDate : p.dueDate
                     const now = Date.now()
-                    const due = new Date(p.dueDate).getTime()
+                    const due = new Date(displayDate).getTime()
                     const isActive = p.status !== 'SETTLED' && p.status !== 'VOID'
                     const overdue = isActive && due < now
                     const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
                     const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
                     return (
-                      <tr key={`o-${p.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(p); setPanelTocDoc(null); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(p.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                      <tr key={`o-${p.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(p); setPanelTocDoc(null); setPanelTab((p.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(p.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                         <td className="px-5 py-3">
                           <div className="flex items-start gap-1.5">
                             <span className="w-4 flex-shrink-0" />
                             <div>
-                              <div className="font-medium text-gray-900">{p.reference}</div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-medium text-gray-900">{p.reference}</span>
+                                {(() => {
+                                  const n = (p.children ?? []).filter((c) => !c.recurrenceId).length
+                                  return n > 0 ? (
+                                    <span title={`Dividida em ${n} parcelas`} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[11px] font-semibold whitespace-nowrap">
+                                      <Scissors className="w-3 h-3" />
+                                      {n}
+                                    </span>
+                                  ) : null
+                                })()}
+                              </div>
                               <div className="text-xs text-gray-400">{p.documentDate ? formatDate(p.documentDate) : ''}{p.description ? ` · ${p.description}` : ''}</div>
                             </div>
                           </div>
                         </td>
                         <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
                         <td className="px-5 py-3 whitespace-nowrap">
-                          <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(p.dueDate)}</div>
+                          <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(displayDate)}</div>
                           {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
                           {!overdue && daysUntil >= 0 && daysUntil <= 14 && <div className="text-xs text-amber-500">{daysUntil === 0 ? 'hoje' : `${daysUntil}d`}</div>}
                         </td>
+                        <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(p.promisedPaymentDate ?? p.dueDate)}</td>
                         <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(p.totalAmount)}</td>
                         <td className="px-5 py-3 text-right">
                           <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
@@ -1370,11 +1497,11 @@ export default function PayablesPage() {
           </div>
           <div>
             <label className="label">Data Documento</label>
-            <input type="date" className="input" value={editForm.documentDate} onChange={(e) => setEditForm({ ...editForm, documentDate: e.target.value })} />
+            <input type="date" className="input" value={editForm.documentDate} onChange={(e) => setEditForm({ ...editForm, documentDate: pickWorkday(e.target.value, editForm.documentDate) })} />
           </div>
           <div>
             <label className="label">Data Vencimento</label>
-            <input type="date" className="input" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} />
+            <input type="date" className="input" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: pickWorkday(e.target.value, editForm.dueDate) })} />
           </div>
           <div className="col-span-2">
             <label className="label">Descrição</label>
@@ -1469,6 +1596,20 @@ export default function PayablesPage() {
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
+          <div>
+            <label className="label">Categoria de Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <select className="input" value={form.budgetCategoryId} onChange={(e) => setForm({ ...form, budgetCategoryId: e.target.value })}>
+              <option value="">Sem categoria de budget</option>
+              {budgetCategories.map((bc) => <option key={bc.id} value={bc.id}>{bc.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <select className="input" value={form.budgetId} onChange={(e) => setForm({ ...form, budgetId: e.target.value })}>
+              <option value="">Auto pela categoria</option>
+              {budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
           <div className="col-span-2">
             <label className="label">Fornecedor / Entidade</label>
             <input className="input" value={form.entityName} onChange={(e) => setForm({ ...form, entityName: e.target.value })} />
@@ -1491,7 +1632,7 @@ export default function PayablesPage() {
             </label>
             <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} disabled={tocCreate} placeholder={tocCreate ? 'calculado das linhas' : ''} />
           </div>
-          <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} /></div>
+          <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: pickWorkday(e.target.value, form.dueDate) })} /></div>
           <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
         </div>
 
@@ -1686,8 +1827,13 @@ export default function PayablesPage() {
               )}
               {['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) && (
                 <div className="col-span-2">
-                  <label className="label">Dia do mês</label>
-                  <input type="number" min="1" max="31" className="input w-24" value={recForm.dayOfMonth} onChange={(e) => setRecForm({ ...recForm, dayOfMonth: parseInt(e.target.value) || 1 })} />
+                  <label className="label">Período de facturação</label>
+                  <DayOfMonthRangePicker
+                    startDate={recForm.cycleStartDate}
+                    endDate={recForm.cycleEndDate}
+                    onStartChange={(d) => setRecForm({ ...recForm, cycleStartDate: d, cycleEndDate: recForm.cycleEndDate && recForm.cycleEndDate >= d ? recForm.cycleEndDate : d })}
+                    onEndChange={(d) => setRecForm({ ...recForm, cycleEndDate: d })}
+                  />
                 </div>
               )}
               <div className="col-span-2">
@@ -1700,8 +1846,8 @@ export default function PayablesPage() {
               </div>
               {recForm.endType === 'date' && (
                 <div className="col-span-2">
-                  <label className="label">Data de fim</label>
-                  <input type="date" className="input" value={recForm.endDate} onChange={(e) => setRecForm({ ...recForm, endDate: e.target.value })} />
+                  <label className="label">Data de fim da recorrência</label>
+                  <input type="date" className="input" value={recForm.endDate} onChange={(e) => setRecForm({ ...recForm, endDate: pickWorkday(e.target.value, recForm.endDate) })} />
                 </div>
               )}
               {recForm.endType === 'occurrences' && (
@@ -1722,7 +1868,16 @@ export default function PayablesPage() {
           <button
             onClick={() => create.mutate()}
             className="btn-primary flex-1"
-            disabled={create.isPending || !form.totalAmount || !form.dueDate}
+            disabled={(() => {
+              if (create.isPending || !form.totalAmount || !form.dueDate) return true
+              const isMonthlyRec = recForm.isRecurrent && ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency)
+              if (isMonthlyRec && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
+              if (recForm.isRecurrent && recForm.endType === 'date') {
+                if (!recForm.endDate) return true
+                if (recForm.endDate <= form.dueDate) return true
+              }
+              return false
+            })()}
           >
             {create.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
@@ -1736,6 +1891,20 @@ export default function PayablesPage() {
             <select className="input" value={outrasForm.categoryId} onChange={(e) => setOutrasForm({ ...outrasForm, categoryId: e.target.value })}>
               <option value="">Selecionar...</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Categoria de Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <select className="input" value={outrasForm.budgetCategoryId} onChange={(e) => setOutrasForm({ ...outrasForm, budgetCategoryId: e.target.value })}>
+              <option value="">Sem categoria de budget</option>
+              {budgetCategories.map((bc) => <option key={bc.id} value={bc.id}>{bc.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <select className="input" value={outrasForm.budgetId} onChange={(e) => setOutrasForm({ ...outrasForm, budgetId: e.target.value })}>
+              <option value="">Auto pela categoria</option>
+              {budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </div>
           <div className="col-span-2">
@@ -1802,12 +1971,10 @@ export default function PayablesPage() {
             <label className="label">Valor (€) <span className="text-red-500">*</span></label>
             <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
           </div>
-          {!recForm.isRecurrent && (
-            <div>
-              <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
-              <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: e.target.value })} />
-            </div>
-          )}
+          <div>
+            <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
+            <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: pickWorkday(e.target.value, outrasForm.dueDate) })} />
+          </div>
           <div className="col-span-2">
             <label className="label">Descrição</label>
             <input className="input" value={outrasForm.description} onChange={(e) => setOutrasForm({ ...outrasForm, description: e.target.value })} placeholder="Notas sobre a operação" />
@@ -1837,24 +2004,15 @@ export default function PayablesPage() {
                   <option value="ANNUAL">Anual</option>
                 </select>
               </div>
-              {['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) && (
-                <>
-                  <div className="col-span-2">
-                    <label className="label">{recForm.frequency === 'QUARTERLY' ? 'Dia de cobrança' : 'Dia do mês de início de fatura'}</label>
-                    <input type="number" min="1" max="31" className="input w-24" value={recForm.startDayOfMonth} onChange={(e) => {
-                      const val = parseInt(e.target.value) || 1
-                      setRecForm({ ...recForm, startDayOfMonth: val, endDayOfMonth: Math.max(recForm.endDayOfMonth, val) })
-                    }} />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="label">Dia do mês de fim de fatura</label>
-                    <input type="number" min={recForm.startDayOfMonth} max="31" className="input w-24" value={recForm.endDayOfMonth} onChange={(e) => setRecForm({ ...recForm, endDayOfMonth: parseInt(e.target.value) || 1 })} />
-                    {recForm.endDayOfMonth < recForm.startDayOfMonth && (
-                      <p className="mt-1 text-xs text-red-600">Deve ser igual ou depois do dia de início ({recForm.startDayOfMonth})</p>
-                    )}
-                  </div>
-                </>
-              )}
+              <div className="col-span-2">
+                <label className="label">Período de facturação</label>
+                <DayOfMonthRangePicker
+                  startDate={recForm.cycleStartDate}
+                  endDate={recForm.cycleEndDate}
+                  onStartChange={(d) => setRecForm({ ...recForm, cycleStartDate: d, cycleEndDate: recForm.cycleEndDate && recForm.cycleEndDate >= d ? recForm.cycleEndDate : d })}
+                  onEndChange={(d) => setRecForm({ ...recForm, cycleEndDate: d })}
+                />
+              </div>
               <div className="col-span-2">
                 <label className="label">Terminar</label>
                 <select className="input" value={recForm.endType} onChange={(e) => setRecForm({ ...recForm, endType: e.target.value as typeof recForm.endType, endDate: '', occurrences: '' })}>
@@ -1865,8 +2023,8 @@ export default function PayablesPage() {
               </div>
               {recForm.endType === 'date' && (
                 <div className="col-span-2">
-                  <label className="label">Data de fim</label>
-                  <input type="date" className="input" value={recForm.endDate} onChange={(e) => setRecForm({ ...recForm, endDate: e.target.value })} />
+                  <label className="label">Data de fim da recorrência</label>
+                  <input type="date" className="input" value={recForm.endDate} onChange={(e) => setRecForm({ ...recForm, endDate: pickWorkday(e.target.value, recForm.endDate) })} />
                 </div>
               )}
               {recForm.endType === 'occurrences' && (
@@ -1887,7 +2045,15 @@ export default function PayablesPage() {
           <button
             onClick={() => createOutras.mutate()}
             className="btn-primary flex-1"
-            disabled={createOutras.isPending || !outrasForm.totalAmount || (!recForm.isRecurrent && !outrasForm.dueDate) || (recForm.isRecurrent && recForm.endDayOfMonth < recForm.startDayOfMonth)}
+            disabled={(() => {
+              if (createOutras.isPending || !outrasForm.totalAmount || !outrasForm.dueDate) return true
+              if (recForm.isRecurrent && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
+              if (recForm.isRecurrent && recForm.endType === 'date') {
+                if (!recForm.endDate) return true
+                if (recForm.endDate <= outrasForm.dueDate) return true
+              }
+              return false
+            })()}
           >
             {createOutras.isPending ? 'A guardar...' : (recForm.isRecurrent ? 'Criar Recorrente' : 'Criar')}
           </button>
@@ -1898,7 +2064,7 @@ export default function PayablesPage() {
 
     {/* ── Painel lateral de detalhes ── */}
     {panelDoc && (
-      <div className="w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden">
+      <div className="w-80 xl:w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden">
           {/* Cabeçalho */}
           <div className="p-5 border-b border-gray-100">
             <div className="flex items-start justify-between mb-3">
@@ -1907,7 +2073,7 @@ export default function PayablesPage() {
                   <button
                     onClick={async () => {
                       const parent = await api.get<Payable>(`/treasury/${selectedClientId}/payables/${panelDoc.parentId}`)
-                      setPanelDoc(parent); setPanelTab('details'); setPanelSection(null)
+                      setPanelDoc(parent); setPanelTab((parent.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null)
                       setPanelPromisedDate(parent.promisedPaymentDate?.slice(0, 10) ?? '')
                       setSplitCount(2); setSplitValueMode('EUR')
                     }}
@@ -1923,55 +2089,46 @@ export default function PayablesPage() {
             </div>
             <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
             <div className="text-sm font-medium text-primary-700 mt-0.5">{panelDoc.entityName || '—'}</div>
-            <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)}</div>
-            <div className="mt-2 flex items-center gap-2">
+            <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
               <Badge variant={statusVariant(panelDoc.status)}>{statusLabel(panelDoc.status)}</Badge>
               {panelDoc.promisedPaymentDate && (
                 <span className="text-xs text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3" />{formatDate(panelDoc.promisedPaymentDate)}</span>
               )}
             </div>
+            <div className="mt-2 flex items-center gap-3 text-xs flex-wrap">
+              <span className="text-gray-500">Pendente: <span className="font-semibold text-gray-700">{formatCurrency(panelDoc.pendingAmount)}</span></span>
+              {Number(panelDoc.paidAmount) > 0 && (
+                <span className="text-red-600">Pago: <span className="font-semibold">{formatCurrency(Number(panelDoc.paidAmount))}</span></span>
+              )}
+            </div>
           </div>
 
-          {/* Parcelas da fatura dividida */}
-          {((panelDocDetail?.children ?? panelDoc.children) ?? []).length > 0 && (
+          {/* Pagamentos associados (TOC) */}
+          {panelPayments.length > 0 && (
             <div className="border-b border-gray-100 px-4 py-3 space-y-2">
-              {(() => { const kids = panelDocDetail?.children ?? panelDoc.children ?? []; return (<>
-              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">{kids.length} parcelas</div>
-              {kids.map((child, i) => (
-                <button key={child.id}
-                  onClick={() => { setPanelDoc(child as Payable); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(child.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}
-                  className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
+              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">{panelPayments.length} {panelPayments.length === 1 ? 'pagamento associado' : 'pagamentos associados'}</div>
+              {panelPayments.map((pm) => (
+                <button key={String(pm.id)}
+                  onClick={() => setDetailPayment(pm)}
+                  className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-red-50 hover:border-red-200 transition-colors">
                   <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-xs text-gray-400">Parcela {i + 1}</span>
-                    <Badge variant={statusVariant(child.status)}>{statusLabel(child.status)}</Badge>
+                    <span className="text-xs text-gray-400">Pagamento</span>
+                    <span className="text-xs font-semibold text-gray-700">{formatCurrency(pm.gross_total)}</span>
                   </div>
-                  <div className="font-semibold text-sm text-gray-900">{formatCurrency(child.totalAmount)}</div>
-                  <div className="text-xs text-gray-500">{child.reference} · Venc. {formatDate(child.dueDate)}</div>
+                  <div className="font-medium text-sm text-gray-900">{pm.document_no}</div>
+                  <div className="text-xs text-gray-500">{pm.date ? formatDate(pm.date) : '—'}</div>
                 </button>
               ))}
-              {!panelDoc.recurrenceId && (() => {
-                const allOpen = (panelDocDetail?.children ?? panelDoc.children ?? []).every((c) => c.status === 'OPEN')
-                return (
-                  <button
-                    onClick={() => unsplitPayable.mutate(panelDoc.id)}
-                    disabled={unsplitPayable.isPending || !allOpen}
-                    title={!allOpen ? 'Não é possível desfazer: algumas parcelas já foram pagas' : undefined}
-                    className={`w-full text-xs px-3 py-1.5 rounded-lg transition-colors ${allOpen ? 'text-orange-700 hover:text-red-700 border border-orange-200 hover:border-red-300 hover:bg-red-50' : 'text-gray-400 border border-gray-200 cursor-not-allowed'}`}
-                  >
-                    {unsplitPayable.isPending ? 'A desfazer...' : 'Desfazer divisão'}
-                  </button>
-                )
-              })()}
-              </>); })()}
             </div>
           )}
 
           {/* Tabs */}
           <div className="flex border-b border-gray-100">
-            {(['details', 'followups'] as const).map((t) => (
+            {(['parcelas', 'details', 'followups'] as const).map((t) => (
               <button key={t} onClick={() => { setPanelTab(t); setPanelSection(null) }}
                 className={`flex-1 py-2.5 text-sm font-medium transition-colors ${panelTab === t ? 'border-b-2 border-primary-600 text-primary-700' : 'text-gray-500 hover:text-gray-700'}`}>
-                {t === 'details' ? 'Detalhes' : 'Acompanhamentos'}
+                {t === 'details' ? 'Detalhes' : t === 'parcelas' ? 'Parcelas' : 'Follow-ups'}
               </button>
             ))}
           </div>
@@ -2013,28 +2170,33 @@ export default function PayablesPage() {
                   </div>
                 )}
 
-                {/* Marcar como liquidada */}
-                {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (
-                  <button
-                    onClick={() => {
-                      if (panelDoc.origin === 'TOC') {
-                        autoImportAndRun((doc) => settlePayable.mutate(doc.id))
-                      } else {
-                        settlePayable.mutate(panelDoc.id)
-                      }
-                    }}
-                    disabled={settlePayable.isPending || isAutoImporting}
-                    className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
-                      <CreditCard className="w-4 h-4 text-green-700" />
-                    </div>
-                    <div>
-                      <div className="font-medium text-gray-900 text-sm">Marcar como liquidada</div>
-                      <div className="text-xs text-gray-500">Registar pagamento total</div>
-                    </div>
-                  </button>
-                )}
+                {/* Marcar como liquidada — bloqueado em recorrências futuras (dueDate > hoje) */}
+                {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (() => {
+                  const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
+                  return (
+                    <button
+                      onClick={() => {
+                        if (isFutureRec) return
+                        if (panelDoc.origin === 'TOC') {
+                          autoImportAndRun((doc) => settlePayable.mutate(doc.id))
+                        } else {
+                          settlePayable.mutate(panelDoc.id)
+                        }
+                      }}
+                      disabled={settlePayable.isPending || isAutoImporting || isFutureRec}
+                      title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : undefined}
+                      className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
+                        <CreditCard className="w-4 h-4 text-green-700" />
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900 text-sm">Marcar como liquidada</div>
+                        <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar pagamento total'}</div>
+                      </div>
+                    </button>
+                  )
+                })()}
 
                 {/* Data prometida */}
                 <div className="rounded-xl border border-gray-200 overflow-hidden">
@@ -2053,7 +2215,7 @@ export default function PayablesPage() {
                       <Clock className="w-4 h-4 text-blue-700" />
                     </div>
                     <div className="flex-1">
-                      <div className="font-medium text-gray-900 text-sm">Definir data prometida de pagamento</div>
+                      <div className="font-medium text-gray-900 text-sm">Definir data pagamento</div>
                       {panelDoc.promisedPaymentDate
                         ? <div className="text-xs text-blue-600">{formatDate(panelDoc.promisedPaymentDate)}</div>
                         : <div className="text-xs text-gray-500">Sem data prometida</div>
@@ -2062,7 +2224,7 @@ export default function PayablesPage() {
                   </button>
                   {panelSection === 'promised' && (
                     <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
-                      <input type="date" className="input" value={panelPromisedDate} onChange={(e) => setPanelPromisedDate(e.target.value)} />
+                      <input type="date" className="input" value={panelPromisedDate} onChange={(e) => setPanelPromisedDate(pickWorkday(e.target.value, panelPromisedDate))} />
                       <div className="flex gap-2">
                         <button onClick={() => setPromisedDate.mutate({ id: panelDoc.id, date: panelPromisedDate || null })}
                           disabled={setPromisedDate.isPending} className="btn-primary flex-1 text-sm py-1.5">
@@ -2093,7 +2255,7 @@ export default function PayablesPage() {
                             const rCents = tCents - bCents * n
                             const inst = Array.from({ length: n }, (_, i) => {
                               const dd = new Date(doc.dueDate); dd.setMonth(dd.getMonth() + i)
-                              return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), dueDate: dd.toISOString().slice(0, 10) }
+                              return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), paymentDate: shiftToWorkday(dd.toISOString().slice(0, 10)) }
                             })
                             setSplitInstallments(inst)
                             setSplitValueMode('EUR')
@@ -2109,7 +2271,7 @@ export default function PayablesPage() {
                           const rCents = tCents - bCents * n
                           const inst = Array.from({ length: n }, (_, i) => {
                             const d = new Date(panelDoc.dueDate); d.setMonth(d.getMonth() + i)
-                            return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), dueDate: d.toISOString().slice(0, 10) }
+                            return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
                           })
                           setSplitInstallments(inst)
                           setSplitValueMode('EUR')
@@ -2141,9 +2303,9 @@ export default function PayablesPage() {
                                 const bUnits = Math.floor(100000 / n); const rUnits = 100000 - bUnits * n
                                 setSplitCount(n)
                                 setSplitInstallments(Array.from({ length: n }, (_, i) => {
-                                  const d = new Date(splitInstallments[i]?.dueDate || panelDoc.dueDate); if (!splitInstallments[i]?.dueDate) d.setMonth(d.getMonth() + i)
+                                  const d = new Date(splitInstallments[i]?.paymentDate || panelDoc.dueDate); if (!splitInstallments[i]?.paymentDate) d.setMonth(d.getMonth() + i)
                                   const amount = splitValueMode === 'PCT' ? ((i < rUnits ? bUnits + 1 : bUnits) / 1000).toFixed(3) : ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2)
-                                  return { amount, dueDate: d.toISOString().slice(0, 10) }
+                                  return { amount, paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
                                 }))
                               }}
                               className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
@@ -2157,11 +2319,11 @@ export default function PayablesPage() {
                                 const bUnits = Math.floor(100000 / n); const rUnits = 100000 - bUnits * n
                                 setSplitCount(n)
                                 setSplitInstallments(Array.from({ length: n }, (_, i) => {
-                                  const prevDate = splitInstallments[i - 1]?.dueDate
+                                  const prevDate = splitInstallments[i - 1]?.paymentDate
                                   const d = prevDate ? (() => { const dd = new Date(prevDate); dd.setMonth(dd.getMonth() + 1); return dd })() : (() => { const dd = new Date(panelDoc.dueDate); dd.setMonth(dd.getMonth() + i); return dd })()
-                                  const existingDate = splitInstallments[i]?.dueDate || d.toISOString().slice(0, 10)
+                                  const existingDate = splitInstallments[i]?.paymentDate || shiftToWorkday(d.toISOString().slice(0, 10))
                                   const amount = splitValueMode === 'PCT' ? ((i < rUnits ? bUnits + 1 : bUnits) / 1000).toFixed(3) : ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2)
-                                  return { amount, dueDate: existingDate }
+                                  return { amount, paymentDate: existingDate }
                                 }))
                               }}
                               className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
@@ -2197,6 +2359,12 @@ export default function PayablesPage() {
                         </div>
 
                         {/* Lista de parcelas */}
+                        <div className="flex gap-1.5 items-center text-[11px] text-gray-500 font-medium px-1">
+                          <span className="w-4 flex-shrink-0" />
+                          <span className="flex-1">Valor</span>
+                          <span className="flex-1">Data de pagamento</span>
+                          {splitInstallments.length > 2 && <span className="w-6" />}
+                        </div>
                         {splitInstallments.map((inst, i) => (
                           <div key={i} className="flex gap-1.5 items-center">
                             <span className="text-xs text-gray-400 w-4 flex-shrink-0 text-right">{i + 1}.</span>
@@ -2210,8 +2378,8 @@ export default function PayablesPage() {
                               <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">{splitValueMode === 'EUR' ? '€' : '%'}</span>
                             </div>
                             <input type="date" className="input text-sm py-1.5 flex-1"
-                              value={inst.dueDate}
-                              onChange={(e) => setSplitInstallments(splitInstallments.map((x, j) => j === i ? { ...x, dueDate: e.target.value } : x))} />
+                              value={inst.paymentDate}
+                              onChange={(e) => setSplitInstallments(splitInstallments.map((x, j) => j === i ? { ...x, paymentDate: pickWorkday(e.target.value, x.paymentDate) } : x))} />
                             {splitInstallments.length > 2 && (
                               <button onClick={() => { setSplitInstallments(splitInstallments.filter((_, j) => j !== i)); setSplitCount(splitCount - 1) }} className="p-1 text-gray-300 hover:text-red-500"><X className="w-3.5 h-3.5" /></button>
                             )}
@@ -2252,12 +2420,12 @@ export default function PayablesPage() {
                             const total = Number(panelDoc.totalAmount)
                             const installments = splitInstallments.map((x) => ({
                               amount: splitValueMode === 'EUR' ? parseFloat(x.amount) : parseFloat(x.amount) / 100 * total,
-                              dueDate: x.dueDate,
+                              promisedPaymentDate: x.paymentDate,
                             }))
                             splitPayable.mutate({ id: panelDoc.id, installments })
                           }}
                           disabled={(() => {
-                            if (splitPayable.isPending || splitInstallments.some((x) => !x.amount || !x.dueDate)) return true
+                            if (splitPayable.isPending || splitInstallments.some((x) => !x.amount || !x.paymentDate)) return true
                             const total = Number(panelDoc.totalAmount)
                             const sum = splitInstallments.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0)
                             if (splitValueMode === 'EUR') return Math.abs(sum - total) > 0.001
@@ -2273,23 +2441,104 @@ export default function PayablesPage() {
                 )}
 
                 {/* Info adicional */}
-                <div className="mt-4 pt-4 border-t border-gray-100 space-y-2 text-xs text-gray-500">
-                  {panelDoc.description && <div><span className="font-medium text-gray-700">Descrição:</span> {panelDoc.description}</div>}
-                  {panelDoc.category && <div><span className="font-medium text-gray-700">Categoria:</span> {panelDoc.category.name}</div>}
-                  <div><span className="font-medium text-gray-700">Pendente:</span> {formatCurrency(panelDoc.pendingAmount)}</div>
-                  {Number(panelDoc.paidAmount) > 0 && <div><span className="font-medium text-gray-700">Pago:</span> {formatCurrency(Number(panelDoc.paidAmount))}</div>}
-                </div>
+                {(panelDoc.description || panelDoc.category) && (
+                  <div className="mt-4 pt-4 border-t border-gray-100 space-y-2 text-xs text-gray-500">
+                    {panelDoc.description && <div><span className="font-medium text-gray-700">Descrição:</span> {panelDoc.description}</div>}
+                    {panelDoc.category && <div><span className="font-medium text-gray-700">Categoria:</span> {panelDoc.category.name}</div>}
+                  </div>
+                )}
               </>
             )}
 
-            {panelTab === 'followups' && (
-              <div className="flex flex-col items-center justify-center h-40 text-gray-400 text-sm">
-                <Clock className="w-8 h-8 mb-2 opacity-30" />
-                Sem acompanhamentos registados
-              </div>
+            {panelTab === 'parcelas' && (() => {
+              const kids = panelDocDetail?.children ?? panelDoc.children ?? []
+              if (kids.length === 0) {
+                return (
+                  <div className="flex flex-col items-center justify-center h-40 text-gray-400 text-sm text-center px-4">
+                    <Scissors className="w-8 h-8 mb-2 opacity-30" />
+                    Esta fatura não está dividida em parcelas
+                  </div>
+                )
+              }
+              const allOpen = kids.every((c) => c.status === 'OPEN')
+              return (
+                <div className="space-y-2">
+                  <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">{kids.length} parcelas</div>
+                  {kids.map((child, i) => (
+                    <button key={child.id}
+                      onClick={() => { setPanelDoc(child as Payable); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(child.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}
+                      className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-xs text-gray-400">Parcela {i + 1}</span>
+                        <Badge variant={statusVariant(child.status)}>{statusLabel(child.status)}</Badge>
+                      </div>
+                      <div className="font-semibold text-sm text-gray-900">{formatCurrency(child.totalAmount)}</div>
+                      <div className="text-xs text-gray-500">{child.reference} · Pag. {formatDate(child.promisedPaymentDate ?? child.dueDate)}</div>
+                    </button>
+                  ))}
+                  {!panelDoc.recurrenceId && (
+                    <button
+                      onClick={() => unsplitPayable.mutate(panelDoc.id)}
+                      disabled={unsplitPayable.isPending || !allOpen}
+                      title={!allOpen ? 'Não é possível desfazer: algumas parcelas já foram pagas' : undefined}
+                      className={`w-full text-xs px-3 py-1.5 rounded-lg transition-colors ${allOpen ? 'text-orange-700 hover:text-red-700 border border-orange-200 hover:border-red-300 hover:bg-red-50' : 'text-gray-400 border border-gray-200 cursor-not-allowed'}`}
+                    >
+                      {unsplitPayable.isPending ? 'A desfazer...' : 'Desfazer divisão'}
+                    </button>
+                  )}
+                </div>
+              )
+            })()}
+
+            {panelTab === 'followups' && selectedClientId && (
+              <FollowupsPanel
+                clientId={selectedClientId}
+                direction="PAYABLE"
+                doc={{
+                  id: panelDoc.id,
+                  reference: panelDoc.reference,
+                  entityName: panelDoc.entityName,
+                  totalAmount: panelDoc.totalAmount,
+                  dueDate: panelDoc.dueDate,
+                  origin: panelDoc.origin as 'TOC' | 'LOCAL',
+                  tocPurchasesDocId: panelDoc.tocPurchasesDocId ?? (panelTocDoc ? String(panelTocDoc.id) : null),
+                }}
+              />
             )}
           </div>
       </div>
+    )}
+
+    {createPortal(
+      <PaymentDetailModal
+        open={!!detailPayment}
+        onClose={() => setDetailPayment(null)}
+        payment={detailPayment}
+        clientId={selectedClientId ?? ''}
+        entityName={panelDoc?.entityName ?? ''}
+        onInvoiceClick={(payableId) => {
+          const tocDoc = (tocDocs ?? []).find((d) => String(d.id) === String(payableId))
+          if (!tocDoc) return
+          const s = Number(tocDoc.status)
+          setPanelDoc({
+            id: String(tocDoc.id),
+            reference: String(tocDoc.document_no ?? ''),
+            entityName: String(tocDoc.supplier_business_name ?? ''),
+            documentDate: String(tocDoc.date ?? ''),
+            dueDate: String(tocDoc.due_date ?? tocDoc.date ?? ''),
+            totalAmount: Number(tocDoc.gross_total),
+            pendingAmount: Number(tocDoc.pending_total),
+            paidAmount: Number(tocDoc.gross_total) - Number(tocDoc.pending_total),
+            status: s === 3 ? 'SETTLED' : s === 2 ? 'PARTIAL' : s === 4 ? 'VOID' : 'OPEN',
+            origin: 'TOC',
+          })
+          setPanelTocDoc(tocDoc)
+          setPanelTab('details')
+          setPanelSection(null)
+          setDetailPayment(null)
+        }}
+      />,
+      document.body
     )}
     </div>
     </>

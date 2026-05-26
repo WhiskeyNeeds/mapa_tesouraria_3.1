@@ -1231,7 +1231,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
 
               {sHdr('Geral')}
               <div className="px-6 py-3 space-y-3">
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">NIF <span className="text-red-400">*</span></label>
                     <input
@@ -1263,7 +1263,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">Telefone</label>
                     <input className="input text-sm w-full" placeholder="210000000" maxLength={9} value={cli_tel} onChange={e => setCli_tel(e.target.value.replace(/\D/g, '').slice(0, 9))} />
@@ -1343,7 +1343,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
                   <label className="block text-xs font-medium text-gray-500 mb-1">Morada</label>
                   <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Rua, nº, andar..." value={cli_morada} onChange={e => setCli_morada(e.target.value)} />
                 </div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">Código postal</label>
                     <input className="input text-sm w-full" placeholder="0000-000" value={cli_codPostal} maxLength={8}
@@ -1445,7 +1445,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">% retenção</label>
                     <input type="number" min="0" max="100" step="0.01" className="input text-sm w-full" placeholder="%" value={cli_percRet} onChange={e => setCli_percRet(e.target.value)} />
@@ -1556,7 +1556,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
             <div style={forn_faceStyle()}>
                   {sHdr('Geral')}
                   <div className="px-6 py-3 space-y-3">
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">NIF <span className="text-red-400">*</span></label>
                         <input
@@ -1577,7 +1577,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">Nome de contacto</label>
                         <input className="input text-sm w-full" placeholder="João Silva" value={forn_contacto} onChange={e => setForn_contacto(e.target.value)} />
@@ -1592,7 +1592,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">Telefone</label>
                         <input className="input text-sm w-full" placeholder="210000000" maxLength={9} value={forn_telefone} onChange={e => setForn_telefone(e.target.value.replace(/\D/g, '').slice(0, 9))} />
@@ -1741,7 +1741,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
                       <label className="block text-xs font-medium text-gray-500 mb-1">Morada</label>
                       <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Rua, nº, andar..." value={forn_morada} onChange={e => setForn_morada(e.target.value)} />
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">Código postal</label>
                         <input className="input text-sm w-full" placeholder="0000-000" value={forn_codPostal} maxLength={8}
@@ -1901,7 +1901,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
 
               {sHdr('Preços de Venda')}
               <div className="px-6 py-3 space-y-3">
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {([
                     { label: 'Preço 1', val: item_preco,  set: setItem_preco  },
                     { label: 'Preço 2', val: item_preco2, set: setItem_preco2 },
@@ -2326,7 +2326,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
             </div>
 
             {dHdr('Preços de Venda')}
-            <div className="px-6 py-3 grid grid-cols-3 gap-x-4 gap-y-3">
+            <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-3">
               <Field label="Preço 1" value={row.sales_price} price />
               <Field label="Preço 2" value={row.sales_price_2} price />
               <Field label="Preço 3" value={row.sales_price_3} price />

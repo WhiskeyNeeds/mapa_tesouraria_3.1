@@ -86,6 +86,43 @@ enum TreasuryImportStatus {
   QUARANTINED
 }
 
+enum TreasuryFollowupKind {
+  EMAIL_SENT
+  CALL_TASK
+  CALL_LOGGED
+  NOTE
+  AUTO_REMINDER
+}
+
+enum TreasuryFollowupStatus {
+  PENDING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+enum TreasuryFollowupImportance {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum TreasuryFollowupDirection {
+  RECEIVABLE
+  PAYABLE
+}
+
+enum TreasuryEmailTemplateScope {
+  RECEIVABLE
+  PAYABLE
+  BOTH
+}
+
+enum TreasuryBudgetStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 // ─── Modelos existentes (ReportsBizzPm) ────────────────────────────────────
 
 model User {
@@ -115,6 +152,11 @@ model User {
   treasuryReconciliationsCreated  TreasuryReconciliation[] @relation("ReconciliationsCreated")
   treasuryReconciliationsReversed TreasuryReconciliation[] @relation("ReconciliationsReversed")
   treasuryAuditLogs               TreasuryAuditLog[]
+  treasuryFollowupsCreated        TreasuryFollowup[]       @relation("FollowupsCreated")
+  treasuryFollowupsAssigned       TreasuryFollowup[]       @relation("FollowupsAssigned")
+  treasuryInvoiceAttachments      TreasuryInvoiceAttachment[]
+  treasuryEmailTemplatesCreated   TreasuryEmailTemplate[]  @relation("EmailTemplatesCreated")
+  treasuryBudgetsCreated          TreasuryBudget[]         @relation("BudgetsCreated")
 
   @@index([email])
   @@index([isActive])
@@ -173,6 +215,11 @@ model Client {
   treasuryClassificationRules TreasuryClassificationRule[]
   treasurySettings            TreasurySettings?
   treasuryAuditLogs           TreasuryAuditLog[]
+  treasuryEmailTemplates      TreasuryEmailTemplate[]
+  treasuryFollowups           TreasuryFollowup[]
+  treasuryInvoiceAttachments  TreasuryInvoiceAttachment[]
+  treasuryBudgets             TreasuryBudget[]
+  treasuryBudgetCategories    TreasuryBudgetCategory[]
   productAnalytics            ProductAnalytic[]
 
   @@index([isActive])
@@ -405,6 +452,9 @@ model TreasuryReceivable {
   parentId            String?
   promisedPaymentDate DateTime?
 
+  budgetId         String?
+  budgetCategoryId String?
+
   createdById String
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -415,13 +465,19 @@ model TreasuryReceivable {
   recurrence          TreasuryRecurrence?                @relation(fields: [recurrenceId], references: [id])
   parent              TreasuryReceivable?                @relation("ReceivableChildren", fields: [parentId], references: [id])
   children            TreasuryReceivable[]               @relation("ReceivableChildren")
+  budget              TreasuryBudget?                    @relation(fields: [budgetId], references: [id], onDelete: SetNull)
+  budgetCategory      TreasuryBudgetCategory?            @relation(fields: [budgetCategoryId], references: [id], onDelete: SetNull)
   reconciliationLinks TreasuryReconciliationReceivable[]
   createdBy           User                               @relation("ReceivablesCreated", fields: [createdById], references: [id])
+  followups           TreasuryFollowup[]
+  attachments         TreasuryInvoiceAttachment[]
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
   @@index([clientId, categoryId])
   @@index([clientId, origin])
+  @@index([clientId, budgetId])
+  @@index([clientId, budgetCategoryId])
   @@index([tocSalesDocId])
   @@map("treasury_receivables")
 }
@@ -456,6 +512,9 @@ model TreasuryPayable {
   parentId            String?
   promisedPaymentDate DateTime?
 
+  budgetId         String?
+  budgetCategoryId String?
+
   createdById String
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -466,13 +525,19 @@ model TreasuryPayable {
   recurrence          TreasuryRecurrence?             @relation(fields: [recurrenceId], references: [id])
   parent              TreasuryPayable?                @relation("PayableChildren", fields: [parentId], references: [id])
   children            TreasuryPayable[]               @relation("PayableChildren")
+  budget              TreasuryBudget?                 @relation(fields: [budgetId], references: [id], onDelete: SetNull)
+  budgetCategory      TreasuryBudgetCategory?         @relation(fields: [budgetCategoryId], references: [id], onDelete: SetNull)
   reconciliationLinks TreasuryReconciliationPayable[]
   createdBy           User                            @relation("PayablesCreated", fields: [createdById], references: [id])
+  followups           TreasuryFollowup[]
+  attachments         TreasuryInvoiceAttachment[]
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
   @@index([clientId, categoryId])
   @@index([clientId, origin])
+  @@index([clientId, budgetId])
+  @@index([clientId, budgetCategoryId])
   @@index([tocPurchasesDocId])
   @@map("treasury_payables")
 }
@@ -630,6 +695,13 @@ model TreasurySettings {
   syncIntervalMinutes     Int       @default(15)
   lastFullSyncAt          DateTime?
 
+  // Follow-up plan: controla que ações ficam disponíveis no painel "Follow-ups".
+  followupEnableEmail      Boolean @default(true)
+  followupEnableCallTask   Boolean @default(true)
+  followupEnableLogCall    Boolean @default(true)
+  followupEnableNote       Boolean @default(true)
+  followupEnablePdfUpload  Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -658,4 +730,164 @@ model TreasuryAuditLog {
   @@index([clientId, action])
   @@index([entityType, entityId])
   @@map("treasury_audit_logs")
+}
+
+model TreasuryEmailTemplate {
+  id       String                     @id @default(cuid())
+  clientId String
+  name     String                     @db.VarChar(120)
+  scope    TreasuryEmailTemplateScope @default(BOTH)
+
+  subject  String @db.VarChar(300)
+  bodyHtml String
+
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  client    Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy User   @relation("EmailTemplatesCreated", fields: [createdById], references: [id])
+
+  @@index([clientId, scope, isActive])
+  @@map("treasury_email_templates")
+}
+
+model TreasuryFollowup {
+  id        String                    @id @default(cuid())
+  clientId  String
+  direction TreasuryFollowupDirection
+  kind      TreasuryFollowupKind
+
+  receivableId String?
+  payableId    String?
+
+  status     TreasuryFollowupStatus    @default(DONE)
+  importance TreasuryFollowupImportance @default(NORMAL)
+
+  title       String?  @db.VarChar(300)
+  description String?
+  payload     Json?
+
+  dueAt       DateTime?
+  completedAt DateTime?
+
+  assignedToId String?
+  createdById  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  client     Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  receivable TreasuryReceivable? @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  payable    TreasuryPayable?    @relation(fields: [payableId], references: [id], onDelete: Cascade)
+  assignedTo User?               @relation("FollowupsAssigned", fields: [assignedToId], references: [id])
+  createdBy  User                @relation("FollowupsCreated", fields: [createdById], references: [id])
+
+  @@index([clientId, createdAt(sort: Desc)])
+  @@index([receivableId, createdAt(sort: Desc)])
+  @@index([payableId, createdAt(sort: Desc)])
+  @@index([clientId, kind, status])
+  @@index([assignedToId, status, dueAt])
+  @@map("treasury_followups")
+}
+
+model TreasuryInvoiceAttachment {
+  id       String @id @default(cuid())
+  clientId String
+
+  receivableId String?
+  payableId    String?
+
+  filename   String @db.VarChar(255)
+  storageKey String @db.VarChar(500)
+  mimeType   String @db.VarChar(120)
+  size       Int
+
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  client     Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  receivable TreasuryReceivable? @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  payable    TreasuryPayable?    @relation(fields: [payableId], references: [id], onDelete: Cascade)
+  uploadedBy User                @relation(fields: [uploadedById], references: [id])
+
+  @@index([clientId, createdAt(sort: Desc)])
+  @@index([receivableId])
+  @@index([payableId])
+  @@map("treasury_invoice_attachments")
+}
+
+model TreasuryBudget {
+  id       String @id @default(cuid())
+  clientId String
+
+  name        String  @db.VarChar(200)
+  description String?
+  type        TreasuryCategoryType
+  status      TreasuryBudgetStatus @default(ACTIVE)
+
+  totalAmount Decimal  @db.Decimal(18, 2)
+  currency    String   @default("EUR") @db.VarChar(3)
+
+  startDate DateTime
+  endDate   DateTime
+
+  color String? @db.VarChar(7)
+  icon  String? @db.VarChar(40)
+
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  client       Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy    User                         @relation("BudgetsCreated", fields: [createdById], references: [id])
+  receivables  TreasuryReceivable[]
+  payables     TreasuryPayable[]
+  categoryLinks TreasuryBudgetCategoryLink[]
+
+  @@index([clientId, status, startDate])
+  @@index([clientId, type])
+  @@map("treasury_budgets")
+}
+
+// Categorias específicas para budgets — entidade independente das categorias de movimentos.
+// Aplica-se apenas a faturas (Receivables/Payables) que são imputadas a budgets.
+model TreasuryBudgetCategory {
+  id         String               @id @default(cuid())
+  clientId   String
+  name       String               @db.VarChar(120)
+  type       TreasuryCategoryType
+  color      String?              @db.VarChar(7)
+  icon       String?              @db.VarChar(40)
+  isArchived Boolean              @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client        Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  budgetLinks   TreasuryBudgetCategoryLink[]
+  receivables   TreasuryReceivable[]
+  payables      TreasuryPayable[]
+
+  @@unique([clientId, name, type])
+  @@index([clientId, type])
+  @@map("treasury_budget_categories")
+}
+
+model TreasuryBudgetCategoryLink {
+  budgetId         String
+  budgetCategoryId String
+  createdAt        DateTime @default(now())
+
+  budget         TreasuryBudget         @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  budgetCategory TreasuryBudgetCategory @relation(fields: [budgetCategoryId], references: [id], onDelete: Cascade)
+
+  @@id([budgetId, budgetCategoryId])
+  @@index([budgetCategoryId])
+  @@map("treasury_budget_category_links")
 }

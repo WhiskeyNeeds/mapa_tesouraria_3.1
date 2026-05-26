@@ -137,34 +137,34 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    const body = request.body as Parameters<TreasuryPayablesService['update']>[2]
-    return reply.send(await svc.update(clientId, id, body))
+    const body = request.body as Parameters<TreasuryPayablesService['update']>[3]
+    return reply.send(await svc.update(clientId, request.user.sub, id, body))
   })
 
   fastify.post(`${prefix}/:id/settle`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    return reply.send(await svc.settle(clientId, id))
+    return reply.send(await svc.settle(clientId, request.user.sub, id))
   })
 
   fastify.post(`${prefix}/:id/unsettle`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    return reply.send(await svc.unsettle(clientId, id))
+    return reply.send(await svc.unsettle(clientId, request.user.sub, id))
   })
 
   fastify.post(`${prefix}/:id/partial-payment`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const { amount } = request.body as { amount: number }
-    return reply.send(await svc.partialPayment(clientId, id, amount))
+    return reply.send(await svc.partialPayment(clientId, request.user.sub, id, amount))
   })
 
   fastify.post(`${prefix}/:id/void`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    return reply.send(await svc.void(clientId, id))
+    return reply.send(await svc.void(clientId, request.user.sub, id))
   })
 
   fastify.delete(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    await svc.delete(clientId, id)
+    await svc.delete(clientId, request.user.sub, id)
     return reply.status(204).send()
   })
 
@@ -177,7 +177,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
   fastify.patch(`${prefix}/:id/promised-date`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const { date } = request.body as { date: string | null }
-    return reply.send(await svc.setPromisedDate(clientId, id, date))
+    return reply.send(await svc.setPromisedDate(clientId, request.user.sub, id, date))
   })
 
   fastify.post(`${prefix}/:id/split`, { onRequest: auth }, async (request, reply) => {
@@ -188,6 +188,6 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.post(`${prefix}/:id/unsplit`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    return reply.send(await svc.unsplit(clientId, id))
+    return reply.send(await svc.unsplit(clientId, request.user.sub, id))
   })
 }

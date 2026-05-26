@@ -6,6 +6,8 @@ import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
 import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
+import FollowUpPlanTab from '@/components/followups/FollowUpPlanTab'
+import BudgetCategoriesTab from '@/components/settings/BudgetCategoriesTab'
 
 interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean; usageCount: number }
 interface Settings {
@@ -40,12 +42,13 @@ export default function SettingsPage() {
   const { selectedClientId, isTocEnabled, setIsTocEnabled } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
-  const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline'>('categories')
+  const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline' | 'followup-plan'>('categories')
   const [showNewCat, setShowNewCat] = useState(false)
   const [newCat, setNewCat] = useState({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' })
   const [editCat, setEditCat] = useState<Category | null>(null)
   const [editCatForm, setEditCatForm] = useState({ name: '', color: '#6b7280', launchToc: false })
   const [showArchived, setShowArchived] = useState(false)
+  const [categoriesSubTab, setCategoriesSubTab] = useState<'movements' | 'budgets'>('movements')
 
   const { data: categories = [] } = useQuery<Category[]>({
     queryKey: ['categories', selectedClientId, showArchived],
@@ -260,6 +263,7 @@ export default function SettingsPage() {
   const tabs = [
     { id: 'categories', label: 'Categorias' },
     { id: 'rules', label: 'Regras de Classificação' },
+    { id: 'followup-plan', label: 'Follow up plan' },
     { id: 'settings', label: 'Configurações' },
     { id: 'toconline', label: 'TOConline' },
   ] as const
@@ -278,16 +282,36 @@ export default function SettingsPage() {
 
       {tab === 'categories' && (
         <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-3">
-              <p className="text-sm text-gray-500">Gerencie as categorias de tesouraria.</p>
+          {/* Sub-separadores: Movimentos | Budgets */}
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
               <button
-                onClick={() => setShowArchived((v) => !v)}
-                className={`text-xs font-medium px-2 py-1 rounded-lg border transition-colors ${showArchived ? 'bg-gray-100 border-gray-300 text-gray-700' : 'border-gray-200 text-gray-400 hover:text-gray-600'}`}
+                onClick={() => setCategoriesSubTab('movements')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${categoriesSubTab === 'movements' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
               >
-                {showArchived ? 'Ocultar arquivadas' : 'Mostrar arquivadas'}
+                Movimentos
+              </button>
+              <button
+                onClick={() => setCategoriesSubTab('budgets')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${categoriesSubTab === 'budgets' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                Budgets
               </button>
             </div>
+            <button
+              onClick={() => setShowArchived((v) => !v)}
+              className={`text-xs font-medium px-2 py-1 rounded-lg border transition-colors ${showArchived ? 'bg-gray-100 border-gray-300 text-gray-700' : 'border-gray-200 text-gray-400 hover:text-gray-600'}`}
+            >
+              {showArchived ? 'Ocultar arquivadas' : 'Mostrar arquivadas'}
+            </button>
+          </div>
+
+          {categoriesSubTab === 'budgets' ? (
+            <BudgetCategoriesTab showArchived={showArchived} />
+          ) : (
+            <>
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-gray-500">Categorias usadas para classificar movimentos bancários, faturas e contas.</p>
             <button onClick={() => setShowNewCat(true)} className="btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />Nova Categoria</button>
           </div>
 
@@ -386,6 +410,8 @@ export default function SettingsPage() {
               </div>
             </div>
           </Modal>
+            </>
+          )}
         </div>
       )}
 
@@ -510,7 +536,7 @@ export default function SettingsPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
                   <label className="label">Direção</label>
                   <select className="input" value={newRule.direction} onChange={(e) => setNewRule({ ...newRule, direction: e.target.value })}>
@@ -584,7 +610,7 @@ export default function SettingsPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
                   <label className="label">Direção</label>
                   <select className="input" value={editRuleForm.direction} onChange={(e) => setEditRuleForm({ ...editRuleForm, direction: e.target.value })}>
@@ -622,6 +648,10 @@ export default function SettingsPage() {
             </div>
           </Modal>
         </div>
+      )}
+
+      {tab === 'followup-plan' && selectedClientId && (
+        <FollowUpPlanTab clientId={selectedClientId} />
       )}
 
       {tab === 'toconline' && (

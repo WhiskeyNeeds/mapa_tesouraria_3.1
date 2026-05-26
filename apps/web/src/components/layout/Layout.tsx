@@ -1,9 +1,29 @@
 import { Outlet, NavLink } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import {
-  LayoutDashboard, Building2, RefreshCw, ArrowDownToLine,
-  ArrowUpFromLine, Settings, LogOut, Menu, X, ChevronDown, AlertTriangle, SlidersHorizontal, Briefcase,
+  LayoutDashboard, Building2, Landmark, ArrowLeftRight, Euro, Plus, Minus,
+  Settings, LogOut, Menu, X, ChevronDown, AlertTriangle, SlidersHorizontal, Briefcase, Wallet,
 } from 'lucide-react'
+
+// Ícones compostos para Contas a Receber (€+) e Contas a Pagar (€−).
+// Lucide-react não fornece estes combinados; sobrepomos o sinal no canto sup. direito.
+function EuroPlus({ className }: { className?: string }) {
+  return (
+    <span className={`relative inline-flex items-center justify-center ${className ?? ''}`}>
+      <Euro className="w-full h-full" strokeWidth={2.25} />
+      <Plus className="absolute -top-1 -right-1 w-2.5 h-2.5" strokeWidth={4} />
+    </span>
+  )
+}
+
+function EuroMinus({ className }: { className?: string }) {
+  return (
+    <span className={`relative inline-flex items-center justify-center ${className ?? ''}`}>
+      <Euro className="w-full h-full" strokeWidth={2.25} />
+      <Minus className="absolute -top-1 -right-1 w-2.5 h-2.5" strokeWidth={4} />
+    </span>
+  )
+}
 import { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -11,10 +31,11 @@ import CompanyManagerModal from '@/components/ui/CompanyManagerModal'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
-  { to: '/bancos', label: 'Bancos & Movimentos', icon: Building2 },
-  { to: '/reconciliacao', label: 'Reconciliação', icon: RefreshCw },
-  { to: '/contas-a-receber', label: 'Contas a Receber', icon: ArrowDownToLine },
-  { to: '/contas-a-pagar', label: 'Contas a Pagar', icon: ArrowUpFromLine },
+  { to: '/bancos', label: 'Bancos & Movimentos', icon: Landmark },
+  { to: '/reconciliacao', label: 'Reconciliação', icon: ArrowLeftRight },
+  { to: '/contas-a-receber', label: 'Contas a Receber', icon: EuroPlus },
+  { to: '/contas-a-pagar', label: 'Contas a Pagar', icon: EuroMinus },
+  { to: '/budgets', label: 'Budgets', icon: Wallet },
   { to: '/empresa', label: 'Empresa', icon: Briefcase },
   { to: '/definicoes', label: 'Definições', icon: Settings },
 ]
@@ -23,10 +44,24 @@ interface Client { id: string; name: string; nif: string }
 
 export default function Layout() {
   const { user, selectedClientId, setSelectedClientId, logout } = useAuth()
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 1280 : true))
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false))
   const [clientDropdown, setClientDropdown] = useState(false)
   const [showManager, setShowManager] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Adapta a sidebar à largura da janela: colapsa automaticamente abaixo de xl
+  // (1280px) e passa a overlay com backdrop abaixo de md (768px). O utilizador
+  // pode sempre forçar manualmente via o botão menu.
+  useEffect(() => {
+    const handler = () => {
+      const w = window.innerWidth
+      setIsMobile(w < 768)
+      setSidebarOpen(w >= 1280)
+    }
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  }, [])
 
   useEffect(() => {
     if (!clientDropdown) return
@@ -55,11 +90,26 @@ export default function Layout() {
 
   const selectedClient = clients.find((c) => c.id === selectedClientId)
 
+  // Em mobile, a sidebar fica em overlay (fora do flow). Em desktop ocupa
+  // espaço próprio. A largura aplicada também muda: em mobile só há "aberta"
+  // (w-64) ou "fechada" (escondida com -translate-x-full).
+  const sidebarClasses = isMobile
+    ? `fixed inset-y-0 left-0 z-40 w-64 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
+    : `relative flex-shrink-0 ${sidebarOpen ? 'w-64' : 'w-16'}`
+
   return (
     <div className="flex h-screen bg-slate-50">
+      {/* Backdrop (só em mobile, com sidebar aberta) */}
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px]"
+        />
+      )}
+
       {/* Sidebar */}
       <aside
-        className={`${sidebarOpen ? 'w-64' : 'w-16'} flex-shrink-0 flex flex-col transition-all duration-300 ease-out`}
+        className={`${sidebarClasses} flex flex-col transition-all duration-300 ease-out`}
         style={{ background: '#0f172a' }}
       >
         {/* Logo */}
@@ -86,6 +136,7 @@ export default function Layout() {
                 to={item.to}
                 end={item.exact}
                 title={!sidebarOpen ? item.label : undefined}
+                onClick={() => { if (isMobile) setSidebarOpen(false) }}
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group ${
                     isActive

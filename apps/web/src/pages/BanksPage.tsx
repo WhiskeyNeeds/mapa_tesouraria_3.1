@@ -216,6 +216,14 @@ export default function BanksPage() {
   const [bankSearch, setBankSearch] = useState('')
   const [showBankDropdown, setShowBankDropdown] = useState(false)
   const [ibanTouched, setIbanTouched] = useState(false)
+  // Limpa o form de nova conta. Usado ao abrir o modal, ao fechá-lo (cancel/X) e
+  // após uma criação bem-sucedida, para o IBAN/nome da conta anterior não persistir.
+  function resetNewAccountForm() {
+    setNewAccount({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' })
+    setBankSearch('')
+    setShowBankDropdown(false)
+    setIbanTouched(false)
+  }
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -349,7 +357,7 @@ export default function BanksPage() {
       openingBalance: parseFloat(data.openingBalance),
       minBalance: data.minBalance ? parseFloat(data.minBalance) : undefined,
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bank-accounts'] }); setShowNewAccount(false) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['bank-accounts'] }); setShowNewAccount(false); resetNewAccountForm() },
   })
 
   const deleteAccount = useMutation({
@@ -655,7 +663,7 @@ export default function BanksPage() {
             setShowImport(true)
           }} className="btn-secondary flex items-center gap-2"><Upload className="w-4 h-4" />Importar movimentos de conta</button>
           <button onClick={() => { setNewMovement(m => ({ ...m, bankAccountId: selectedAccount || accounts[0]?.id || '', date: new Date().toISOString().slice(0, 10) })); setShowNewMovement(true) }} className="btn-secondary flex items-center gap-2"><PenLine className="w-4 h-4" />Novo Movimento</button>
-          <button onClick={() => setShowNewAccount(true)} className="btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />Nova Conta</button>
+          <button onClick={() => { resetNewAccountForm(); createAccount.reset(); setShowNewAccount(true) }} className="btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />Nova Conta</button>
         </div>
       </div>
 
@@ -1230,7 +1238,7 @@ export default function BanksPage() {
           if (ibanValidation.reason === 'invalid-characters') return 'IBAN contém caracteres inválidos.'
           return 'IBAN inválido.'
         })()
-        const resetModal = () => { setShowNewAccount(false); setBankSearch(''); setShowBankDropdown(false); setIbanTouched(false); setNewAccount({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' }); createAccount.reset() }
+        const resetModal = () => { setShowNewAccount(false); resetNewAccountForm(); createAccount.reset() }
         return (
           <Modal open={showNewAccount} onClose={resetModal} title="Nova Conta Bancária">
             <div className="space-y-4">

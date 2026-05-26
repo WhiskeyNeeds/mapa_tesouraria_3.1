@@ -19,6 +19,11 @@ export class TreasurySettingsService {
     lowBalanceChannels: string[]
     importFileRetentionDays: number
     syncIntervalMinutes: number
+    followupEnableEmail: boolean
+    followupEnableCallTask: boolean
+    followupEnableLogCall: boolean
+    followupEnableNote: boolean
+    followupEnablePdfUpload: boolean
   }>) {
     return this.prisma.treasurySettings.upsert({
       where: { clientId },

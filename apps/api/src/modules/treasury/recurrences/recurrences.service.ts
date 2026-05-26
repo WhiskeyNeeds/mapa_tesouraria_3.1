@@ -115,60 +115,78 @@ export class TreasuryRecurrencesService {
         }
 
         const dateKey = nextDate.toISOString().slice(0, 7).replace('-', '') // YYYYMM
-        const newRef = `${root.reference}/${dateKey}`
+        // Derive the child reference from the root: when the root has no reference we
+        // store null on the child too (multiple null values are allowed by Postgres in
+        // a UNIQUE index). Concatenating the string "null/YYYYMM" was the previous bug:
+        // it created cross-recurrence collisions for every reference-less recurrence.
+        const newRef = root.reference ? `${root.reference}/${dateKey}` : null
 
+        // Deduplicate per (recurrenceId, dueDate, not deleted) — that's the natural
+        // identity of a generated instance and avoids the reference-collision trap.
+        // We also try/catch P2002 just in case two parallel processForClient calls
+        // race past the existence check at the same time.
         if (isReceivable) {
           const exists = await this.prisma.treasuryReceivable.findFirst({
-            where: { clientId, reference: newRef, deletedAt: null },
+            where: { recurrenceId: rec.id, dueDate: nextDate, deletedAt: null },
+            select: { id: true },
           })
           if (!exists) {
-            await this.prisma.treasuryReceivable.create({
-              data: {
-                clientId,
-                createdById: root.createdById,
-                origin: root.origin,
-                categoryId: root.categoryId,
-                entityName: root.entityName,
-                entityNif: root.entityNif,
-                reference: newRef,
-                description: root.description,
-                documentDate: nextDate,
-                dueDate: nextDate,
-                totalAmount: root.totalAmount,
-                pendingAmount: root.totalAmount,
-                currency: root.currency,
-                recurrenceId: rec.id,
-                parentId: root.id,
-              },
-            })
-            created++
+            try {
+              await this.prisma.treasuryReceivable.create({
+                data: {
+                  clientId,
+                  createdById: root.createdById,
+                  origin: root.origin,
+                  categoryId: root.categoryId,
+                  entityName: root.entityName,
+                  entityNif: root.entityNif,
+                  reference: newRef,
+                  description: root.description,
+                  documentDate: nextDate,
+                  dueDate: nextDate,
+                  totalAmount: root.totalAmount,
+                  pendingAmount: root.totalAmount,
+                  currency: root.currency,
+                  recurrenceId: rec.id,
+                  parentId: root.id,
+                },
+              })
+              created++
+            } catch (err) {
+              if (!(err && typeof err === 'object' && 'code' in err && err.code === 'P2002')) throw err
+            }
           }
         } else {
           const payRoot = rec.payables[0]
           const exists = await this.prisma.treasuryPayable.findFirst({
-            where: { clientId, reference: newRef, deletedAt: null },
+            where: { recurrenceId: rec.id, dueDate: nextDate, deletedAt: null },
+            select: { id: true },
           })
           if (!exists) {
-            await this.prisma.treasuryPayable.create({
-              data: {
-                clientId,
-                createdById: payRoot.createdById,
-                origin: payRoot.origin,
-                categoryId: payRoot.categoryId,
-                entityName: payRoot.entityName,
-                entityNif: payRoot.entityNif,
-                reference: newRef,
-                description: payRoot.description,
-                documentDate: nextDate,
-                dueDate: nextDate,
-                totalAmount: payRoot.totalAmount,
-                pendingAmount: payRoot.totalAmount,
-                currency: payRoot.currency,
-                recurrenceId: rec.id,
-                parentId: payRoot.id,
-              },
-            })
-            created++
+            try {
+              await this.prisma.treasuryPayable.create({
+                data: {
+                  clientId,
+                  createdById: payRoot.createdById,
+                  origin: payRoot.origin,
+                  categoryId: payRoot.categoryId,
+                  entityName: payRoot.entityName,
+                  entityNif: payRoot.entityNif,
+                  reference: newRef,
+                  description: payRoot.description,
+                  documentDate: nextDate,
+                  dueDate: nextDate,
+                  totalAmount: payRoot.totalAmount,
+                  pendingAmount: payRoot.totalAmount,
+                  currency: payRoot.currency,
+                  recurrenceId: rec.id,
+                  parentId: payRoot.id,
+                },
+              })
+              created++
+            } catch (err) {
+              if (!(err && typeof err === 'object' && 'code' in err && err.code === 'P2002')) throw err
+            }
           }
         }
 

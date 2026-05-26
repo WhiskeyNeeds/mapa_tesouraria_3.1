@@ -7,6 +7,29 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// Returns true when the given YYYY-MM-DD string falls on Saturday or Sunday.
+// Empty/invalid strings are treated as non-weekend so they don't trip validation.
+export function isWeekend(ymd: string): boolean {
+  if (!ymd || ymd.length < 10) return false
+  const [y, m, d] = ymd.slice(0, 10).split('-').map(Number)
+  if (!y || !m || !d) return false
+  const day = new Date(y, m - 1, d).getDay()
+  return day === 0 || day === 6
+}
+
+// Advances a YYYY-MM-DD string to the next Monday if it falls on a Saturday or Sunday.
+// Returns the input unchanged when it's already a workday or invalid.
+export function shiftToWorkday(ymd: string): string {
+  if (!ymd || ymd.length < 10) return ymd
+  const [y, m, d] = ymd.slice(0, 10).split('-').map(Number)
+  if (!y || !m || !d) return ymd
+  const date = new Date(y, m - 1, d)
+  const day = date.getDay()
+  if (day === 6) date.setDate(date.getDate() + 2) // Sat -> Mon
+  else if (day === 0) date.setDate(date.getDate() + 1) // Sun -> Mon
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 export function formatCurrency(value: number, currency = 'EUR'): string {
   const parts = new Intl.NumberFormat('pt-PT', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true }).formatToParts(Number(value))
   return parts.map((p) => (p.type === 'group' ? '\u202F' : p.value)).join('')
