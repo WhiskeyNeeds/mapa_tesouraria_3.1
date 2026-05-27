@@ -7,7 +7,7 @@ import Modal from '@/components/ui/Modal'
 import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
 import FollowUpPlanTab from '@/components/followups/FollowUpPlanTab'
-import BudgetCategoriesTab from '@/components/settings/BudgetCategoriesTab'
+import BudgetRulesTab from '@/components/settings/BudgetRulesTab'
 
 interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean; usageCount: number }
 interface Settings {
@@ -307,7 +307,7 @@ export default function SettingsPage() {
           </div>
 
           {categoriesSubTab === 'budgets' ? (
-            <BudgetCategoriesTab showArchived={showArchived} />
+            <BudgetRulesTab />
           ) : (
             <>
           <div className="flex justify-between items-center">
