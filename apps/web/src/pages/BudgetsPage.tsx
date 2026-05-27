@@ -5,7 +5,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import Modal from '@/components/ui/Modal'
-import { Plus, Wallet, TrendingUp, Pencil, Trash2, Archive, ArchiveRestore, AlertTriangle, Tag } from 'lucide-react'
+import BudgetPanel from '@/components/budgets/BudgetPanel'
+import { Plus, Wallet, TrendingUp, Pencil, Trash2, Archive, ArchiveRestore, AlertTriangle } from 'lucide-react'
 
 interface BudgetProgress {
   paidAmount: number
@@ -14,8 +15,6 @@ interface BudgetProgress {
   totalAllocated: number
   overrunAmount: number
 }
-
-interface CategoryLite { id: string; name: string; color: string | null; type: 'REVENUE' | 'EXPENSE' }
 
 interface Budget {
   id: string
@@ -30,10 +29,8 @@ interface Budget {
   color: string | null
   icon: string | null
   progress: BudgetProgress
-  categories: CategoryLite[]
+  pendingReviewCount: number
 }
-
-interface Category { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null }
 
 const emptyForm = {
   name: '',
@@ -43,7 +40,6 @@ const emptyForm = {
   startDate: '',
   endDate: '',
   color: '#3B82F6',
-  categoryIds: [] as string[],
 }
 
 export default function BudgetsPage() {
@@ -56,23 +52,13 @@ export default function BudgetsPage() {
   const [showNew, setShowNew] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
+  const [selectedBudgetId, setSelectedBudgetId] = useState<string | null>(null)
 
   const { data: budgets = [], isLoading } = useQuery<Budget[]>({
     queryKey: ['budgets', selectedClientId, showArchived],
     queryFn: () => api.get(`/treasury/${selectedClientId}/budgets${showArchived ? '?status=ARCHIVED' : '?status=ACTIVE'}`),
     enabled: !!selectedClientId,
   })
-
-  const { data: allBudgetCategories = [] } = useQuery<Category[]>({
-    queryKey: ['budget-categories', selectedClientId, false],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/budget-categories`),
-    enabled: !!selectedClientId,
-  })
-
-  const availableCategories = useMemo(
-    () => allBudgetCategories.filter((c) => c.type === form.type),
-    [allBudgetCategories, form.type],
-  )
 
   const filtered = useMemo(() => {
     if (tab === 'ALL') return budgets
@@ -131,17 +117,7 @@ export default function BudgetsPage() {
       startDate: b.startDate.slice(0, 10),
       endDate: b.endDate.slice(0, 10),
       color: b.color ?? '#3B82F6',
-      categoryIds: b.categories.map((c) => c.id),
     })
-  }
-
-  function toggleCategoryInForm(id: string) {
-    setForm((f) => ({
-      ...f,
-      categoryIds: f.categoryIds.includes(id)
-        ? f.categoryIds.filter((x) => x !== id)
-        : [...f.categoryIds, id],
-    }))
   }
 
   function submitForm() {
@@ -153,7 +129,6 @@ export default function BudgetsPage() {
       startDate: form.startDate,
       endDate: form.endDate,
       color: form.color,
-      budgetCategoryIds: form.categoryIds,
     }
     if (editId) {
       const { type: _t, ...editPayload } = payload
@@ -231,29 +206,53 @@ export default function BudgetsPage() {
         </label>
       </div>
 
-      {/* Lista de cards */}
-      {isLoading ? (
-        <div className="text-center py-12 text-gray-500">A carregar...</div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
-          <Wallet className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500 text-sm">Sem budgets {showArchived ? 'arquivados' : 'ativos'} para mostrar.</p>
+      {/* Lista + Painel */}
+      <div className="flex gap-0">
+        <div className={`flex-1 min-w-0 space-y-3 ${selectedBudgetId ? 'pr-4' : ''}`}>
+          {isLoading ? (
+            <div className="text-center py-12 text-gray-500">A carregar...</div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
+              <p className="text-gray-500 text-sm">Sem budgets para mostrar.</p>
+            </div>
+          ) : (
+            filtered.map((b) => (
+              <BudgetCard
+                key={b.id}
+                budget={b}
+                selected={selectedBudgetId === b.id}
+                onClick={() => setSelectedBudgetId(b.id === selectedBudgetId ? null : b.id)}
+                onEdit={() => { startEdit(b); setSelectedBudgetId(null) }}
+                onDelete={() => {
+                  if (confirm(`Eliminar budget "${b.name}"?`)) {
+                    deleteBudget.mutate(b.id)
+                    setSelectedBudgetId(null)
+                  }
+                }}
+                onToggleArchive={() => toggleArchive.mutate({ id: b.id, status: b.status === 'ACTIVE' ? 'ARCHIVED' : 'ACTIVE' })}
+              />
+            ))
+          )}
         </div>
-      ) : (
-        <div className="space-y-3">
-          {filtered.map((b) => (
-            <BudgetCard
-              key={b.id}
-              budget={b}
-              onEdit={() => startEdit(b)}
-              onDelete={() => {
-                if (confirm(`Eliminar budget "${b.name}"?`)) deleteBudget.mutate(b.id)
-              }}
-              onToggleArchive={() => toggleArchive.mutate({ id: b.id, status: b.status === 'ACTIVE' ? 'ARCHIVED' : 'ACTIVE' })}
-            />
-          ))}
-        </div>
-      )}
+
+        {selectedBudgetId && (
+          <BudgetPanel
+            budgetId={selectedBudgetId}
+            onClose={() => setSelectedBudgetId(null)}
+            onEdit={() => {
+              const b = filtered.find((x) => x.id === selectedBudgetId)
+              if (b) startEdit(b)
+            }}
+            onDelete={() => {
+              const b = filtered.find((x) => x.id === selectedBudgetId)
+              if (b && confirm(`Eliminar budget "${b.name}"?`)) {
+                deleteBudget.mutate(b.id)
+                setSelectedBudgetId(null)
+              }
+            }}
+          />
+        )}
+      </div>
 
       {/* Modal Criar/Editar */}
       <Modal
@@ -274,7 +273,7 @@ export default function BudgetsPage() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setForm({ ...form, type: 'EXPENSE', categoryIds: [] })}
+                  onClick={() => setForm({ ...form, type: 'EXPENSE' })}
                   className={`p-3 border rounded-lg text-sm font-medium transition-colors ${
                     form.type === 'EXPENSE' ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                   }`}
@@ -283,7 +282,7 @@ export default function BudgetsPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setForm({ ...form, type: 'REVENUE', categoryIds: [] })}
+                  onClick={() => setForm({ ...form, type: 'REVENUE' })}
                   className={`p-3 border rounded-lg text-sm font-medium transition-colors ${
                     form.type === 'REVENUE' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                   }`}
@@ -293,41 +292,6 @@ export default function BudgetsPage() {
               </div>
             </div>
           )}
-
-          <div>
-            <label className="label">
-              Categorias <span className="text-gray-400 font-normal">(opcional — usadas para auto-associar faturas)</span>
-            </label>
-            {availableCategories.length === 0 ? (
-              <p className="text-xs text-gray-400 italic">Sem categorias de budget de {form.type === 'EXPENSE' ? 'despesa' : 'receita'} disponíveis. Cria-as em Definições → Categorias → separador "Budgets".</p>
-            ) : (
-              <div className="border border-gray-200 rounded-lg p-2 max-h-44 overflow-y-auto space-y-1">
-                {availableCategories.map((c) => {
-                  const selected = form.categoryIds.includes(c.id)
-                  return (
-                    <button
-                      type="button"
-                      key={c.id}
-                      onClick={() => toggleCategoryInForm(c.id)}
-                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors ${
-                        selected ? 'bg-primary-50 text-primary-700' : 'text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      <input type="checkbox" readOnly checked={selected} className="rounded pointer-events-none" />
-                      <span
-                        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: c.color ?? '#9CA3AF' }}
-                      />
-                      <span className="flex-1 truncate">{c.name}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-            {form.categoryIds.length > 0 && (
-              <p className="text-xs text-gray-500 mt-1.5">{form.categoryIds.length} categoria(s) selecionada(s)</p>
-            )}
-          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -405,8 +369,10 @@ function SummaryCard({ label, icon, total, paid, expected, tone }: {
   )
 }
 
-function BudgetCard({ budget, onEdit, onDelete, onToggleArchive }: {
+function BudgetCard({ budget, selected, onClick, onEdit, onDelete, onToggleArchive }: {
   budget: Budget
+  selected: boolean
+  onClick: () => void
   onEdit: () => void
   onDelete: () => void
   onToggleArchive: () => void
@@ -422,7 +388,12 @@ function BudgetCard({ budget, onEdit, onDelete, onToggleArchive }: {
   const expectedColor = `${color}55`
 
   return (
-    <div className={`bg-white border rounded-xl p-5 ${overrun ? 'border-rose-300 bg-rose-50/30' : 'border-gray-200'}`}>
+    <div
+      className={`bg-white border rounded-xl p-5 cursor-pointer transition-all ${
+        selected ? 'border-primary-400 ring-1 ring-primary-300' : overrun ? 'border-rose-300 bg-rose-50/30' : 'border-gray-200 hover:border-gray-300'
+      }`}
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between gap-4 mb-3">
         <div className="flex items-start gap-3 min-w-0 flex-1">
           <div
@@ -448,29 +419,17 @@ function BudgetCard({ budget, onEdit, onDelete, onToggleArchive }: {
                   + {formatCurrency(progress.overrunAmount)}
                 </span>
               )}
+              {budget.pendingReviewCount > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">
+                  {budget.pendingReviewCount} para rever
+                </span>
+              )}
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
               {formatDate(budget.startDate)} → {formatDate(budget.endDate)}
             </p>
             {budget.description && (
               <p className="text-xs text-gray-500 mt-1.5 line-clamp-2">{budget.description}</p>
-            )}
-            {budget.categories.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                <Tag className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                {budget.categories.map((c) => (
-                  <span
-                    key={c.id}
-                    className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium"
-                    style={{
-                      backgroundColor: `${c.color ?? '#9CA3AF'}1A`,
-                      color: c.color ?? '#4B5563',
-                    }}
-                  >
-                    {c.name}
-                  </span>
-                ))}
-              </div>
             )}
           </div>
         </div>
@@ -480,13 +439,13 @@ function BudgetCard({ budget, onEdit, onDelete, onToggleArchive }: {
             <p className="text-lg font-semibold text-gray-900">{formatCurrency(totalAmount)}</p>
           </div>
           <div className="flex items-center gap-0.5">
-            <button onClick={onEdit} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100" title="Editar">
+            <button onClick={(e) => { e.stopPropagation(); onEdit() }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100" title="Editar">
               <Pencil className="w-3.5 h-3.5" />
             </button>
-            <button onClick={onToggleArchive} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100" title={budget.status === 'ACTIVE' ? 'Arquivar' : 'Reativar'}>
+            <button onClick={(e) => { e.stopPropagation(); onToggleArchive() }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100" title={budget.status === 'ACTIVE' ? 'Arquivar' : 'Reativar'}>
               {budget.status === 'ACTIVE' ? <Archive className="w-3.5 h-3.5" /> : <ArchiveRestore className="w-3.5 h-3.5" />}
             </button>
-            <button onClick={onDelete} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-rose-600 hover:bg-rose-50" title="Eliminar">
+            <button onClick={(e) => { e.stopPropagation(); onDelete() }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-rose-600 hover:bg-rose-50" title="Eliminar">
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
