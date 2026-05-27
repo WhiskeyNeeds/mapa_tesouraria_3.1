@@ -219,7 +219,7 @@ model Client {
   treasuryFollowups           TreasuryFollowup[]
   treasuryInvoiceAttachments  TreasuryInvoiceAttachment[]
   treasuryBudgets             TreasuryBudget[]
-  treasuryBudgetCategories    TreasuryBudgetCategory[]
+  treasuryBudgetRules         TreasuryBudgetRule[]
   productAnalytics            ProductAnalytic[]
 
   @@index([isActive])
@@ -306,6 +306,7 @@ model TreasuryCategory {
   payables            TreasuryPayable[]
   movements           TreasuryBankMovement[]
   classificationRules TreasuryClassificationRule[]
+  rules               TreasuryBudgetRule[]
 
   @@unique([clientId, name, type])
   @@index([clientId, type])
@@ -452,8 +453,8 @@ model TreasuryReceivable {
   parentId            String?
   promisedPaymentDate DateTime?
 
-  budgetId         String?
-  budgetCategoryId String?
+  budgetId           String?
+  budgetAutoAssigned Boolean @default(false)
 
   createdById String
   createdAt   DateTime  @default(now())
@@ -466,7 +467,6 @@ model TreasuryReceivable {
   parent              TreasuryReceivable?                @relation("ReceivableChildren", fields: [parentId], references: [id])
   children            TreasuryReceivable[]               @relation("ReceivableChildren")
   budget              TreasuryBudget?                    @relation(fields: [budgetId], references: [id], onDelete: SetNull)
-  budgetCategory      TreasuryBudgetCategory?            @relation(fields: [budgetCategoryId], references: [id], onDelete: SetNull)
   reconciliationLinks TreasuryReconciliationReceivable[]
   createdBy           User                               @relation("ReceivablesCreated", fields: [createdById], references: [id])
   followups           TreasuryFollowup[]
@@ -477,7 +477,6 @@ model TreasuryReceivable {
   @@index([clientId, categoryId])
   @@index([clientId, origin])
   @@index([clientId, budgetId])
-  @@index([clientId, budgetCategoryId])
   @@index([tocSalesDocId])
   @@map("treasury_receivables")
 }
@@ -512,8 +511,8 @@ model TreasuryPayable {
   parentId            String?
   promisedPaymentDate DateTime?
 
-  budgetId         String?
-  budgetCategoryId String?
+  budgetId           String?
+  budgetAutoAssigned Boolean @default(false)
 
   createdById String
   createdAt   DateTime  @default(now())
@@ -526,7 +525,6 @@ model TreasuryPayable {
   parent              TreasuryPayable?                @relation("PayableChildren", fields: [parentId], references: [id])
   children            TreasuryPayable[]               @relation("PayableChildren")
   budget              TreasuryBudget?                 @relation(fields: [budgetId], references: [id], onDelete: SetNull)
-  budgetCategory      TreasuryBudgetCategory?         @relation(fields: [budgetCategoryId], references: [id], onDelete: SetNull)
   reconciliationLinks TreasuryReconciliationPayable[]
   createdBy           User                            @relation("PayablesCreated", fields: [createdById], references: [id])
   followups           TreasuryFollowup[]
@@ -537,7 +535,6 @@ model TreasuryPayable {
   @@index([clientId, categoryId])
   @@index([clientId, origin])
   @@index([clientId, budgetId])
-  @@index([clientId, budgetCategoryId])
   @@index([tocPurchasesDocId])
   @@map("treasury_payables")
 }
@@ -843,51 +840,31 @@ model TreasuryBudget {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  client       Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  createdBy    User                         @relation("BudgetsCreated", fields: [createdById], references: [id])
-  receivables  TreasuryReceivable[]
-  payables     TreasuryPayable[]
-  categoryLinks TreasuryBudgetCategoryLink[]
+  client      Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy   User                 @relation("BudgetsCreated", fields: [createdById], references: [id])
+  receivables TreasuryReceivable[]
+  payables    TreasuryPayable[]
+  rules       TreasuryBudgetRule[]
 
   @@index([clientId, status, startDate])
   @@index([clientId, type])
   @@map("treasury_budgets")
 }
 
-// Categorias específicas para budgets — entidade independente das categorias de movimentos.
-// Aplica-se apenas a faturas (Receivables/Payables) que são imputadas a budgets.
-model TreasuryBudgetCategory {
-  id         String               @id @default(cuid())
-  clientId   String
-  name       String               @db.VarChar(120)
-  type       TreasuryCategoryType
-  color      String?              @db.VarChar(7)
-  icon       String?              @db.VarChar(40)
-  isArchived Boolean              @default(false)
+model TreasuryBudgetRule {
+  id          String   @id @default(cuid())
+  clientId    String
+  budgetId    String
+  categoryId  String
+  textPattern String?  @db.VarChar(200)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  client   Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  budget   TreasuryBudget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  category TreasuryCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
-  client        Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  budgetLinks   TreasuryBudgetCategoryLink[]
-  receivables   TreasuryReceivable[]
-  payables      TreasuryPayable[]
-
-  @@unique([clientId, name, type])
-  @@index([clientId, type])
-  @@map("treasury_budget_categories")
-}
-
-model TreasuryBudgetCategoryLink {
-  budgetId         String
-  budgetCategoryId String
-  createdAt        DateTime @default(now())
-
-  budget         TreasuryBudget         @relation(fields: [budgetId], references: [id], onDelete: Cascade)
-  budgetCategory TreasuryBudgetCategory @relation(fields: [budgetCategoryId], references: [id], onDelete: Cascade)
-
-  @@id([budgetId, budgetCategoryId])
-  @@index([budgetCategoryId])
-  @@map("treasury_budget_category_links")
+  @@index([clientId, budgetId])
+  @@index([clientId, categoryId])
+  @@map("treasury_budget_rules")
 }
