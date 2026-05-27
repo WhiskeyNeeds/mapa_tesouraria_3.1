@@ -78,15 +78,10 @@ export default function EntityDetailPage({ entityType }: Props) {
 
   const configQuery = useQuery<EntityConfig | null>({
     queryKey: ['entity-config', clientId, typeParam, tocId],
-    queryFn: async () => {
-      try {
-        return await api.get<EntityConfig>(
-          `/treasury/${clientId}/entity-configs/${typeParam}/${tocId}`,
-        )
-      } catch {
-        return null
-      }
-    },
+    queryFn: () =>
+      api.get<EntityConfig | null>(
+        `/treasury/${clientId}/entity-configs/${typeParam}/${tocId}`,
+      ),
     enabled: !!clientId && !!tocId,
   })
 
@@ -110,7 +105,8 @@ export default function EntityDetailPage({ entityType }: Props) {
       qc.invalidateQueries({ queryKey: ['entity-config', clientId, typeParam, tocId] })
       toast.success('Configuração guardada.')
     },
-    onError: () => toast.error('Erro ao guardar a configuração.'),
+    onError: (e: unknown) =>
+      toast.error((e as { message?: string }).message ?? 'Erro ao guardar a configuração.'),
   })
 
   const entity = entityQuery.data ?? {}

@@ -304,6 +304,26 @@ export class TreasuryPayablesService {
       })
       if (clash) throw httpError(409, 'Este documento TOConline já está associado a outra conta a pagar')
       updateData.tocPurchasesDocId = data.tocPurchasesDocId
+
+      // Auto-categorizar via entity config quando TOC doc é associado e o payable ainda não tem categoria
+      if (!item.categoryId && !data.categoryId) {
+        const supplierId = data.tocSupplierId ?? item.tocSupplierId
+        if (supplierId) {
+          const entityConfig = await this.prisma.treasuryEntityConfig.findUnique({
+            where: {
+              clientId_entityType_tocEntityId: {
+                clientId,
+                entityType: 'supplier',
+                tocEntityId: String(supplierId),
+              },
+            },
+            select: { defaultCategoryId: true },
+          })
+          if (entityConfig?.defaultCategoryId) {
+            updateData.category = { connect: { id: entityConfig.defaultCategoryId } }
+          }
+        }
+      }
     }
 
     if (data.categoryId) {
