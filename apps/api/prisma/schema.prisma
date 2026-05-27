@@ -220,6 +220,7 @@ model Client {
   treasuryInvoiceAttachments  TreasuryInvoiceAttachment[]
   treasuryBudgets             TreasuryBudget[]
   treasuryBudgetRules         TreasuryBudgetRule[]
+  treasuryEntityConfigs       TreasuryEntityConfig[]
   productAnalytics            ProductAnalytic[]
 
   @@index([isActive])
@@ -880,8 +881,10 @@ model TreasuryEntityConfig {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  client   Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
   category TreasuryCategory? @relation(fields: [defaultCategoryId], references: [id], onDelete: SetNull)
 
   @@unique([clientId, entityType, tocEntityId])
+  @@index([clientId])
   @@map("treasury_entity_configs")
 }
