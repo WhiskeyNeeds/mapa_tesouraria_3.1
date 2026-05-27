@@ -237,7 +237,7 @@ export default function BanksPage() {
   const [importAccountId, setImportAccountId] = useState<string>('')
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importPdfFile, setImportPdfFile] = useState<File | null>(null)
-  const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number } | null>(null)
+  const [importResult, setImportResult] = useState<{ imported: number; duplicated: number; failed: number; parsed: number; gaps?: BalanceGap[] } | null>(null)
   const [replaceConfirm, setReplaceConfirm] = useState<{ file: File; bank: string; bankAccountId: string; existingCount: number } | null>(null)
   const [previewWarning, setPreviewWarning] = useState<{ issues: Array<{ row: number; field: string; message: string }>; uploadArgs: { file: File; bank: string; bankAccountId: string } } | null>(null)
   const [showNewMovement, setShowNewMovement] = useState(false)
@@ -1590,6 +1590,41 @@ export default function BanksPage() {
                 <div className="text-xs text-red-600 mt-1">Com erro</div>
               </div>
             </div>
+
+            {/* Aviso de inconsistências de saldo detetadas pós-import — mesma deteção
+                que a coluna "Gap" usa na visualização dos movimentos. */}
+            {importResult.gaps && importResult.gaps.length > 0 && (
+              <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-amber-800">
+                    {importResult.gaps.length === 1
+                      ? '1 inconsistência de saldo detetada'
+                      : `${importResult.gaps.length} inconsistências de saldo detetadas`}
+                  </p>
+                  <p className="text-xs text-amber-700 mt-1">
+                    O saldo após cada movimento foi comparado com o esperado. Verifique se faltam linhas no extrato.
+                  </p>
+                  <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+                    {importResult.gaps.slice(0, 6).map((g, i) => (
+                      <li key={i} className="text-xs text-amber-800 flex items-baseline gap-2">
+                        <span className="text-amber-500 font-mono">{g.beforeDate}</span>
+                        <span className="flex-1 truncate">{g.beforeDescription || '—'}</span>
+                        <span className="font-semibold tabular-nums whitespace-nowrap">
+                          {g.gap > 0 ? '+' : ''}{formatCurrency(g.gap)}
+                        </span>
+                      </li>
+                    ))}
+                    {importResult.gaps.length > 6 && (
+                      <li className="text-xs text-amber-600 italic">
+                        ... e mais {importResult.gaps.length - 6}. Detalhes em Bancos & Movimentos.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             <button onClick={() => { setShowImport(false); setImportFile(null); setImportPdfFile(null); setImportResult(null); setImportBank('CGD'); setImportAccountId('') }} className="btn-primary w-full">Fechar</button>
           </div>
         ) : replaceConfirm ? (

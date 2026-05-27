@@ -257,11 +257,13 @@ export class TreasuryReceivablesService {
     reference: string
     documentDate: string
     dueDate: string
+    promisedPaymentDate: string | null
     categoryId: string
     budgetCategoryId: string | null
     budgetId: string | null
     totalAmount: number
     status: TreasuryDocStatus
+    tocCustomerId: string | null
   }>) {
     const item = await this.getById(clientId, id)
 
@@ -272,6 +274,10 @@ export class TreasuryReceivablesService {
     if (data.dueDate)                    updateData.dueDate      = new Date(data.dueDate)
     if (data.documentDate)               updateData.documentDate = new Date(data.documentDate)
     if (data.status)                     updateData.status       = data.status
+    if (data.tocCustomerId !== undefined) updateData.tocCustomerId = data.tocCustomerId
+    if (data.promisedPaymentDate !== undefined) {
+      updateData.promisedPaymentDate = data.promisedPaymentDate ? new Date(data.promisedPaymentDate) : null
+    }
 
     if (data.categoryId) {
       const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
@@ -621,6 +627,85 @@ export class TreasuryReceivablesService {
       where: { clientId, tocCustomerId, deletedAt: null },
       data: { deletedAt: new Date() },
     })
+  }
+
+  /**
+   * Aplica regras de classificação ativas + fallback de histórico de entidade
+   * a todas as faturas a receber sem categoria. Devolve contagem de classificadas
+   * e ignoradas. Espelha o comportamento de payables.applyRulesToExisting.
+   */
+  async applyRulesToExisting(clientId: string): Promise<{ classified: number; skipped: number }> {
+    const [rules, unclassified] = await Promise.all([
+      this.prisma.treasuryClassificationRule.findMany({
+        where: { clientId, isActive: true },
+        orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, direction: true, amountMin: true, amountMax: true, matchField: true, matchOp: true, matchValue: true, categoryId: true },
+      }),
+      this.prisma.treasuryReceivable.findMany({
+        where: { clientId, deletedAt: null, categoryId: null },
+        select: { id: true, totalAmount: true, description: true, reference: true, entityName: true, tocCustomerId: true, budgetCategoryId: true },
+      }),
+    ])
+
+    if (unclassified.length === 0) return { classified: 0, skipped: 0 }
+
+    let classified = 0
+    const ruleHits = new Map<string, number>()
+
+    for (const inv of unclassified) {
+      let categoryId: string | undefined
+      let budgetCategoryId: string | undefined = inv.budgetCategoryId ?? undefined
+
+      const matched = matchClassificationRule(rules, {
+        amount: Number(inv.totalAmount),
+        type: 'REVENUE',
+        description: inv.description ?? inv.reference ?? null,
+        counterpartName: inv.entityName ?? null,
+      })
+
+      if (matched) {
+        categoryId = matched.categoryId
+        ruleHits.set(matched.id, (ruleHits.get(matched.id) ?? 0) + 1)
+      } else if (inv.entityName || inv.tocCustomerId) {
+        const last = await this.prisma.treasuryReceivable.findFirst({
+          where: {
+            clientId, deletedAt: null,
+            categoryId: { not: null },
+            id: { not: inv.id },
+            OR: [
+              ...(inv.tocCustomerId ? [{ tocCustomerId: inv.tocCustomerId }] : []),
+              ...(inv.entityName ? [{ entityName: inv.entityName }] : []),
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { categoryId: true, budgetCategoryId: true },
+        })
+        if (last?.categoryId) categoryId = last.categoryId
+        if (!budgetCategoryId && last?.budgetCategoryId) budgetCategoryId = last.budgetCategoryId
+      }
+
+      if (categoryId) {
+        await this.prisma.treasuryReceivable.update({
+          where: { id: inv.id },
+          data: {
+            categoryId,
+            ...(budgetCategoryId && budgetCategoryId !== inv.budgetCategoryId ? { budgetCategoryId } : {}),
+          },
+        })
+        classified++
+      }
+    }
+
+    await Promise.all(
+      Array.from(ruleHits.entries()).map(([id, count]) =>
+        this.prisma.treasuryClassificationRule.update({
+          where: { id },
+          data: { hits: { increment: count }, lastHitAt: new Date() },
+        }),
+      ),
+    )
+
+    return { classified, skipped: unclassified.length - classified }
   }
 
   async getKpis(clientId: string) {

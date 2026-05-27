@@ -600,6 +600,38 @@ export class ToconlineService {
     return this.apiGetFlat(clientId, '/api/customers')
   }
 
+  /**
+   * Resolve o email principal de um cliente TOConline a partir do id do cliente.
+   * Faz dois GETs: /customers/{id} para descobrir o main_email_address.id,
+   * depois /email_addresses/{id} para extrair o campo `email`. Devolve null
+   * se o cliente não tiver email associado.
+   */
+  async getCustomerEmail(clientId: string, customerId: string): Promise<string | null> {
+    type CustomerRes = {
+      data: {
+        relationships?: {
+          main_email_address?: { data?: { id: string } | null }
+          email_addresses?: { data?: { id: string }[] | null }
+        }
+      }
+    }
+    type EmailAddressRes = {
+      data: { attributes?: { email?: string | null } }
+    }
+    try {
+      const res = await this.apiGet<CustomerRes>(clientId, `/api/customers/${customerId}`)
+      const emailAddressId = res.data.relationships?.main_email_address?.data?.id
+        ?? res.data.relationships?.email_addresses?.data?.[0]?.id
+      if (!emailAddressId) return null
+      const er = await this.apiGet<EmailAddressRes>(clientId, `/api/email_addresses/${emailAddressId}`)
+      const email = er.data.attributes?.email
+      return email ? String(email) : null
+    } catch (err) {
+      console.error('[Toconline] getCustomerEmail falhou:', err)
+      return null
+    }
+  }
+
   async getCustomerWithAddress(clientId: string, customerId: string) {
     type JsonApiRef = { id: string }
     type AddressRes = {
@@ -609,13 +641,18 @@ export class ToconlineService {
         relationships?: { country?: { data?: JsonApiRef | null } }
       }
     }
+    type EmailAddressRes = {
+      data: { id: string; attributes: Record<string, unknown> }
+    }
     type CustomerRes = {
       data: {
         id: string
         attributes: Record<string, unknown>
         relationships?: {
-          main_address?: { data?: JsonApiRef | null }
-          addresses?:    { data?: JsonApiRef[] | null }
+          main_address?:       { data?: JsonApiRef | null }
+          addresses?:          { data?: JsonApiRef[] | null }
+          main_email_address?: { data?: JsonApiRef | null }
+          email_addresses?:    { data?: JsonApiRef[] | null }
         }
       }
     }
@@ -645,6 +682,27 @@ export class ToconlineService {
       )
       customer._addresses = addresses
       customer._address   = addresses.find(a => a._isMain) ?? addresses[0] ?? null
+    }
+
+    // Resolve o email principal a partir da entidade email_addresses (TOC armazena
+    // o email "estruturado" em /api/email_addresses/{id}, com `attributes.email`).
+    // Cai aqui se `attributes.email` no customer estiver vazio ou se for um
+    // cliente importado/criado via "Clientes" do TOC sem email inline.
+    const mainEmailId = res.data.relationships?.main_email_address?.data?.id
+      ?? res.data.relationships?.email_addresses?.data?.[0]?.id
+    if (mainEmailId) {
+      try {
+        const er = await this.apiGet<EmailAddressRes>(clientId, `/api/email_addresses/${mainEmailId}`)
+        const resolved = er.data.attributes?.email
+        if (resolved) {
+          customer._mainEmail = String(resolved)
+          // Se o customer.email inline estiver vazio, popula com o resolvido para
+          // que callers que só leem `customer.email` (legado) também tenham valor.
+          if (!customer.email) customer.email = String(resolved)
+        }
+      } catch {
+        // não fatal — sem email associado, segue em frente
+      }
     }
 
     return customer
@@ -708,6 +766,9 @@ export class ToconlineService {
         relationships?: { country?: { data?: JsonApiRef | null } }
       }
     }
+    type ContactRes = {
+      data: { id: string; attributes: Record<string, unknown> }
+    }
     type SupplierRes = {
       data: {
         id: string
@@ -715,6 +776,8 @@ export class ToconlineService {
         relationships?: {
           main_address?: { data?: JsonApiRef | null }
           addresses?:    { data?: JsonApiRef[] | null }
+          main_contact?: { data?: JsonApiRef | null }
+          contacts?:     { data?: JsonApiRef[] | null }
         }
       }
     }
@@ -744,6 +807,23 @@ export class ToconlineService {
       )
       supplier._addresses = addresses
       supplier._address   = addresses.find(a => a._isMain) ?? addresses[0] ?? null
+    }
+
+    // Email de fornecedor: TOC guarda em `contacts` (não `email_addresses` como
+    // os clientes). Resolve via main_contact → /api/contacts/{id}.attributes.email.
+    const mainContactId = res.data.relationships?.main_contact?.data?.id
+      ?? res.data.relationships?.contacts?.data?.[0]?.id
+    if (mainContactId) {
+      try {
+        const cr = await this.apiGet<ContactRes>(clientId, `/api/contacts/${mainContactId}`)
+        const resolved = cr.data.attributes?.email
+        if (resolved) {
+          supplier._mainEmail = String(resolved)
+          if (!supplier.email) supplier.email = String(resolved)
+        }
+      } catch {
+        // não fatal
+      }
     }
 
     return supplier

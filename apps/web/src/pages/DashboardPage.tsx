@@ -1252,31 +1252,32 @@ export default function DashboardPage() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <Link to="/bancos">
-          <KpiCard title="Saldo Total" value={formatCurrency(kpis.totalBalance)} icon={<Wallet className="w-6 h-6 text-blue-500" />} className="hover:border-blue-300 transition-colors cursor-pointer" />
+        <Link to="/bancos" className="block h-full">
+          <KpiCard title="Saldo Total" value={formatCurrency(kpis.totalBalance)} icon={<Wallet className="w-6 h-6 text-blue-500" />} className="h-full hover:border-blue-300 transition-colors cursor-pointer" />
         </Link>
         <KpiCard
           title="Caixa Disponível"
           value={formatCurrency(kpis.cashAvailable)}
           subtitle="Saldo − A Pagar"
           icon={<Activity className="w-6 h-6 text-indigo-500" />}
+          className="h-full"
         />
-        <Link to="/contas-a-receber">
+        <Link to="/contas-a-receber" className="block h-full">
           <KpiCard
             title="A Receber"
             value={formatCurrency(kpis.toReceive)}
             subtitle={`${kpis.countReceivablesOpen} doc.${kpis.overdueReceivables > 0 ? ` · ${kpis.overdueReceivables} vencidos` : ''}`}
             icon={<ArrowDownToLine className="w-6 h-6 text-green-500" />}
-            className={`hover:border-green-300 transition-colors cursor-pointer ${kpis.overdueReceivables > 0 ? 'border-amber-200' : ''}`}
+            className={`h-full hover:border-green-300 transition-colors cursor-pointer ${kpis.overdueReceivables > 0 ? 'border-amber-200' : ''}`}
           />
         </Link>
-        <Link to="/contas-a-pagar">
+        <Link to="/contas-a-pagar" className="block h-full">
           <KpiCard
             title="A Pagar"
             value={formatCurrency(kpis.toPay)}
             subtitle={`${kpis.countPayablesOpen} doc.${kpis.overduePayables > 0 ? ` · ${kpis.overduePayables} vencidos` : ''}`}
             icon={<ArrowUpFromLine className="w-6 h-6 text-red-500" />}
-            className={`hover:border-red-300 transition-colors cursor-pointer ${kpis.overduePayables > 0 ? 'border-amber-200' : ''}`}
+            className={`h-full hover:border-red-300 transition-colors cursor-pointer ${kpis.overduePayables > 0 ? 'border-amber-200' : ''}`}
           />
         </Link>
         <KpiCard
@@ -1286,6 +1287,7 @@ export default function DashboardPage() {
           rawValue={netPosition}
           subtitle="Saldo + CR − CP"
           icon={netPosition >= 0 ? <TrendingUp className="w-6 h-6 text-green-500" /> : <TrendingDown className="w-6 h-6 text-red-500" />}
+          className="h-full"
         />
       </div>
 

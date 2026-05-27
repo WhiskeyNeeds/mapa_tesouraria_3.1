@@ -6,7 +6,7 @@ import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
 import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
-import FollowUpPlanTab from '@/components/followups/FollowUpPlanTab'
+import DunningRulesTab from '@/components/settings/DunningRulesTab'
 import BudgetCategoriesTab from '@/components/settings/BudgetCategoriesTab'
 
 interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean; usageCount: number }
@@ -42,7 +42,7 @@ export default function SettingsPage() {
   const { selectedClientId, isTocEnabled, setIsTocEnabled } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
-  const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline' | 'followup-plan'>('categories')
+  const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline' | 'dunning'>('categories')
   const [showNewCat, setShowNewCat] = useState(false)
   const [newCat, setNewCat] = useState({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' })
   const [editCat, setEditCat] = useState<Category | null>(null)
@@ -126,6 +126,25 @@ export default function SettingsPage() {
       setApplyResult(data)
       qc.invalidateQueries({ queryKey: ['movements'] })
     },
+  })
+
+  // Aplica as mesmas regras a faturas (Receivables + Payables) sem categoria.
+  // Combina os dois endpoints num só feedback para o utilizador.
+  const [applyInvoicesResult, setApplyInvoicesResult] = useState<{ classified: number; skipped: number } | null>(null)
+  const applyRulesToInvoices = useMutation({
+    mutationFn: async () => {
+      const [recv, pay] = await Promise.all([
+        api.post<{ classified: number; skipped: number }>(`/treasury/${selectedClientId}/receivables/apply-rules`, {}),
+        api.post<{ classified: number; skipped: number }>(`/treasury/${selectedClientId}/payables/apply-rules`, {}),
+      ])
+      return { classified: recv.classified + pay.classified, skipped: recv.skipped + pay.skipped }
+    },
+    onSuccess: (data) => {
+      setApplyInvoicesResult(data)
+      qc.invalidateQueries({ queryKey: ['receivables'] })
+      qc.invalidateQueries({ queryKey: ['payables'] })
+    },
+    onError: (e) => toast.error((e as Error).message),
   })
 
   const createCat = useMutation({
@@ -263,7 +282,7 @@ export default function SettingsPage() {
   const tabs = [
     { id: 'categories', label: 'Categorias' },
     { id: 'rules', label: 'Regras de Classificação' },
-    { id: 'followup-plan', label: 'Follow up plan' },
+    { id: 'dunning', label: 'Regras de Cobrança' },
     { id: 'settings', label: 'Configurações' },
     { id: 'toconline', label: 'TOConline' },
   ] as const
@@ -417,16 +436,26 @@ export default function SettingsPage() {
 
       {tab === 'rules' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-500">As regras são aplicadas automaticamente na importação e na criação manual de movimentos. A ordem de prioridade determina qual regra é usada primeiro.</p>
-            <div className="flex gap-2">
+          <div className="flex items-start justify-between gap-4">
+            <p className="text-sm text-gray-500 max-w-xl">
+              As regras são aplicadas automaticamente na importação/criação de movimentos e na criação de faturas (Contas a Receber e a Pagar). Quando não há regra que corresponda, o sistema tenta usar a categoria da última operação da mesma entidade.
+            </p>
+            <div className="flex flex-wrap gap-2 flex-shrink-0">
               <button
                 onClick={() => { setApplyResult(null); applyRules.mutate() }}
                 disabled={applyRules.isPending}
                 className="btn-secondary flex items-center gap-2"
               >
                 <Play className="w-4 h-4" />
-                {applyRules.isPending ? 'A aplicar...' : 'Aplicar a não classificados'}
+                {applyRules.isPending ? 'A aplicar...' : 'Aplicar a movimentos'}
+              </button>
+              <button
+                onClick={() => { setApplyInvoicesResult(null); applyRulesToInvoices.mutate() }}
+                disabled={applyRulesToInvoices.isPending}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <Play className="w-4 h-4" />
+                {applyRulesToInvoices.isPending ? 'A aplicar...' : 'Aplicar a faturas'}
               </button>
               <button onClick={() => setShowNewRule(true)} className="btn-primary flex items-center gap-2">
                 <Plus className="w-4 h-4" />Nova Regra
@@ -438,6 +467,13 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2 text-sm px-4 py-3 bg-green-50 border border-green-200 rounded-lg text-green-800">
               <CheckCircle className="w-4 h-4 flex-shrink-0" />
               Classificados {applyResult.classified} movimento(s). {applyResult.skipped} ficaram sem correspondência.
+            </div>
+          )}
+
+          {applyInvoicesResult && (
+            <div className="flex items-center gap-2 text-sm px-4 py-3 bg-green-50 border border-green-200 rounded-lg text-green-800">
+              <CheckCircle className="w-4 h-4 flex-shrink-0" />
+              Classificadas {applyInvoicesResult.classified} fatura(s). {applyInvoicesResult.skipped} ficaram sem correspondência.
             </div>
           )}
 
@@ -650,8 +686,8 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {tab === 'followup-plan' && selectedClientId && (
-        <FollowUpPlanTab clientId={selectedClientId} />
+      {tab === 'dunning' && selectedClientId && (
+        <DunningRulesTab clientId={selectedClientId} />
       )}
 
       {tab === 'toconline' && (

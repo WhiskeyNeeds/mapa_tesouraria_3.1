@@ -7,6 +7,7 @@ import prismaPlugin from './plugins/prisma.js'
 import redisPlugin from './plugins/redis.js'
 import authPlugin from './plugins/auth.js'
 import tokenRefreshPlugin from './plugins/token-refresh.js'
+import dunningCronPlugin from './plugins/dunning-cron.js'
 
 import { authRoutes } from './modules/auth/auth.routes.js'
 import { clientsRoutes } from './modules/clients/clients.routes.js'
@@ -25,6 +26,7 @@ import { recurrencesRoutes } from './modules/treasury/recurrences/recurrences.ro
 import { followupsRoutes } from './modules/treasury/followups/followups.routes.js'
 import { budgetsRoutes } from './modules/treasury/budgets/budgets.routes.js'
 import { budgetCategoriesRoutes } from './modules/treasury/budget-categories/budget-categories.routes.js'
+import { dunningRulesRoutes } from './modules/treasury/dunning-rules/dunning-rules.routes.js'
 import { HttpError } from './lib/errors.js'
 
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } })
@@ -42,6 +44,7 @@ await fastify.register(prismaPlugin)
 await fastify.register(redisPlugin)
 await fastify.register(authPlugin)
 await fastify.register(tokenRefreshPlugin)
+await fastify.register(dunningCronPlugin)
 
 // ── Global error handler ───────────────────────────────────────────────────
 
@@ -77,6 +80,7 @@ await fastify.register(recurrencesRoutes, { prefix: V1 })
 await fastify.register(followupsRoutes, { prefix: V1 })
 await fastify.register(budgetsRoutes, { prefix: V1 })
 await fastify.register(budgetCategoriesRoutes, { prefix: V1 })
+await fastify.register(dunningRulesRoutes, { prefix: V1 })
 
 fastify.get('/health', () => ({ status: 'ok', ts: new Date().toISOString() }))
 

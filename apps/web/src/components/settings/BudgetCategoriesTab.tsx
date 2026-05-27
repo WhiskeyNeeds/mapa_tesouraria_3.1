@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
-import { Plus, Pencil, Archive, RotateCcw, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Archive, RotateCcw, Trash2, Wallet } from 'lucide-react'
 
 interface BudgetCategory {
   id: string
@@ -14,6 +14,15 @@ interface BudgetCategory {
   icon: string | null
   isArchived: boolean
   usageCount: number
+}
+
+interface Budget {
+  id: string
+  name: string
+  type: 'REVENUE' | 'EXPENSE'
+  status: 'ACTIVE' | 'ARCHIVED'
+  color: string | null
+  categories: { id: string; name: string; color: string | null; type: 'REVENUE' | 'EXPENSE' }[]
 }
 
 const emptyForm = { name: '', type: 'EXPENSE' as 'EXPENSE' | 'REVENUE', color: '#6b7280' }
@@ -33,6 +42,25 @@ export default function BudgetCategoriesTab({ showArchived }: { showArchived: bo
     queryFn: () => api.get(`/treasury/${selectedClientId}/budget-categories${showArchived ? '?includeArchived=true' : ''}`),
     enabled: !!selectedClientId,
   })
+
+  const { data: budgets = [] } = useQuery<Budget[]>({
+    queryKey: ['budgets', selectedClientId, false],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/budgets?status=ACTIVE`),
+    enabled: !!selectedClientId,
+  })
+
+  // Vista invertida: por cada budget, lista as categorias associadas.
+  // Categorias órfãs (sem nenhum budget) vão para uma secção separada.
+  const grouped = useMemo(() => {
+    const usedCategoryIds = new Set<string>()
+    const byBudget = budgets.map((b) => {
+      const cats = items.filter((c) => b.categories.some((bc) => bc.id === c.id) && (showArchived ? true : !c.isArchived))
+      cats.forEach((c) => usedCategoryIds.add(c.id))
+      return { budget: b, categories: cats }
+    })
+    const orphans = items.filter((c) => !usedCategoryIds.has(c.id) && (showArchived ? true : !c.isArchived))
+    return { byBudget, orphans }
+  }, [budgets, items, showArchived])
 
   const createMut = useMutation({
     mutationFn: () => api.post(`/treasury/${selectedClientId}/budget-categories`, form),
@@ -92,67 +120,65 @@ export default function BudgetCategoriesTab({ showArchived }: { showArchived: bo
       </div>
 
       <div className="card divide-y divide-gray-50">
-        {(['REVENUE', 'EXPENSE'] as const).map((type) => {
-          const filtered = items.filter((c) => c.type === type && (showArchived ? true : !c.isArchived))
-          return (
-            <div key={type}>
-              <div className="px-5 py-3 bg-gray-50">
-                <span className="text-xs font-semibold text-gray-500 uppercase">
-                  {type === 'REVENUE' ? 'Receita' : 'Despesa'}
-                </span>
-              </div>
-              {filtered.length === 0 ? (
-                <div className="px-5 py-4 text-xs text-gray-400 italic">Sem categorias.</div>
-              ) : filtered.map((c) => (
-                <div key={c.id} className={`flex items-center gap-4 px-5 py-3 group ${c.isArchived ? 'opacity-50' : ''}`}>
-                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: c.color ?? '#9CA3AF' }} />
-                  <div className="flex-1">
-                    <span className="text-sm font-medium text-gray-900">{c.name}</span>
-                    {c.isArchived && <span className="ml-2 text-xs text-gray-400">arquivada</span>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {c.usageCount > 0 && (
-                      <span className="text-xs text-gray-400">{c.usageCount} fat.</span>
-                    )}
-                    {c.isArchived ? (
-                      <button
-                        onClick={() => restoreMut.mutate(c.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-green-600 rounded transition-all"
-                        title="Restaurar"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => { setEditing(c); setEditForm({ name: c.name, color: c.color ?? '#6b7280' }) }}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-600 rounded transition-all"
-                          title="Editar"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => { if (confirm(`Arquivar categoria de budget "${c.name}"?`)) archiveMut.mutate(c.id) }}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-amber-600 rounded transition-all"
-                          title="Arquivar"
-                        >
-                          <Archive className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => { if (confirm(`Eliminar permanentemente "${c.name}"? Esta ação não pode ser desfeita.`)) deleteMut.mutate(c.id) }}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-600 rounded transition-all"
-                          title="Eliminar"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </>
-                    )}
-                  </div>
+        {grouped.byBudget.length === 0 && grouped.orphans.length === 0 ? (
+          <div className="px-5 py-6 text-xs text-gray-400 italic text-center">
+            Sem categorias de budget {showArchived ? 'arquivadas' : ''} para mostrar.
+          </div>
+        ) : (
+          <>
+            {grouped.byBudget.map(({ budget, categories }) => (
+              <div key={budget.id}>
+                <div className="px-5 py-3 bg-gray-50 flex items-center gap-2.5">
+                  <div
+                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: budget.color ?? (budget.type === 'EXPENSE' ? '#3B82F6' : '#10B981') }}
+                  />
+                  <Wallet className="w-3.5 h-3.5 text-gray-400" />
+                  <span className="text-xs font-semibold text-gray-700">{budget.name}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                    budget.type === 'EXPENSE' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
+                  }`}>
+                    {budget.type === 'EXPENSE' ? 'Despesa' : 'Receita'}
+                  </span>
                 </div>
-              ))}
-            </div>
-          )
-        })}
+                {categories.length === 0 ? (
+                  <div className="px-5 py-3 text-xs text-gray-400 italic">
+                    Sem categorias associadas a este budget.
+                  </div>
+                ) : categories.map((c) => (
+                  <CategoryRow
+                    key={`${budget.id}-${c.id}`}
+                    c={c}
+                    onEdit={() => { setEditing(c); setEditForm({ name: c.name, color: c.color ?? '#6b7280' }) }}
+                    onArchive={() => { if (confirm(`Arquivar categoria de budget "${c.name}"?`)) archiveMut.mutate(c.id) }}
+                    onRestore={() => restoreMut.mutate(c.id)}
+                    onDelete={() => { if (confirm(`Eliminar permanentemente "${c.name}"? Esta ação não pode ser desfeita.`)) deleteMut.mutate(c.id) }}
+                  />
+                ))}
+              </div>
+            ))}
+
+            {grouped.orphans.length > 0 && (
+              <div>
+                <div className="px-5 py-3 bg-gray-50 flex items-center gap-2.5">
+                  <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" />
+                  <span className="text-xs font-semibold text-gray-500 uppercase">Sem budget atribuído</span>
+                  <span className="text-xs text-gray-400">({grouped.orphans.length})</span>
+                </div>
+                {grouped.orphans.map((c) => (
+                  <CategoryRow
+                    key={`orphan-${c.id}`}
+                    c={c}
+                    onEdit={() => { setEditing(c); setEditForm({ name: c.name, color: c.color ?? '#6b7280' }) }}
+                    onArchive={() => { if (confirm(`Arquivar categoria de budget "${c.name}"?`)) archiveMut.mutate(c.id) }}
+                    onRestore={() => restoreMut.mutate(c.id)}
+                    onDelete={() => { if (confirm(`Eliminar permanentemente "${c.name}"? Esta ação não pode ser desfeita.`)) deleteMut.mutate(c.id) }}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <Modal open={showNew} onClose={() => { setShowNew(false); setForm(emptyForm) }} title="Nova Categoria de Budget">
@@ -194,5 +220,50 @@ export default function BudgetCategoriesTab({ showArchived }: { showArchived: bo
         </div>
       </Modal>
     </>
+  )
+}
+
+function CategoryRow({ c, onEdit, onArchive, onRestore, onDelete }: {
+  c: BudgetCategory
+  onEdit: () => void
+  onArchive: () => void
+  onRestore: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div className={`flex items-center gap-4 px-5 py-3 group ${c.isArchived ? 'opacity-50' : ''}`}>
+      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: c.color ?? '#9CA3AF' }} />
+      <div className="flex-1">
+        <span className="text-sm font-medium text-gray-900">{c.name}</span>
+        <span className={`ml-2 text-xs px-1.5 py-0.5 rounded font-medium ${
+          c.type === 'EXPENSE' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
+        }`}>
+          {c.type === 'EXPENSE' ? 'Despesa' : 'Receita'}
+        </span>
+        {c.isArchived && <span className="ml-2 text-xs text-gray-400">arquivada</span>}
+      </div>
+      <div className="flex items-center gap-2">
+        {c.usageCount > 0 && (
+          <span className="text-xs text-gray-400">{c.usageCount} fat.</span>
+        )}
+        {c.isArchived ? (
+          <button onClick={onRestore} className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-green-600 rounded transition-all" title="Restaurar">
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+        ) : (
+          <>
+            <button onClick={onEdit} className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-600 rounded transition-all" title="Editar">
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={onArchive} className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-amber-600 rounded transition-all" title="Arquivar">
+              <Archive className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={onDelete} className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-600 rounded transition-all" title="Eliminar">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
   )
 }

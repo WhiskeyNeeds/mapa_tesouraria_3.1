@@ -220,6 +220,7 @@ model Client {
   treasuryInvoiceAttachments  TreasuryInvoiceAttachment[]
   treasuryBudgets             TreasuryBudget[]
   treasuryBudgetCategories    TreasuryBudgetCategory[]
+  treasuryDunningRules        TreasuryDunningRule[]
   productAnalytics            ProductAnalytic[]
 
   @@index([isActive])
@@ -306,6 +307,7 @@ model TreasuryCategory {
   payables            TreasuryPayable[]
   movements           TreasuryBankMovement[]
   classificationRules TreasuryClassificationRule[]
+  dunningRules        TreasuryDunningRule[]
 
   @@unique([clientId, name, type])
   @@index([clientId, type])
@@ -471,6 +473,7 @@ model TreasuryReceivable {
   createdBy           User                               @relation("ReceivablesCreated", fields: [createdById], references: [id])
   followups           TreasuryFollowup[]
   attachments         TreasuryInvoiceAttachment[]
+  dunningExecutions   TreasuryDunningExecution[]
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
@@ -531,6 +534,7 @@ model TreasuryPayable {
   createdBy           User                            @relation("PayablesCreated", fields: [createdById], references: [id])
   followups           TreasuryFollowup[]
   attachments         TreasuryInvoiceAttachment[]
+  dunningExecutions   TreasuryDunningExecution[]
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
@@ -749,8 +753,9 @@ model TreasuryEmailTemplate {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  client    Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  createdBy User   @relation("EmailTemplatesCreated", fields: [createdById], references: [id])
+  client       Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy    User                  @relation("EmailTemplatesCreated", fields: [createdById], references: [id])
+  dunningRules TreasuryDunningRule[]
 
   @@index([clientId, scope, isActive])
   @@map("treasury_email_templates")
@@ -856,6 +861,79 @@ model TreasuryBudget {
 
 // Categorias específicas para budgets — entidade independente das categorias de movimentos.
 // Aplica-se apenas a faturas (Receivables/Payables) que são imputadas a budgets.
+/// Regra de cobrança / "dunning": define quando enviar um lembrete automático
+/// ao cliente com base na data prometida de pagamento da fatura
+/// (`promisedPaymentDate`). Faturas sem `promisedPaymentDate` não são elegíveis.
+///
+/// Cada regra usa um único `emailTemplate` (1 tom de cada vez). Por defeito
+/// o tom é sugerido a partir de `offsetDays` (antes → amigável, no dia →
+/// formal, depois → firme).
+///
+/// offsetDays é o número de dias relativos a `promisedPaymentDate`:
+///   -7 → enviar 7 dias antes da data de pagamento
+///    0 → enviar no próprio dia do pagamento
+///   +7 → enviar 7 dias após a data de pagamento (atraso)
+model TreasuryDunningRule {
+  id              String                    @id @default(cuid())
+  clientId        String
+  name            String                    @db.VarChar(120)
+  offsetDays      Int
+  direction       TreasuryFollowupDirection @default(RECEIVABLE)
+  emailTemplateId String?
+
+  /// Filtros opcionais que restringem a quais faturas a regra se aplica.
+  minAmount  Decimal?  @db.Decimal(18, 2)
+  maxAmount  Decimal?  @db.Decimal(18, 2)
+  categoryId String?
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(100)
+
+  lastExecutedAt  DateTime?
+  totalExecutions Int       @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client        Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  emailTemplate TreasuryEmailTemplate?    @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
+  category      TreasuryCategory?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  executions    TreasuryDunningExecution[]
+
+  @@index([clientId, isActive, offsetDays])
+  @@index([clientId, direction])
+  @@map("treasury_dunning_rules")
+}
+
+/// Histórico de execução: garante idempotência (uma regra só dispara uma vez
+/// por fatura) e fornece auditoria do que foi enviado.
+model TreasuryDunningExecution {
+  id           String   @id @default(cuid())
+  clientId     String
+  ruleId       String
+  receivableId String?
+  payableId    String?
+
+  scheduledAt  DateTime
+  executedAt   DateTime?
+  status       String   @db.VarChar(20) // PENDING | SENT | FAILED | SKIPPED
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+
+  rule       TreasuryDunningRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  receivable TreasuryReceivable? @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  payable    TreasuryPayable?    @relation(fields: [payableId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleId, receivableId], name: "dunning_unique_rule_receivable")
+  @@unique([ruleId, payableId], name: "dunning_unique_rule_payable")
+  @@index([clientId, status, scheduledAt])
+  @@index([receivableId])
+  @@index([payableId])
+  @@map("treasury_dunning_executions")
+}
+
 model TreasuryBudgetCategory {
   id         String               @id @default(cuid())
   clientId   String

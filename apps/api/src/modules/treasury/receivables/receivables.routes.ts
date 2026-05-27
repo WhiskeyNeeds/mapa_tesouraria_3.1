@@ -59,6 +59,11 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.getKpis(clientId))
   })
 
+  fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    return reply.send(await svc.applyRulesToExisting(clientId))
+  })
+
   fastify.get(`${prefix}/export.csv`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as { status?: string; origin?: TreasuryDocOrigin; entityName?: string; categoryId?: string; dueDateFrom?: string; dueDateTo?: string }
@@ -102,6 +107,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
     }
 
     let tocSalesDocId = body.tocSalesDocId
+    let tocCustomerId = body.tocCustomerId
     let reference = body.reference
 
     if (body.tocLines && body.tocLines.length > 0) {
@@ -140,6 +146,15 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       const docNo = String(attrs?.document_no ?? tocDoc?.document_no ?? '')
       if (docNo) reference = docNo
 
+      // Extrai o customer.id do relationship (necessário para associar emails de
+      // cobrança ao cliente correto na vista de Empresa → Clientes).
+      const rels = dataObj?.relationships as Record<string, unknown> | undefined
+      const customerRel = rels?.customer as { data?: { id?: string | number } } | undefined
+      const customerIdFromToc = customerRel?.data?.id
+      if (customerIdFromToc != null && !tocCustomerId) {
+        tocCustomerId = String(customerIdFromToc)
+      }
+
       const grossTotal = Number(attrs?.gross_total ?? tocDoc?.gross_total)
       if (grossTotal > 0) body.totalAmount = grossTotal
     }
@@ -148,6 +163,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       ...body,
       reference: reference || body.reference,
       tocSalesDocId,
+      tocCustomerId,
     }))
   })
 
