@@ -739,8 +739,9 @@ export default function PayablesPage() {
     setBudgetSuggestion(null)
     if (!categoryId || !selectedClientId) return
     try {
+      const text = [form.entityName, form.description].filter(Boolean).join(' ')
       const suggestion = await api.get<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(
-        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}`,
+        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}&text=${encodeURIComponent(text)}`,
       )
       if (suggestion) setBudgetSuggestion(suggestion)
     } catch { /* ignora erros silenciosamente */ }
@@ -751,8 +752,9 @@ export default function PayablesPage() {
     setOutrasBudgetSuggestion(null)
     if (!categoryId || !selectedClientId) return
     try {
+      const text = [outrasForm.entityName, outrasForm.description].filter(Boolean).join(' ')
       const suggestion = await api.get<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(
-        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}`,
+        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}&text=${encodeURIComponent(text)}`,
       )
       if (suggestion) setOutrasBudgetSuggestion(suggestion)
     } catch { /* ignora erros silenciosamente */ }
