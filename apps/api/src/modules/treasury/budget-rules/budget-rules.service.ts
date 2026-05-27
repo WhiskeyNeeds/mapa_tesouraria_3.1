@@ -1,5 +1,4 @@
-// apps/api/src/modules/treasury/budget-rules/budget-rules.service.ts
-import type { PrismaClient, TreasuryCategoryType } from '@prisma/client'
+import type { PrismaClient } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 
 export interface BudgetSuggestion {
@@ -28,6 +27,7 @@ export class TreasuryBudgetRulesService {
       where: { id: data.budgetId, clientId, deletedAt: null },
     })
     if (!budget) throw httpError(404, 'Budget não encontrado')
+    if (budget.status !== 'ACTIVE') throw httpError(400, 'Só é possível criar regras em budgets activos')
 
     const category = await this.prisma.treasuryCategory.findFirst({
       where: { id: data.categoryId, clientId, deletedAt: null },
@@ -38,12 +38,22 @@ export class TreasuryBudgetRulesService {
       throw httpError(400, `A categoria '${category.name}' é do tipo ${category.type === 'REVENUE' ? 'Receita' : 'Despesa'} e o budget é do tipo ${budget.type === 'REVENUE' ? 'Receita' : 'Despesa'}`)
     }
 
+    const normalizedPattern = data.textPattern?.trim() || null
+    const clash = await this.prisma.treasuryBudgetRule.findFirst({
+      where: {
+        budgetId: data.budgetId,
+        categoryId: data.categoryId,
+        textPattern: normalizedPattern,
+      },
+    })
+    if (clash) throw httpError(409, 'Já existe uma regra com esta combinação de categoria e filtro de texto')
+
     return this.prisma.treasuryBudgetRule.create({
       data: {
         clientId,
         budgetId: data.budgetId,
         categoryId: data.categoryId,
-        textPattern: data.textPattern?.trim() || null,
+        textPattern: normalizedPattern,
       },
       include: {
         budget: { select: { id: true, name: true, type: true } },
@@ -55,9 +65,21 @@ export class TreasuryBudgetRulesService {
   async update(clientId: string, id: string, data: { textPattern?: string | null }) {
     const rule = await this.prisma.treasuryBudgetRule.findFirst({ where: { id, clientId } })
     if (!rule) throw httpError(404, 'Regra não encontrada')
+
+    const normalizedPattern = data.textPattern !== undefined ? (data.textPattern?.trim() || null) : rule.textPattern
+    const clash = await this.prisma.treasuryBudgetRule.findFirst({
+      where: {
+        budgetId: rule.budgetId,
+        categoryId: rule.categoryId,
+        textPattern: normalizedPattern,
+        NOT: { id },
+      },
+    })
+    if (clash) throw httpError(409, 'Já existe uma regra com esta combinação de categoria e filtro de texto')
+
     return this.prisma.treasuryBudgetRule.update({
       where: { id },
-      data: { textPattern: data.textPattern?.trim() || null },
+      data: { textPattern: normalizedPattern },
       include: {
         budget: { select: { id: true, name: true, type: true } },
         category: { select: { id: true, name: true, color: true } },
