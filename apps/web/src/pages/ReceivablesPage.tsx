@@ -1435,7 +1435,7 @@ export default function ReceivablesPage() {
                                     {r.entityName}
                                   </button>
                                 ) : (
-                                  r.entityName
+                                  r.entityName || '—'
                                 )}</td>
                                 <td className="px-5 py-3 whitespace-nowrap">
                                   <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(displayDate)}</div>

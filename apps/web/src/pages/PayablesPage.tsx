@@ -1454,7 +1454,18 @@ export default function PayablesPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
+                        <td className="px-5 py-3 text-gray-700">
+                          {p.tocSupplierId ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`) }}
+                              className="text-primary-600 hover:underline text-left"
+                            >
+                              {p.entityName || '—'}
+                            </button>
+                          ) : (
+                            p.entityName || '—'
+                          )}
+                        </td>
                         <td className="px-5 py-3 whitespace-nowrap">
                           <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(displayDate)}</div>
                           {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
