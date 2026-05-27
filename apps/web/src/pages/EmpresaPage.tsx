@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { ComponentType, CSSProperties } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -2411,6 +2412,7 @@ function TabTable({
   search: string
   clientId: string
 }) {
+  const navigate = useNavigate()
   const isEntity = tab === 'clientes' || tab === 'fornecedores'
   const itemType  = tab === 'produtos' ? 'product' : 'service'
   const defaultSort = isEntity ? 'business_name' : 'item_description'
@@ -2750,7 +2752,13 @@ function TabTable({
                 <tr
                   key={(row.id as string | number | undefined) ?? i}
                   className="hover:bg-gray-50 cursor-pointer group"
-                  onClick={() => setDetalheRow(row)}
+                  onClick={() => {
+                    if ((tab === 'fornecedores' || tab === 'clientes') && row.id != null) {
+                      navigate(`/empresa/${tab === 'fornecedores' ? 'fornecedores' : 'clientes'}/${row.id}`)
+                    } else {
+                      setDetalheRow(row)
+                    }
+                  }}
                 >
                   {cols.map((c) => {
                     if (c.special === 'analitica') {

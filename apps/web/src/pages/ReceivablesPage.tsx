@@ -1,4 +1,5 @@
 import { Fragment, useState, useMemo, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -65,6 +66,7 @@ interface Receivable {
   totalAmount: number; pendingAmount: number; receivedAmount: number; status: string; origin: string
   description?: string | null
   tocSalesDocId?: string
+  tocCustomerId?: string | null
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   parentId?: string | null
@@ -304,6 +306,7 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
 
 export default function ReceivablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
   // Centralised guard for every <input type="date"> on this page: rejects weekend
@@ -1085,7 +1088,18 @@ export default function ReceivablesPage() {
                                       </div>
                                     </div>
                                   </td>
-                                  <td className="px-5 py-3 text-gray-700">{r.entityName}</td>
+                                  <td className="px-5 py-3 text-gray-700">
+                                    {r.tocCustomerId ? (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); navigate(`/empresa/clientes/${r.tocCustomerId}`) }}
+                                        className="text-primary-600 hover:underline text-left"
+                                      >
+                                        {r.entityName}
+                                      </button>
+                                    ) : (
+                                      r.entityName
+                                    )}
+                                  </td>
                                   <td className="px-5 py-3 whitespace-nowrap">
                                     {(() => {
                                       const isSplit = (r.children ?? []).some((c) => !c.recurrenceId)

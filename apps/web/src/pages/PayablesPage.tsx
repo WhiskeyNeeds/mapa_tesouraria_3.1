@@ -1,4 +1,5 @@
 import { Fragment, useState, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -64,6 +65,7 @@ interface Payable {
   totalAmount: number; pendingAmount: number; paidAmount: number; status: string; origin: string
   description?: string | null
   tocPurchasesDocId?: string
+  tocSupplierId?: string | null
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   parentId?: string | null
@@ -291,6 +293,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
 
 export default function PayablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
   // Centralised guard for every <input type="date"> on this page: rejects weekend
@@ -343,7 +346,8 @@ export default function PayablesPage() {
   const [panelTocDoc, setPanelTocDoc] = useState<TocPurchaseDoc | null>(null)
   const [detailPayment, setDetailPayment] = useState<TocPayment | null>(null)
   const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
-  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split'>(null)
+  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'associateToc'>(null)
+  const [assocTocSearch, setAssocTocSearch] = useState('')
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
   const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
   const [splitCount, setSplitCount] = useState(2)
@@ -581,12 +585,19 @@ export default function PayablesPage() {
   const updatePayable = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.patch(`/treasury/${selectedClientId}/payables/${id}`, data),
-    onSuccess: () => {
+    onSuccess: (_, { data }) => {
       qc.invalidateQueries({ queryKey: ['payables'] })
       qc.invalidateQueries({ queryKey: ['payables-kpis'] })
       setEditId(null)
       setEditRow(null)
-      toast.success('Documento atualizado.')
+      if (data.tocPurchasesDocId) {
+        setPanelDoc(null)
+        setPanelTocDoc(null)
+        setPanelSection(null)
+        toast.success('Documento associado ao TOConline com sucesso.')
+      } else {
+        toast.success('Documento atualizado.')
+      }
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -697,6 +708,7 @@ export default function PayablesPage() {
 
   const createOutras = useMutation({
     mutationFn: () => {
+      const effectiveDueDate = recForm.isRecurrent ? recForm.cycleStartDate : outrasForm.dueDate
       const computedDocDate = recForm.isRecurrent ? shiftToWorkday(recForm.cycleStartDate) : undefined
       const body: Record<string, unknown> = {
         categoryId: outrasForm.categoryId || undefined,
@@ -704,7 +716,7 @@ export default function PayablesPage() {
         entityNif: outrasForm.entityNif || undefined,
         reference: outrasForm.reference || undefined,
         description: outrasForm.description || undefined,
-        dueDate: outrasForm.dueDate,
+        dueDate: effectiveDueDate,
         ...(computedDocDate ? { documentDate: computedDocDate } : {}),
         totalAmount: parseFloat(outrasForm.totalAmount) || 0,
         budgetId: outrasForm.budgetId || undefined,
@@ -875,8 +887,9 @@ export default function PayablesPage() {
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
   const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (p: Payable) => {
-    if (p.recurrenceId && !p.parentId) return 'programadas' as const
-    if (p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd) return 'futuras' as const
+    const dueDateStr = String(p.dueDate).slice(0, 10)
+    if (p.recurrenceId && !p.parentId && dueDateStr > todayYmd) return 'programadas' as const
+    if (p.recurrenceId && p.parentId && dueDateStr > todayYmd) return 'futuras' as const
     return 'atuais' as const
   }
   const outrasCount = { atuais: 0, futuras: 0, programadas: 0 }
@@ -1046,7 +1059,18 @@ export default function PayablesPage() {
                               </div>
                             </div>
                           </td>
-                          <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
+                          <td className="px-5 py-3 text-gray-700">
+                            {p.tocSupplierId ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`) }}
+                                className="text-primary-600 hover:underline text-left"
+                              >
+                                {p.entityName}
+                              </button>
+                            ) : (
+                              p.entityName
+                            )}
+                          </td>
                           <td className="px-5 py-3 whitespace-nowrap">
                             {(() => {
                               const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
@@ -1331,24 +1355,75 @@ export default function PayablesPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                    <th className="text-left px-5 py-3">Documento</th>
-                    <th className="text-left px-5 py-3">Fornecedor</th>
-                    <th className="text-left px-5 py-3">Vencimento</th>
-                    <th className="text-left px-5 py-3">Pagamento</th>
-                    <th className="text-right px-5 py-3">Total</th>
-                    <th className="text-right px-5 py-3">Pendente</th>
-                    <th className="text-left px-5 py-3">Estado</th>
-                    <th className="w-16 px-3 py-3" />
+                    {outrasSubTab === 'programadas' ? (
+                      <>
+                        <th className="text-left px-5 py-3">Designação</th>
+                        <th className="text-left px-5 py-3">Entidade</th>
+                        <th className="text-left px-5 py-3">Categoria</th>
+                        <th className="text-left px-5 py-3">Início</th>
+                        <th className="text-right px-5 py-3">Valor/ocorrência</th>
+                        <th className="w-16 px-3 py-3" />
+                      </>
+                    ) : (
+                      <>
+                        <th className="text-left px-5 py-3">Documento</th>
+                        <th className="text-left px-5 py-3">Fornecedor</th>
+                        <th className="text-left px-5 py-3">Vencimento</th>
+                        <th className="text-left px-5 py-3">Pagamento</th>
+                        <th className="text-right px-5 py-3">Total</th>
+                        <th className="text-right px-5 py-3">Pendente</th>
+                        <th className="text-left px-5 py-3">Estado</th>
+                        <th className="w-16 px-3 py-3" />
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {outrasRows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-5 py-16 text-center text-sm text-gray-400">
-                        Sem operações registadas. Usa o botão acima para registar a primeira operação.
+                      <td colSpan={outrasSubTab === 'programadas' ? 6 : 8} className="px-5 py-16 text-center text-sm text-gray-400">
+                        {outrasSubTab === 'programadas'
+                          ? 'Nenhuma recorrência definida. Cria uma operação recorrente usando o botão acima.'
+                          : 'Sem operações registadas. Usa o botão acima para registar a primeira operação.'}
                       </td>
                     </tr>
                   ) : outrasRows.map((p) => {
+                    // Template rows (recurrence definitions) get a dedicated display
+                    if (outrasSubTab === 'programadas') {
+                      return (
+                        <tr key={`o-${p.id}`} className="hover:bg-gray-50 group">
+                          <td className="px-5 py-3">
+                            <div className="flex items-center gap-1.5">
+                              <Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" />
+                              <span className="font-medium text-gray-900">{p.reference || p.description || '—'}</span>
+                            </div>
+                            <div className="text-xs text-gray-400 pl-5">{p.description && p.reference ? p.description : ''}</div>
+                          </td>
+                          <td className="px-5 py-3 text-gray-700">
+                            {p.tocSupplierId ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`) }}
+                                className="text-primary-600 hover:underline text-left"
+                              >
+                                {p.entityName || '—'}
+                              </button>
+                            ) : (
+                              p.entityName || '—'
+                            )}
+                          </td>
+                          <td className="px-5 py-3 text-gray-500">{p.category?.name || '—'}</td>
+                          <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(p.dueDate)}</td>
+                          <td className="px-5 py-3 text-right font-semibold text-gray-700">{formatCurrency(p.totalAmount)}</td>
+                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button title="Eliminar" onClick={() => setDeleteRow(p)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    }
                     const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
                     const displayDate = isSplit && p.promisedPaymentDate ? p.promisedPaymentDate : p.dueDate
                     const now = Date.now()
@@ -2020,10 +2095,12 @@ export default function PayablesPage() {
             <label className="label">Valor (€) <span className="text-red-500">*</span></label>
             <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
           </div>
-          <div>
-            <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
-            <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: pickWorkday(e.target.value, outrasForm.dueDate) })} />
-          </div>
+          {!recForm.isRecurrent && (
+            <div>
+              <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
+              <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: pickWorkday(e.target.value, outrasForm.dueDate) })} />
+            </div>
+          )}
           <div className="col-span-2">
             <label className="label">Descrição</label>
             <input className="input" value={outrasForm.description} onChange={(e) => setOutrasForm({ ...outrasForm, description: e.target.value })} placeholder="Notas sobre a operação" />
@@ -2095,11 +2172,12 @@ export default function PayablesPage() {
             onClick={() => createOutras.mutate()}
             className="btn-primary flex-1"
             disabled={(() => {
-              if (createOutras.isPending || !outrasForm.totalAmount || !outrasForm.dueDate) return true
+              if (createOutras.isPending || !outrasForm.totalAmount) return true
+              if (!recForm.isRecurrent && !outrasForm.dueDate) return true
               if (recForm.isRecurrent && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
               if (recForm.isRecurrent && recForm.endType === 'date') {
                 if (!recForm.endDate) return true
-                if (recForm.endDate <= outrasForm.dueDate) return true
+                if (recForm.endDate <= recForm.cycleStartDate) return true
               }
               return false
             })()}
@@ -2246,6 +2324,79 @@ export default function PayablesPage() {
                     </button>
                   )
                 })()}
+
+                {/* Associar a Fatura TOC */}
+                {isTocEnabled && !panelDoc.tocPurchasesDocId && !panelTocDoc && panelDoc.origin !== 'TOC' && (
+                  <div className="rounded-xl border border-gray-200 overflow-hidden">
+                    <button
+                      onClick={() => {
+                        setPanelSection(panelSection === 'associateToc' ? null : 'associateToc')
+                        setAssocTocSearch('')
+                      }}
+                      className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 hover:border-purple-200 text-left transition-colors group"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
+                        <ArrowDownToLine className="w-4 h-4 text-purple-700" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-900 text-sm">Associar a documento TOC</div>
+                        <div className="text-xs text-gray-500">{tocOnly.length > 0 ? `${tocOnly.length} documento${tocOnly.length === 1 ? '' : 's'} disponível${tocOnly.length === 1 ? '' : 'eis'}` : 'Sem documentos por importar'}</div>
+                      </div>
+                    </button>
+                    {panelSection === 'associateToc' && (
+                      <div className="border-t border-gray-100 p-3 space-y-2">
+                        <input
+                          type="text"
+                          placeholder="Pesquisar por fornecedor ou nº doc..."
+                          className="input text-sm"
+                          value={assocTocSearch}
+                          onChange={(e) => setAssocTocSearch(e.target.value)}
+                        />
+                        <div className="max-h-52 overflow-y-auto space-y-1">
+                          {tocOnly
+                            .filter((d) => {
+                              const q = assocTocSearch.toLowerCase()
+                              return !q || (d.supplier_business_name ?? '').toLowerCase().includes(q) || (d.document_no ?? '').toLowerCase().includes(q)
+                            })
+                            .map((d) => (
+                              <button
+                                key={d.id}
+                                onClick={() => {
+                                  updatePayable.mutate({
+                                    id: panelDoc.id,
+                                    data: {
+                                      tocPurchasesDocId: String(d.id),
+                                      entityName: d.supplier_business_name ?? '',
+                                      entityNif: d.supplier_tax_registration_number ?? null,
+                                      reference: d.document_no,
+                                      documentDate: d.date,
+                                      ...(d.due_date ? { dueDate: d.due_date } : {}),
+                                      totalAmount: Number(d.gross_total),
+                                      tocSupplierId: d.supplier_id ? String(d.supplier_id) : null,
+                                    },
+                                  })
+                                }}
+                                disabled={updatePayable.isPending}
+                                className="w-full text-left rounded-lg border border-gray-200 px-3 py-2 hover:bg-purple-50 hover:border-purple-200 transition-colors disabled:opacity-50"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-medium text-gray-700 truncate">{d.supplier_business_name || '—'}</span>
+                                  <span className="text-xs font-semibold text-gray-900 flex-shrink-0">{formatCurrency(d.gross_total)}</span>
+                                </div>
+                                <div className="text-xs text-gray-400 mt-0.5">{d.document_no} · {formatDate(d.date)}</div>
+                              </button>
+                            ))}
+                          {tocOnly.filter((d) => {
+                            const q = assocTocSearch.toLowerCase()
+                            return !q || (d.supplier_business_name ?? '').toLowerCase().includes(q) || (d.document_no ?? '').toLowerCase().includes(q)
+                          }).length === 0 && (
+                            <div className="text-xs text-gray-400 text-center py-3">Nenhum documento encontrado</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Data prometida */}
                 <div className="rounded-xl border border-gray-200 overflow-hidden">

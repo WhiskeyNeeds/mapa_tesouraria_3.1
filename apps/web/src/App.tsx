@@ -13,6 +13,7 @@ import PayablesPage from '@/pages/PayablesPage'
 import BudgetsPage from '@/pages/BudgetsPage'
 import ForecastPage from '@/pages/ForecastPage'
 import EmpresaPage from '@/pages/EmpresaPage'
+import EntityDetailPage from '@/pages/EntityDetailPage'
 import SettingsPage from '@/pages/SettingsPage'
 import ToconlineCallbackPage from '@/pages/ToconlineCallbackPage'
 import NotFoundPage from '@/pages/NotFoundPage'
@@ -50,6 +51,8 @@ export default function App() {
             <Route path="budgets" element={<BudgetsPage />} />
             <Route path="previsao" element={<ForecastPage />} />
             <Route path="empresa" element={<EmpresaPage />} />
+            <Route path="empresa/fornecedores/:tocId" element={<EntityDetailPage entityType="supplier" />} />
+            <Route path="empresa/clientes/:tocId" element={<EntityDetailPage entityType="customer" />} />
             <Route path="definicoes" element={<SettingsPage />} />
           </Route>
 
