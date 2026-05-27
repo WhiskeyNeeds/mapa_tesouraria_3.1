@@ -307,6 +307,7 @@ model TreasuryCategory {
   movements           TreasuryBankMovement[]
   classificationRules TreasuryClassificationRule[]
   rules               TreasuryBudgetRule[]
+  entityConfigs       TreasuryEntityConfig[]
 
   @@unique([clientId, name, type])
   @@index([clientId, type])
@@ -867,4 +868,20 @@ model TreasuryBudgetRule {
   @@index([clientId, budgetId])
   @@index([clientId, categoryId])
   @@map("treasury_budget_rules")
+}
+
+model TreasuryEntityConfig {
+  id                String            @id @default(cuid())
+  clientId          String
+  entityType        String
+  tocEntityId       String
+  defaultCategoryId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  category TreasuryCategory? @relation(fields: [defaultCategoryId], references: [id], onDelete: SetNull)
+
+  @@unique([clientId, entityType, tocEntityId])
+  @@map("treasury_entity_configs")
 }
