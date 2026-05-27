@@ -2754,7 +2754,7 @@ function TabTable({
                   className="hover:bg-gray-50 cursor-pointer group"
                   onClick={() => {
                     if ((tab === 'fornecedores' || tab === 'clientes') && row.id != null) {
-                      navigate(`/empresa/${tab === 'fornecedores' ? 'fornecedores' : 'clientes'}/${row.id}`)
+                      navigate(`/empresa/${tab}/${row.id}`)
                     } else {
                       setDetalheRow(row)
                     }
