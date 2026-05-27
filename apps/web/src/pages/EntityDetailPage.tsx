@@ -6,7 +6,7 @@ import { ChevronLeft } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { formatCurrency, formatDate, statusLabel, statusVariant } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import Badge from '@/components/ui/Badge'
 
 interface Props {
@@ -19,16 +19,19 @@ interface EntityConfig {
   category: { id: string; name: string; color: string } | null
 }
 
-interface LocalDoc {
-  id: string
-  reference: string
-  entityName: string
-  documentDate: string | null
-  dueDate: string
-  totalAmount: number
-  pendingAmount: number
-  status: string
-  category?: { id: string; name: string; color: string } | null
+interface TocDoc {
+  id: number
+  document_no: string
+  document_type: string
+  status: number   // 0=rascunho, 1=finalizado, 3=anulado
+  date: string
+  due_date?: string
+  gross_total: number
+  pending_total: number
+  settlement_total?: number
+  supplier_id?: number
+  customer_id?: number
+  [key: string]: unknown
 }
 
 interface Category {
@@ -36,6 +39,23 @@ interface Category {
   name: string
   type: string
   color?: string | null
+}
+
+function tocDocStatusLabel(doc: TocDoc): string {
+  if (doc.status === 3) return 'Anulado'
+  if (doc.status === 0) return 'Rascunho'
+  if (Number(doc.pending_total) === 0) return 'Liquidado'
+  const due = doc.due_date ? new Date(doc.due_date) : null
+  if (due && due < new Date()) return 'Em atraso'
+  return 'Pendente'
+}
+
+function tocDocStatusVariant(doc: TocDoc): 'gray' | 'green' | 'red' | 'yellow' {
+  if (doc.status === 3 || doc.status === 0) return 'gray'
+  if (Number(doc.pending_total) === 0) return 'green'
+  const due = doc.due_date ? new Date(doc.due_date) : null
+  if (due && due < new Date()) return 'red'
+  return 'yellow'
 }
 
 export default function EntityDetailPage({ entityType }: Props) {
@@ -63,15 +83,15 @@ export default function EntityDetailPage({ entityType }: Props) {
     retry: 1,
   })
 
-  const docsQuery = useQuery<{ items: LocalDoc[]; total: number }>({
+  const docsQuery = useQuery<TocDoc[]>({
     queryKey: isSupplier
-      ? ['payables', clientId, 'entity-detail', tocId]
-      : ['receivables', clientId, 'entity-detail', tocId],
+      ? ['toc-purchases', clientId]
+      : ['toc-sales', clientId],
     queryFn: () =>
       api.get(
         isSupplier
-          ? `/treasury/${clientId}/payables?tocSupplierId=${tocId}&limit=500`
-          : `/treasury/${clientId}/receivables?tocCustomerId=${tocId}&limit=500`,
+          ? `/toconline/${clientId}/purchases`
+          : `/toconline/${clientId}/sales`,
       ),
     enabled: !!clientId && !!tocId,
   })
@@ -116,13 +136,18 @@ export default function EntityDetailPage({ entityType }: Props) {
   const entityPhone = String(entity.phone ?? entity.mobile_phone ?? '—')
   const entityAddress = String(entity.address ?? entity.billing_address ?? '—')
 
-  const allDocs = docsQuery.data?.items ?? []
-  const currentDocs = allDocs.filter((d) => ['OPEN', 'PARTIAL'].includes(d.status))
-  const historyDocs = allDocs.filter((d) => ['SETTLED', 'VOID'].includes(d.status))
+  const entityIdNum = Number(tocId)
+  const allDocs = (docsQuery.data ?? []).filter((d) =>
+    isSupplier ? d.supplier_id === entityIdNum : d.customer_id === entityIdNum,
+  )
+  const currentDocs = allDocs.filter((d) => d.status !== 3 && Number(d.pending_total) > 0)
+  const historyDocs = allDocs.filter((d) => d.status === 3 || Number(d.pending_total) === 0)
   const displayDocs = tab === 'current' ? currentDocs : historyDocs
 
-  const pendingAmount = currentDocs.reduce((s, d) => s + Number(d.pendingAmount), 0)
-  const settledAmount = historyDocs.reduce((s, d) => s + Number(d.totalAmount), 0)
+  const pendingAmount = currentDocs.reduce((s, d) => s + Number(d.pending_total), 0)
+  const settledAmount = historyDocs
+    .filter((d) => d.status !== 3)
+    .reduce((s, d) => s + Number(d.gross_total) - Number(d.pending_total), 0)
 
   const categories = categoriesQuery.data ?? []
   const currentCategoryId = configQuery.data?.defaultCategoryId ?? ''
@@ -224,29 +249,29 @@ export default function EntityDetailPage({ entityType }: Props) {
                   {displayDocs.map((doc) => (
                     <tr key={doc.id} className="hover:bg-gray-50">
                       <td className="px-5 py-3 font-medium text-gray-800">
-                        {doc.reference || '—'}
+                        {doc.document_no || `${doc.document_type} (rascunho)`}
                       </td>
                       <td className="px-5 py-3 text-gray-500">
-                        {doc.documentDate ? formatDate(doc.documentDate) : '—'}
+                        {doc.date ? formatDate(doc.date) : '—'}
                       </td>
                       <td className="px-5 py-3 text-gray-500">
-                        {formatDate(doc.dueDate)}
+                        {doc.due_date ? formatDate(doc.due_date) : '—'}
                       </td>
                       <td className="px-5 py-3 text-right font-semibold text-gray-800">
-                        {formatCurrency(doc.totalAmount)}
+                        {formatCurrency(doc.gross_total)}
                       </td>
                       <td
                         className={`px-5 py-3 text-right font-semibold ${
-                          Number(doc.pendingAmount) > 0 ? 'text-red-600' : 'text-gray-400'
+                          Number(doc.pending_total) > 0 ? 'text-red-600' : 'text-gray-400'
                         }`}
                       >
-                        {Number(doc.pendingAmount) > 0
-                          ? formatCurrency(doc.pendingAmount)
+                        {Number(doc.pending_total) > 0
+                          ? formatCurrency(doc.pending_total)
                           : '—'}
                       </td>
                       <td className="px-5 py-3">
-                        <Badge variant={statusVariant(doc.status)}>
-                          {statusLabel(doc.status)}
+                        <Badge variant={tocDocStatusVariant(doc)}>
+                          {tocDocStatusLabel(doc)}
                         </Badge>
                       </td>
                     </tr>
