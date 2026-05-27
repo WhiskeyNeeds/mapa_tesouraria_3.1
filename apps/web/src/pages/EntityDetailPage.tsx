@@ -140,8 +140,8 @@ export default function EntityDetailPage({ entityType }: Props) {
   const allDocs = (docsQuery.data ?? []).filter((d) =>
     isSupplier ? d.supplier_id === entityIdNum : d.customer_id === entityIdNum,
   )
-  const currentDocs = allDocs.filter((d) => d.status !== 3 && Number(d.pending_total) > 0)
-  const historyDocs = allDocs.filter((d) => d.status === 3 || Number(d.pending_total) === 0)
+  const currentDocs = allDocs.filter((d) => d.status === 1 && Number(d.pending_total) > 0)
+  const historyDocs = allDocs.filter((d) => d.status === 1 && Number(d.pending_total) === 0 || d.status === 3)
   const displayDocs = tab === 'current' ? currentDocs : historyDocs
 
   const pendingAmount = currentDocs.reduce((s, d) => s + Number(d.pending_total), 0)
