@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { TreasuryPayablesService } from './payables.service.js'
 import { ToconlineService } from '../../toconline/toconline.service.js'
+import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
+import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 import type { TreasuryDocStatus, TreasuryDocOrigin } from '@prisma/client'
 
 interface TocDocLine {
@@ -11,7 +13,9 @@ interface TocDocLine {
 }
 
 export async function payablesRoutes(fastify: FastifyInstance) {
-  const svc = new TreasuryPayablesService(fastify.prisma)
+  const budgetsSvc = new TreasuryBudgetsService(fastify.prisma)
+  const budgetRulesSvc = new TreasuryBudgetRulesService(fastify.prisma)
+  const svc = new TreasuryPayablesService(fastify.prisma, budgetsSvc, budgetRulesSvc)
   const prefix = '/treasury/:clientId/payables'
   const auth = [fastify.authenticate, fastify.requireClientAccess]
 

@@ -3,16 +3,19 @@ import { httpError } from '../../../lib/errors.js'
 import { computeNextDate } from '../recurrences/utils.js'
 import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
 import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
+import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 
 export class TreasuryPayablesService {
   private recurrencesSvc: TreasuryRecurrencesService
-  private budgetsSvc: TreasuryBudgetsService
 
-  constructor(private prisma: PrismaClient) {
+  constructor(
+    private prisma: PrismaClient,
+    private budgetsSvc: TreasuryBudgetsService,
+    private budgetRulesSvc: TreasuryBudgetRulesService,
+  ) {
     this.recurrencesSvc = new TreasuryRecurrencesService(prisma)
-    this.budgetsSvc = new TreasuryBudgetsService(prisma)
   }
 
   async list(clientId: string, filters: {
@@ -116,7 +119,6 @@ export class TreasuryPayablesService {
     currency?: string
     recurrenceId?: string
     budgetId?: string
-    budgetCategoryId?: string
     recurrence?: { frequency: TreasuryRecurrenceFrequency; endDate?: string; occurrences?: number }
   }) {
     // Auto-categorização (categoria de movimentos): regras primeiro, histórico depois.
@@ -146,10 +148,9 @@ export class TreasuryPayablesService {
             ],
           },
           orderBy: { createdAt: 'desc' },
-          select: { categoryId: true, budgetCategoryId: true },
+          select: { categoryId: true },
         })
         if (last?.categoryId) data.categoryId = last.categoryId
-        if (!data.budgetCategoryId && last?.budgetCategoryId) data.budgetCategoryId = last.budgetCategoryId
       }
     }
 
@@ -159,23 +160,21 @@ export class TreasuryPayablesService {
       if (!category) throw httpError(404, 'Category not found')
     }
 
-    if (data.budgetCategoryId) {
-      const bc = await this.prisma.treasuryBudgetCategory.findFirst({ where: { id: data.budgetCategoryId, clientId, deletedAt: null } })
-      if (!bc) throw httpError(404, 'Categoria de budget não encontrada')
-      if (bc.type !== 'EXPENSE') throw httpError(400, `Categoria de budget '${bc.name}' é de Receita; não pode ser associada a uma conta a pagar`)
-    }
-
+    // Auto-associação por regra de budget
+    let resolvedBudgetId = data.budgetId
+    let budgetAutoAssigned = false
     if (data.budgetId) {
       await this.budgetsSvc.assertCompatible(clientId, data.budgetId, 'EXPENSE')
-    }
-
-    // Auto-associação: se o utilizador escolheu uma categoria de budget mas não escolheu budget,
-    // e existir exatamente um budget ativo de despesa que cobre essa categoria de budget, associa-o.
-    // Múltiplos matches → não decide automaticamente (utilizador escolhe).
-    let resolvedBudgetId = data.budgetId
-    if (!resolvedBudgetId && data.budgetCategoryId) {
-      const autoBudget = await this.budgetsSvc.findBudgetForBudgetCategory(clientId, data.budgetCategoryId, 'EXPENSE')
-      if (autoBudget) resolvedBudgetId = autoBudget
+    } else if (data.categoryId) {
+      const suggestion = await this.budgetRulesSvc.suggest(
+        clientId,
+        data.categoryId,
+        [data.entityName, data.description].filter(Boolean).join(' '),
+      )
+      if (suggestion) {
+        resolvedBudgetId = suggestion.budgetId
+        budgetAutoAssigned = true
+      }
     }
 
     if (data.tocPurchasesDocId) {
@@ -220,8 +219,7 @@ export class TreasuryPayablesService {
         reference: data.reference ?? null,
         description: data.description,
         recurrenceId,
-        ...(resolvedBudgetId ? { budgetId: resolvedBudgetId } : {}),
-        ...(data.budgetCategoryId ? { budgetCategoryId: data.budgetCategoryId } : {}),
+        ...(resolvedBudgetId ? { budgetId: resolvedBudgetId, budgetAutoAssigned } : {}),
       },
     })
 
@@ -258,8 +256,8 @@ export class TreasuryPayablesService {
     documentDate: string
     dueDate: string
     categoryId: string
-    budgetCategoryId: string | null
     budgetId: string | null
+    budgetAutoAssigned: boolean
     totalAmount: number
     status: TreasuryDocStatus
   }>) {
@@ -281,31 +279,18 @@ export class TreasuryPayablesService {
       updateData.origin = category.launchToc ? 'TOCONLINE' : 'LOCAL'
     }
 
-    if (data.budgetCategoryId !== undefined) {
-      if (data.budgetCategoryId === null) {
-        updateData.budgetCategory = { disconnect: true }
-      } else {
-        const bc = await this.prisma.treasuryBudgetCategory.findFirst({ where: { id: data.budgetCategoryId, clientId, deletedAt: null } })
-        if (!bc) throw httpError(404, 'Categoria de budget não encontrada')
-        if (bc.type !== 'EXPENSE') throw httpError(400, `Categoria de budget '${bc.name}' é de Receita; não pode ser associada a uma conta a pagar`)
-        updateData.budgetCategory = { connect: { id: data.budgetCategoryId } }
-
-        // Auto-associação: se a fatura ainda não tem budget e a categoria de budget
-        // resolver para exatamente um budget ativo, associa.
-        if (!item.budgetId && data.budgetId === undefined) {
-          const autoBudget = await this.budgetsSvc.findBudgetForBudgetCategory(clientId, data.budgetCategoryId, 'EXPENSE')
-          if (autoBudget) updateData.budget = { connect: { id: autoBudget } }
-        }
-      }
-    }
-
     if (data.budgetId !== undefined) {
       if (data.budgetId === null) {
         updateData.budget = { disconnect: true }
+        updateData.budgetAutoAssigned = false
       } else {
         await this.budgetsSvc.assertCompatible(clientId, data.budgetId, 'EXPENSE')
         updateData.budget = { connect: { id: data.budgetId } }
+        updateData.budgetAutoAssigned = false
       }
+    }
+    if (data.budgetAutoAssigned !== undefined) {
+      updateData.budgetAutoAssigned = data.budgetAutoAssigned
     }
 
     if (data.totalAmount !== undefined) {
