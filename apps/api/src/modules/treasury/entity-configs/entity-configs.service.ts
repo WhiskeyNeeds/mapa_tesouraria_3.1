@@ -19,11 +19,12 @@ export class TreasuryEntityConfigsService {
     data: { defaultCategoryId: string | null },
   ) {
     this.validateEntityType(entityType)
+    const categoryId = data.defaultCategoryId ?? null
 
-    if (data.defaultCategoryId) {
+    if (categoryId !== null) {
       const expectedType = entityType === 'supplier' ? 'EXPENSE' : 'REVENUE'
       const category = await this.prisma.treasuryCategory.findFirst({
-        where: { id: data.defaultCategoryId, clientId, deletedAt: null },
+        where: { id: categoryId, clientId, deletedAt: null },
       })
       if (!category) throw httpError(404, 'Categoria não encontrada')
       if (category.type !== expectedType) {
@@ -38,22 +39,23 @@ export class TreasuryEntityConfigsService {
         clientId,
         entityType,
         tocEntityId,
-        defaultCategoryId: data.defaultCategoryId,
+        defaultCategoryId: categoryId,
       },
-      update: { defaultCategoryId: data.defaultCategoryId },
+      update: { defaultCategoryId: categoryId },
       include: { category: { select: { id: true, name: true, color: true } } },
     })
   }
 
   async delete(clientId: string, entityType: string, tocEntityId: string) {
     this.validateEntityType(entityType)
-    const existing = await this.prisma.treasuryEntityConfig.findUnique({
-      where: { clientId_entityType_tocEntityId: { clientId, entityType, tocEntityId } },
-    })
-    if (!existing) throw httpError(404, 'Configuração não encontrada')
-    await this.prisma.treasuryEntityConfig.delete({
-      where: { clientId_entityType_tocEntityId: { clientId, entityType, tocEntityId } },
-    })
+    try {
+      await this.prisma.treasuryEntityConfig.delete({
+        where: { clientId_entityType_tocEntityId: { clientId, entityType, tocEntityId } },
+      })
+    } catch (e: unknown) {
+      // P2025 = record not found — treat as already deleted (idempotent)
+      if ((e as { code?: string }).code !== 'P2025') throw e
+    }
   }
 
   private validateEntityType(entityType: string) {
