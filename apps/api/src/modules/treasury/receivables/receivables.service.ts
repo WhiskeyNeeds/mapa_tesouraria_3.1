@@ -138,19 +138,38 @@ export class TreasuryReceivablesService {
       if (matched) {
         data.categoryId = matched.categoryId
       } else if (data.entityName || data.tocCustomerId) {
-        const last = await this.prisma.treasuryReceivable.findFirst({
-          where: {
-            clientId, deletedAt: null,
-            categoryId: { not: null },
-            OR: [
-              ...(data.tocCustomerId ? [{ tocCustomerId: data.tocCustomerId }] : []),
-              ...(data.entityName ? [{ entityName: data.entityName }] : []),
-            ],
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { categoryId: true },
-        })
-        if (last?.categoryId) data.categoryId = last.categoryId
+        // Entity config tem prioridade sobre lookup histórico
+        if (data.tocCustomerId) {
+          const entityConfig = await this.prisma.treasuryEntityConfig.findUnique({
+            where: {
+              clientId_entityType_tocEntityId: {
+                clientId,
+                entityType: 'customer',
+                tocEntityId: String(data.tocCustomerId),
+              },
+            },
+            select: { defaultCategoryId: true },
+          })
+          if (entityConfig?.defaultCategoryId) {
+            data.categoryId = entityConfig.defaultCategoryId
+          }
+        }
+        // Histórico: só corre se a config de entidade não forneceu categoria
+        if (!data.categoryId) {
+          const last = await this.prisma.treasuryReceivable.findFirst({
+            where: {
+              clientId, deletedAt: null,
+              categoryId: { not: null },
+              OR: [
+                ...(data.tocCustomerId ? [{ tocCustomerId: data.tocCustomerId }] : []),
+                ...(data.entityName ? [{ entityName: data.entityName }] : []),
+              ],
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { categoryId: true },
+          })
+          if (last?.categoryId) data.categoryId = last.categoryId
+        }
       }
     }
 
@@ -195,7 +214,7 @@ export class TreasuryReceivablesService {
           startDate: firstDueDate,
           endDate: data.recurrence.endDate ? new Date(data.recurrence.endDate) : null,
           occurrences: data.recurrence.occurrences ?? null,
-          nextRunAt: computeNextDate(firstDueDate, data.recurrence.frequency),
+          nextRunAt: firstDueDate,
         },
       })
       recurrenceId = rec.id
@@ -207,7 +226,7 @@ export class TreasuryReceivablesService {
         createdById: userId,
         origin: category?.launchToc ? 'TOCONLINE' : 'LOCAL',
         totalAmount: data.totalAmount,
-        pendingAmount: data.totalAmount,
+        pendingAmount: data.recurrence ? 0 : data.totalAmount,
         documentDate: data.documentDate ? new Date(data.documentDate) : null,
         dueDate: new Date(data.dueDate),
         currency: data.currency ?? 'EUR',
