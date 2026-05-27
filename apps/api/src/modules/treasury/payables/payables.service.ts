@@ -138,19 +138,38 @@ export class TreasuryPayablesService {
       if (matched) {
         data.categoryId = matched.categoryId
       } else if (data.entityName || data.tocSupplierId) {
-        const last = await this.prisma.treasuryPayable.findFirst({
-          where: {
-            clientId, deletedAt: null,
-            categoryId: { not: null },
-            OR: [
-              ...(data.tocSupplierId ? [{ tocSupplierId: data.tocSupplierId }] : []),
-              ...(data.entityName ? [{ entityName: data.entityName }] : []),
-            ],
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { categoryId: true },
-        })
-        if (last?.categoryId) data.categoryId = last.categoryId
+        // Entity config tem prioridade sobre lookup histórico
+        if (data.tocSupplierId) {
+          const entityConfig = await this.prisma.treasuryEntityConfig.findUnique({
+            where: {
+              clientId_entityType_tocEntityId: {
+                clientId,
+                entityType: 'supplier',
+                tocEntityId: String(data.tocSupplierId),
+              },
+            },
+            select: { defaultCategoryId: true },
+          })
+          if (entityConfig?.defaultCategoryId) {
+            data.categoryId = entityConfig.defaultCategoryId
+          }
+        }
+        // Histórico: só corre se a config de entidade não forneceu categoria
+        if (!data.categoryId) {
+          const last = await this.prisma.treasuryPayable.findFirst({
+            where: {
+              clientId, deletedAt: null,
+              categoryId: { not: null },
+              OR: [
+                ...(data.tocSupplierId ? [{ tocSupplierId: data.tocSupplierId }] : []),
+                ...(data.entityName ? [{ entityName: data.entityName }] : []),
+              ],
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { categoryId: true },
+          })
+          if (last?.categoryId) data.categoryId = last.categoryId
+        }
       }
     }
 
@@ -195,7 +214,8 @@ export class TreasuryPayablesService {
           startDate: firstDueDate,
           endDate: data.recurrence.endDate ? new Date(data.recurrence.endDate) : null,
           occurrences: data.recurrence.occurrences ?? null,
-          nextRunAt: computeNextDate(firstDueDate, data.recurrence.frequency),
+          // Start from the first occurrence date so processForClient generates the first child
+          nextRunAt: firstDueDate,
         },
       })
       recurrenceId = rec.id
@@ -207,7 +227,8 @@ export class TreasuryPayablesService {
         createdById: userId,
         origin: category?.launchToc ? 'TOCONLINE' : 'LOCAL',
         totalAmount: data.totalAmount,
-        pendingAmount: data.totalAmount,
+        // Template roots have pendingAmount=0; actual transactions are the children
+        pendingAmount: data.recurrence ? 0 : data.totalAmount,
         documentDate: data.documentDate ? new Date(data.documentDate) : null,
         dueDate: new Date(data.dueDate),
         currency: data.currency ?? 'EUR',
@@ -251,6 +272,7 @@ export class TreasuryPayablesService {
 
   async update(clientId: string, userId: string, id: string, data: Partial<{
     entityName: string
+    entityNif: string | null
     description: string
     reference: string
     documentDate: string
@@ -260,16 +282,29 @@ export class TreasuryPayablesService {
     budgetAutoAssigned: boolean
     totalAmount: number
     status: TreasuryDocStatus
+    tocPurchasesDocId: string
+    tocSupplierId: string | null
   }>) {
     const item = await this.getById(clientId, id)
 
     const updateData: Prisma.TreasuryPayableUpdateInput = {}
     if (data.entityName   !== undefined) updateData.entityName   = data.entityName
+    if (data.entityNif    !== undefined) updateData.entityNif    = data.entityNif
     if (data.description  !== undefined) updateData.description  = data.description
     if (data.reference    !== undefined) updateData.reference    = data.reference
     if (data.dueDate)                    updateData.dueDate      = new Date(data.dueDate)
     if (data.documentDate)               updateData.documentDate = new Date(data.documentDate)
     if (data.status)                     updateData.status       = data.status
+    if (data.tocSupplierId !== undefined) updateData.tocSupplierId = data.tocSupplierId
+
+    if (data.tocPurchasesDocId !== undefined) {
+      const clash = await this.prisma.treasuryPayable.findFirst({
+        where: { clientId, tocPurchasesDocId: data.tocPurchasesDocId, deletedAt: null, NOT: { id } },
+        select: { id: true },
+      })
+      if (clash) throw httpError(409, 'Este documento TOConline já está associado a outra conta a pagar')
+      updateData.tocPurchasesDocId = data.tocPurchasesDocId
+    }
 
     if (data.categoryId) {
       const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
@@ -294,9 +329,10 @@ export class TreasuryPayablesService {
     }
 
     if (data.totalAmount !== undefined) {
-      if (item.status !== 'OPEN') throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
+      // Allow overriding amount when associating a TOC doc (tocPurchasesDocId also being set)
+      if (item.status !== 'OPEN' && !data.tocPurchasesDocId) throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
       updateData.totalAmount = data.totalAmount
-      updateData.pendingAmount = data.totalAmount
+      if (item.status === 'OPEN') updateData.pendingAmount = data.totalAmount
     }
 
     const updated = await this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
