@@ -1427,7 +1427,16 @@ export default function ReceivablesPage() {
                                     </div>
                                   </div>
                                 </td>
-                                <td className="px-5 py-3 text-gray-700">{r.entityName}</td>
+                                <td className="px-5 py-3 text-gray-700">{r.tocCustomerId ? (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); navigate(`/empresa/clientes/${r.tocCustomerId}`) }}
+                                    className="text-primary-600 hover:underline text-left"
+                                  >
+                                    {r.entityName}
+                                  </button>
+                                ) : (
+                                  r.entityName
+                                )}</td>
                                 <td className="px-5 py-3 whitespace-nowrap">
                                   <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(displayDate)}</div>
                                   {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
