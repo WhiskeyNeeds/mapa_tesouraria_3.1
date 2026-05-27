@@ -72,13 +72,12 @@ interface Receivable {
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; receivedAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
 }
 interface Category { id: string; name: string; type: string; launchToc: boolean }
-interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
 interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
 interface TocCustomer { id: string | number; business_name?: string; tax_identification_number?: string;[key: string]: unknown }
 
 const emptyForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  dueDate: '', totalAmount: '', currency: 'EUR', budgetId: '', budgetCategoryId: '',
+  dueDate: '', totalAmount: '', currency: 'EUR', budgetId: '',
 }
 const emptyRecurrence = {
   isRecurrent: false,
@@ -94,7 +93,7 @@ const emptyRecurrence = {
 const emptyTocLine = { item_type: 'Service', description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
 const emptyOutrasForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  dueDate: '', totalAmount: '', budgetId: '', budgetCategoryId: '',
+  dueDate: '', totalAmount: '', budgetId: '',
 }
 const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
 
@@ -415,11 +414,8 @@ export default function ReceivablesPage() {
     enabled: !!selectedClientId,
   })
 
-  const { data: budgetCategories = [] } = useQuery<BudgetCategory[]>({
-    queryKey: ['budget-categories-revenue', selectedClientId],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/budget-categories?type=REVENUE`),
-    enabled: !!selectedClientId,
-  })
+  const [budgetSuggestion, setBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
+  const [outrasBudgetSuggestion, setOutrasBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
 
   const { data: tocDocs, isLoading: tocLoading, refetch: refetchToc } = useQuery<TocSalesDoc[]>({
     queryKey: ['toc-sales', selectedClientId],
@@ -493,7 +489,6 @@ export default function ReceivablesPage() {
         totalAmount: parseFloat(form.totalAmount) || 0,
         entityNif: form.entityNif || undefined,
         budgetId: form.budgetId || undefined,
-        budgetCategoryId: form.budgetCategoryId || undefined,
       }
       if (recForm.isRecurrent) {
         body.recurrence = {
@@ -538,6 +533,7 @@ export default function ReceivablesPage() {
       setRetentionPct('')
       setSelectedTocCustomer(null)
       setTocCustomerSearch('')
+      setBudgetSuggestion(null)
       toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Conta a receber criada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -747,7 +743,6 @@ export default function ReceivablesPage() {
         ...(computedDocDate ? { documentDate: computedDocDate } : {}),
         totalAmount: parseFloat(outrasForm.totalAmount) || 0,
         budgetId: outrasForm.budgetId || undefined,
-        budgetCategoryId: outrasForm.budgetCategoryId || undefined,
       }
       if (recForm.isRecurrent) {
         body.recurrence = {
@@ -765,6 +760,7 @@ export default function ReceivablesPage() {
       setOutrasForm(emptyOutrasForm)
       setRecForm(emptyRecurrence)
       setShowNewOutras(false)
+      setOutrasBudgetSuggestion(null)
       toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Operação criada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -780,6 +776,30 @@ export default function ReceivablesPage() {
   const outrasCount = { atuais: 0, futuras: 0, programadas: 0 }
   for (const r of outrasAll) outrasCount[outrasCategorise(r)]++
   const outrasRows = outrasAll.filter((r) => outrasCategorise(r) === outrasSubTab)
+
+  async function onCategoryChange(categoryId: string) {
+    setForm((f) => ({ ...f, categoryId }))
+    setBudgetSuggestion(null)
+    if (!categoryId || !selectedClientId) return
+    try {
+      const suggestion = await api.get<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(
+        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}`,
+      )
+      if (suggestion) setBudgetSuggestion(suggestion)
+    } catch { /* ignora erros silenciosamente */ }
+  }
+
+  async function onOutrasCategoryChange(categoryId: string) {
+    setOutrasForm((f) => ({ ...f, categoryId }))
+    setOutrasBudgetSuggestion(null)
+    if (!categoryId || !selectedClientId) return
+    try {
+      const suggestion = await api.get<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(
+        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}`,
+      )
+      if (suggestion) setOutrasBudgetSuggestion(suggestion)
+    } catch { /* ignora erros silenciosamente */ }
+  }
 
   const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || isRecurrentFilter || isOverdueFilter)
   function clearFilters() {
@@ -1599,23 +1619,36 @@ export default function ReceivablesPage() {
               </div>
             </Modal>
 
-            <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setSelectedTocCustomer(null); setTocCustomerSearch('') }} title="Nova Conta a Receber" size="lg">
+            <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setSelectedTocCustomer(null); setTocCustomerSearch(''); setBudgetSuggestion(null) }} title="Nova Conta a Receber" size="lg">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="label">Categoria</label>
-                  <select className="input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
+                  <select className="input" value={form.categoryId} onChange={(e) => onCategoryChange(e.target.value)}>
                     <option value="">Selecionar...</option>
                     {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="label">Categoria de Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
-                  <select className="input" value={form.budgetCategoryId} onChange={(e) => setForm({ ...form, budgetCategoryId: e.target.value })}>
-                    <option value="">Sem categoria de budget</option>
-                    {budgetCategories.map((bc) => <option key={bc.id} value={bc.id}>{bc.name}</option>)}
-                  </select>
+                <div className="col-span-2">
+                  {budgetSuggestion && !form.budgetId && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="text-xs font-semibold text-blue-700 mb-0.5">Sugestão de budget</p>
+                          <p className="text-sm font-medium text-gray-900">{budgetSuggestion.budgetName}</p>
+                          <p className="text-xs text-gray-500">Regra: {budgetSuggestion.ruleDescription}</p>
+                        </div>
+                        <button onClick={() => setBudgetSuggestion(null)} className="text-gray-400 hover:text-gray-600 text-xs">x</button>
+                      </div>
+                      <button
+                        onClick={() => { setForm((f) => ({ ...f, budgetId: budgetSuggestion.budgetId })); setBudgetSuggestion(null) }}
+                        className="mt-2 w-full text-xs bg-blue-600 text-white rounded py-1.5 hover:bg-blue-700"
+                      >
+                        Aceitar — Budget "{budgetSuggestion.budgetName}"
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div>
+                <div className="col-span-2">
                   <label className="label">Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
                   <select className="input" value={form.budgetId} onChange={(e) => setForm({ ...form, budgetId: e.target.value })}>
                     <option value="">Auto pela categoria</option>
@@ -1938,7 +1971,7 @@ export default function ReceivablesPage() {
                 <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
               )}
               <div className="flex gap-3 mt-6">
-                <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setSelectedTocCustomer(null); setTocCustomerSearch('') }} className="btn-secondary flex-1">Cancelar</button>
+                <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setSelectedTocCustomer(null); setTocCustomerSearch(''); setBudgetSuggestion(null) }} className="btn-secondary flex-1">Cancelar</button>
                 <button
                   onClick={() => create.mutate()}
                   className="btn-primary flex-1"
@@ -1958,23 +1991,36 @@ export default function ReceivablesPage() {
               </div>
             </Modal>
 
-            <Modal open={showNewOutras} onClose={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch('') }} title="Nova Operação" size="lg">
+            <Modal open={showNewOutras} onClose={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch(''); setOutrasBudgetSuggestion(null) }} title="Nova Operação" size="lg">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="label">Categoria</label>
-                  <select className="input" value={outrasForm.categoryId} onChange={(e) => setOutrasForm({ ...outrasForm, categoryId: e.target.value })}>
+                  <select className="input" value={outrasForm.categoryId} onChange={(e) => onOutrasCategoryChange(e.target.value)}>
                     <option value="">Selecionar...</option>
                     {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="label">Categoria de Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
-                  <select className="input" value={outrasForm.budgetCategoryId} onChange={(e) => setOutrasForm({ ...outrasForm, budgetCategoryId: e.target.value })}>
-                    <option value="">Sem categoria de budget</option>
-                    {budgetCategories.map((bc) => <option key={bc.id} value={bc.id}>{bc.name}</option>)}
-                  </select>
+                <div className="col-span-2">
+                  {outrasBudgetSuggestion && !outrasForm.budgetId && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="text-xs font-semibold text-blue-700 mb-0.5">Sugestão de budget</p>
+                          <p className="text-sm font-medium text-gray-900">{outrasBudgetSuggestion.budgetName}</p>
+                          <p className="text-xs text-gray-500">Regra: {outrasBudgetSuggestion.ruleDescription}</p>
+                        </div>
+                        <button onClick={() => setOutrasBudgetSuggestion(null)} className="text-gray-400 hover:text-gray-600 text-xs">x</button>
+                      </div>
+                      <button
+                        onClick={() => { setOutrasForm((f) => ({ ...f, budgetId: outrasBudgetSuggestion.budgetId })); setOutrasBudgetSuggestion(null) }}
+                        className="mt-2 w-full text-xs bg-blue-600 text-white rounded py-1.5 hover:bg-blue-700"
+                      >
+                        Aceitar — Budget "{outrasBudgetSuggestion.budgetName}"
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div>
+                <div className="col-span-2">
                   <label className="label">Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
                   <select className="input" value={outrasForm.budgetId} onChange={(e) => setOutrasForm({ ...outrasForm, budgetId: e.target.value })}>
                     <option value="">Auto pela categoria</option>
@@ -2115,7 +2161,7 @@ export default function ReceivablesPage() {
                 <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(createOutras.error as Error).message}</p>
               )}
               <div className="flex gap-3 mt-6">
-                <button onClick={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch('') }} className="btn-secondary flex-1">Cancelar</button>
+                <button onClick={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch(''); setOutrasBudgetSuggestion(null) }} className="btn-secondary flex-1">Cancelar</button>
                 <button
                   onClick={() => createOutras.mutate()}
                   className="btn-primary flex-1"
