@@ -25,6 +25,7 @@ import { recurrencesRoutes } from './modules/treasury/recurrences/recurrences.ro
 import { followupsRoutes } from './modules/treasury/followups/followups.routes.js'
 import { budgetsRoutes } from './modules/treasury/budgets/budgets.routes.js'
 import { budgetRulesRoutes } from './modules/treasury/budget-rules/budget-rules.routes.js'
+import { entityConfigsRoutes } from './modules/treasury/entity-configs/entity-configs.routes.js'
 import { HttpError } from './lib/errors.js'
 
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } })
@@ -77,6 +78,7 @@ await fastify.register(recurrencesRoutes, { prefix: V1 })
 await fastify.register(followupsRoutes, { prefix: V1 })
 await fastify.register(budgetsRoutes, { prefix: V1 })
 await fastify.register(budgetRulesRoutes, { prefix: V1 })
+await fastify.register(entityConfigsRoutes, { prefix: V1 })
 
 fastify.get('/health', () => ({ status: 'ok', ts: new Date().toISOString() }))
 
