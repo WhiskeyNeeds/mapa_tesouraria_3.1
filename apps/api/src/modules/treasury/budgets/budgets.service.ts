@@ -1,3 +1,4 @@
+// apps/api/src/modules/treasury/budgets/budgets.service.ts
 import type { PrismaClient, TreasuryCategoryType, TreasuryBudgetStatus, Prisma } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
@@ -24,20 +25,26 @@ export class TreasuryBudgetsService {
     const budgets = await this.prisma.treasuryBudget.findMany({
       where,
       include: {
-        categoryLinks: {
-          include: { budgetCategory: { select: { id: true, name: true, color: true, type: true } } },
+        rules: {
+          include: { category: { select: { id: true, name: true, color: true } } },
+          orderBy: { createdAt: 'desc' },
         },
       },
       orderBy: [{ status: 'asc' }, { startDate: 'desc' }],
     })
 
     const withProgress = await Promise.all(
-      budgets.map(async (b) => ({
-        ...b,
-        totalAmount: Number(b.totalAmount.toString()),
-        categories: b.categoryLinks.map((l) => l.budgetCategory),
-        progress: await this.computeProgress(b.id, b.type, Number(b.totalAmount.toString())),
-      })),
+      budgets.map(async (b) => {
+        const pendingReviewCount = b.type === 'REVENUE'
+          ? await this.prisma.treasuryReceivable.count({ where: { budgetId: b.id, budgetAutoAssigned: true, deletedAt: null } })
+          : await this.prisma.treasuryPayable.count({ where: { budgetId: b.id, budgetAutoAssigned: true, deletedAt: null } })
+        return {
+          ...b,
+          totalAmount: Number(b.totalAmount.toString()),
+          progress: await this.computeProgress(b.id, b.type, Number(b.totalAmount.toString())),
+          pendingReviewCount,
+        }
+      }),
     )
 
     return withProgress
@@ -47,8 +54,11 @@ export class TreasuryBudgetsService {
     const budget = await this.prisma.treasuryBudget.findFirst({
       where: { id, clientId, deletedAt: null },
       include: {
-        categoryLinks: {
-          include: { budgetCategory: { select: { id: true, name: true, color: true, type: true } } },
+        rules: {
+          include: {
+            category: { select: { id: true, name: true, color: true } },
+          },
+          orderBy: { createdAt: 'desc' },
         },
       },
     })
@@ -57,34 +67,22 @@ export class TreasuryBudgetsService {
     const totalAmount = Number(budget.totalAmount.toString())
     const progress = await this.computeProgress(budget.id, budget.type, totalAmount)
 
-    const linkedDocs = budget.type === 'REVENUE'
-      ? await this.prisma.treasuryReceivable.findMany({
-          where: { budgetId: id, deletedAt: null },
-          include: { category: { select: { id: true, name: true, color: true } }, budgetCategory: { select: { id: true, name: true, color: true } } },
-          orderBy: { dueDate: 'asc' },
-        })
-      : await this.prisma.treasuryPayable.findMany({
-          where: { budgetId: id, deletedAt: null },
-          include: { category: { select: { id: true, name: true, color: true } }, budgetCategory: { select: { id: true, name: true, color: true } } },
-          orderBy: { dueDate: 'asc' },
-        })
+    const docWhere = { budgetId: id, deletedAt: null }
+    const docInclude = { category: { select: { id: true, name: true, color: true } } }
+    const docOrder = [{ dueDate: 'asc' as const }]
+
+    const documents = budget.type === 'REVENUE'
+      ? await this.prisma.treasuryReceivable.findMany({ where: docWhere, include: docInclude, orderBy: docOrder })
+      : await this.prisma.treasuryPayable.findMany({ where: docWhere, include: docInclude, orderBy: docOrder })
 
     return {
       ...budget,
       totalAmount,
-      categories: budget.categoryLinks.map((l) => l.budgetCategory),
       progress,
-      documents: linkedDocs,
+      documents,
     }
   }
 
-  /**
-   * Progresso de um budget:
-   *  - Paid: total já recebido/pago efetivamente.
-   *  - Expected: pendingAmount dos documentos em aberto ou parciais.
-   *  - Available: totalAmount − (paid + expected). Pode ficar negativo (overrun).
-   *  Documentos VOID/anulados são ignorados.
-   */
   private async computeProgress(budgetId: string, type: TreasuryCategoryType, totalAmount: number): Promise<BudgetProgress> {
     if (type === 'REVENUE') {
       const docs = await this.prisma.treasuryReceivable.findMany({
@@ -111,26 +109,6 @@ export class TreasuryBudgetsService {
     return { paidAmount, expectedAmount, availableAmount, totalAllocated, overrunAmount }
   }
 
-  /**
-   * Valida que todas as budgetCategoryIds pertencem ao cliente e têm o tipo esperado.
-   */
-  private async validateBudgetCategories(clientId: string, type: TreasuryCategoryType, budgetCategoryIds: string[] | undefined): Promise<string[]> {
-    if (!budgetCategoryIds || budgetCategoryIds.length === 0) return []
-    const unique = [...new Set(budgetCategoryIds)]
-    const categories = await this.prisma.treasuryBudgetCategory.findMany({
-      where: { id: { in: unique }, clientId, deletedAt: null },
-      select: { id: true, name: true, type: true },
-    })
-    if (categories.length !== unique.length) {
-      throw httpError(404, 'Uma ou mais categorias de budget não foram encontradas')
-    }
-    const wrongType = categories.find((c) => c.type !== type)
-    if (wrongType) {
-      throw httpError(400, `Categoria de budget '${wrongType.name}' é do tipo ${wrongType.type === 'REVENUE' ? 'Receita' : 'Despesa'} e não pode ser associada a um budget de ${type === 'REVENUE' ? 'Receitas' : 'Despesas'}`)
-    }
-    return unique
-  }
-
   async create(clientId: string, userId: string, data: {
     name: string
     description?: string
@@ -141,7 +119,6 @@ export class TreasuryBudgetsService {
     currency?: string
     color?: string
     icon?: string
-    budgetCategoryIds?: string[]
   }) {
     if (!data.name?.trim()) throw httpError(400, 'Nome é obrigatório')
     if (!(data.totalAmount > 0)) throw httpError(400, 'Valor do budget tem de ser positivo')
@@ -157,8 +134,6 @@ export class TreasuryBudgetsService {
     })
     if (existing) throw httpError(409, `Já existe um budget com o nome "${name}"`)
 
-    const budgetCategoryIds = await this.validateBudgetCategories(clientId, data.type, data.budgetCategoryIds)
-
     const created = await this.prisma.treasuryBudget.create({
       data: {
         clientId,
@@ -172,9 +147,6 @@ export class TreasuryBudgetsService {
         endDate: end,
         color: data.color ?? null,
         icon: data.icon ?? null,
-        ...(budgetCategoryIds.length > 0 ? {
-          categoryLinks: { create: budgetCategoryIds.map((bcid) => ({ budgetCategoryId: bcid })) },
-        } : {}),
       },
     })
 
@@ -188,7 +160,6 @@ export class TreasuryBudgetsService {
         totalAmount: Number(created.totalAmount.toString()),
         startDate: created.startDate.toISOString(),
         endDate: created.endDate.toISOString(),
-        budgetCategoryIds,
       },
     })
 
@@ -204,7 +175,6 @@ export class TreasuryBudgetsService {
     color: string | null
     icon: string | null
     status: TreasuryBudgetStatus
-    budgetCategoryIds: string[]
   }>) {
     const budget = await this.prisma.treasuryBudget.findFirst({ where: { id, clientId, deletedAt: null } })
     if (!budget) throw httpError(404, 'Budget not found')
@@ -214,11 +184,7 @@ export class TreasuryBudgetsService {
       const newName = data.name.trim()
       if (!newName) throw httpError(400, 'Nome é obrigatório')
       const clash = await this.prisma.treasuryBudget.findFirst({
-        where: {
-          clientId, deletedAt: null,
-          name: { equals: newName, mode: 'insensitive' },
-          NOT: { id },
-        },
+        where: { clientId, deletedAt: null, name: { equals: newName, mode: 'insensitive' }, NOT: { id } },
         select: { id: true },
       })
       if (clash) throw httpError(409, `Já existe um budget com o nome "${newName}"`)
@@ -235,33 +201,18 @@ export class TreasuryBudgetsService {
     if (data.icon !== undefined) updateData.icon = data.icon
     if (data.status !== undefined) updateData.status = data.status
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.treasuryBudget.update({ where: { id }, data: updateData })
-      if (data.budgetCategoryIds !== undefined) {
-        const budgetCategoryIds = await this.validateBudgetCategories(clientId, budget.type, data.budgetCategoryIds)
-        await tx.treasuryBudgetCategoryLink.deleteMany({ where: { budgetId: id } })
-        if (budgetCategoryIds.length > 0) {
-          await tx.treasuryBudgetCategoryLink.createMany({
-            data: budgetCategoryIds.map((bcid) => ({ budgetId: id, budgetCategoryId: bcid })),
-          })
-        }
-      }
-      return result
-    })
+    const updated = await this.prisma.treasuryBudget.update({ where: { id }, data: updateData })
 
     const changes = diffEntity(
       budget as unknown as Record<string, unknown>,
       updated as unknown as Record<string, unknown>,
     )
-    if (Object.keys(changes).length > 0 || data.budgetCategoryIds !== undefined) {
+    if (Object.keys(changes).length > 0) {
       await audit(this.prisma, {
         clientId, userId,
         action: 'budget.update',
         entityType: 'Budget', entityId: id,
-        payload: {
-          changes,
-          ...(data.budgetCategoryIds !== undefined ? { budgetCategoryIds: data.budgetCategoryIds } : {}),
-        },
+        payload: { changes },
       })
     }
 
@@ -271,9 +222,7 @@ export class TreasuryBudgetsService {
   async delete(clientId: string, userId: string, id: string) {
     const budget = await this.prisma.treasuryBudget.findFirst({ where: { id, clientId, deletedAt: null } })
     if (!budget) throw httpError(404, 'Budget not found')
-
     await this.prisma.treasuryBudget.update({ where: { id }, data: { deletedAt: new Date() } })
-
     await audit(this.prisma, {
       clientId, userId,
       action: 'budget.delete',
@@ -282,10 +231,6 @@ export class TreasuryBudgetsService {
     })
   }
 
-  /**
-   * Verifica se o budget existe, pertence ao cliente e tem o tipo esperado.
-   * Lança 404/400 caso contrário. Usado antes de associar doc à budgetId.
-   */
   async assertCompatible(clientId: string, budgetId: string, expectedType: TreasuryCategoryType) {
     const budget = await this.prisma.treasuryBudget.findFirst({
       where: { id: budgetId, clientId, deletedAt: null },
@@ -297,24 +242,5 @@ export class TreasuryBudgetsService {
     if (budget.status === 'ARCHIVED') {
       throw httpError(400, `Budget '${budget.name}' está arquivado`)
     }
-  }
-
-  /**
-   * Devolve o budgetId do único budget ativo (do tipo esperado) que tenha esta categoria de budget associada.
-   * Devolve null se houver zero ou múltiplos (caso ambíguo — utilizador escolhe manualmente).
-   */
-  async findBudgetForBudgetCategory(clientId: string, budgetCategoryId: string, type: TreasuryCategoryType): Promise<string | null> {
-    const matches = await this.prisma.treasuryBudget.findMany({
-      where: {
-        clientId,
-        deletedAt: null,
-        status: 'ACTIVE',
-        type,
-        categoryLinks: { some: { budgetCategoryId } },
-      },
-      select: { id: true },
-      take: 2,
-    })
-    return matches.length === 1 ? matches[0].id : null
   }
 }
