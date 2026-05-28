@@ -322,6 +322,42 @@ export class TreasuryReceivablesService {
 
     const updated = await this.prisma.treasuryReceivable.update({ where: { id }, data: updateData })
 
+    // Cascade para instâncias futuras geradas a partir desta programada.
+    // Considera "programada" qualquer receivable que seja raiz de recorrência
+    // (`recurrenceId != null && parentId == null`). Replica campos relevantes
+    // nos filhos com dueDate >= hoje e status OPEN (sem pagamentos), para que
+    // o dashboard e as listagens reflitam imediatamente as alterações.
+    if (item.recurrenceId && !item.parentId) {
+      const childUpdate: Prisma.TreasuryReceivableUpdateManyMutationInput = {}
+      if (data.entityName !== undefined)        childUpdate.entityName = data.entityName
+      if (data.description !== undefined)       childUpdate.description = data.description
+      if (data.totalAmount !== undefined) {
+        childUpdate.totalAmount = data.totalAmount
+        childUpdate.pendingAmount = data.totalAmount
+      }
+      if (data.tocCustomerId !== undefined)     childUpdate.tocCustomerId = data.tocCustomerId
+      if (data.categoryId !== undefined)        childUpdate.categoryId = data.categoryId
+
+      // Campos com FK (budget*) actualizam-se via updateMany com set diretamente
+      if (data.budgetCategoryId !== undefined)  childUpdate.budgetCategoryId = data.budgetCategoryId
+      if (data.budgetId !== undefined)          childUpdate.budgetId = data.budgetId
+
+      if (Object.keys(childUpdate).length > 0) {
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        await this.prisma.treasuryReceivable.updateMany({
+          where: {
+            clientId,
+            parentId: id,
+            deletedAt: null,
+            status: 'OPEN',
+            dueDate: { gte: today },
+          },
+          data: childUpdate,
+        })
+      }
+    }
+
     const changes = diffEntity(
       item as unknown as Record<string, unknown>,
       updated as unknown as Record<string, unknown>,

@@ -50,6 +50,12 @@ interface CashflowStatementData {
   months: Array<{ month: number; label: string }>
   startingBalances: number[]; endingBalances: number[]
   incomeTotal: number[]; expenseTotal: number[]
+  // Subdivisão por status (cf. backend):
+  //   settled    → atual (sólido)
+  //   open       → em aberto / esperada (opacidade)
+  //   programmed → programada / forecast (opacidade + tracejado)
+  incomeSettled?: number[]; incomeOpen?: number[]; incomeProgrammed?: number[]
+  expenseSettled?: number[]; expenseOpen?: number[]; expenseProgrammed?: number[]
   uncategorizedIncome: number[]; uncategorizedExpense: number[]
   categories: CashflowStatCategory[]
 }
@@ -242,6 +248,14 @@ function CashflowStatementTable() {
 
   const colIncome = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.incomeTotal[i] ?? 0), 0) : 0 }
   const colExpense = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.expenseTotal[i] ?? 0), 0) : 0 }
+  // Subdivisão por status para o chart Cash Flow. Fallback para 0 se o backend
+  // ainda não devolver a subdivisão.
+  const colIncomeSettled    = (col: ColDef) => { const d = getYearData(col.colYear); return d?.incomeSettled    ? col.monthIndices.reduce((s, i) => s + (d.incomeSettled![i]    ?? 0), 0) : 0 }
+  const colIncomeOpen       = (col: ColDef) => { const d = getYearData(col.colYear); return d?.incomeOpen       ? col.monthIndices.reduce((s, i) => s + (d.incomeOpen![i]       ?? 0), 0) : 0 }
+  const colIncomeProgrammed = (col: ColDef) => { const d = getYearData(col.colYear); return d?.incomeProgrammed ? col.monthIndices.reduce((s, i) => s + (d.incomeProgrammed![i] ?? 0), 0) : 0 }
+  const colExpenseSettled    = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseSettled    ? col.monthIndices.reduce((s, i) => s + (d.expenseSettled![i]    ?? 0), 0) : 0 }
+  const colExpenseOpen       = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseOpen       ? col.monthIndices.reduce((s, i) => s + (d.expenseOpen![i]       ?? 0), 0) : 0 }
+  const colExpenseProgrammed = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseProgrammed ? col.monthIndices.reduce((s, i) => s + (d.expenseProgrammed![i] ?? 0), 0) : 0 }
   const colStartBal = (col: ColDef) => { const d = getYearData(col.colYear); return d ? (d.startingBalances[col.monthIndices[0]] ?? 0) : 0 }
   const colEndBal = (col: ColDef) => { const d = getYearData(col.colYear); return d ? (d.endingBalances[col.monthIndices[col.monthIndices.length - 1]] ?? 0) : 0 }
   const colCatAmt = (col: ColDef, cat: CashflowStatCategory) => {
@@ -303,13 +317,28 @@ function CashflowStatementTable() {
     label: col.label,
     income: colIncome(col),
     expense: colExpense(col),
+    incomeSettled: colIncomeSettled(col),
+    incomeOpen: colIncomeOpen(col),
+    incomeProgrammed: colIncomeProgrammed(col),
+    expenseSettled: colExpenseSettled(col),
+    expenseOpen: colExpenseOpen(col),
+    expenseProgrammed: colExpenseProgrammed(col),
     balance: col.isFuture ? null : colEndBal(col),
   }))
 
+  // Weekly chart: o cash-positioning service não devolve subdivisão por status,
+  // por isso usamos uma aproximação temporal — passado=settled, atual=open,
+  // futuro=programmed. (No mensal a subdivisão é real, vinda do backend.)
   const weeklyChartData = visibleWeeks.map((wk) => ({
     label: wk.label,
     income: wk.income,
     expense: wk.expense,
+    incomeSettled:    (!wk.isFuture && !wk.isCurrent) ? wk.income : 0,
+    incomeOpen:       wk.isCurrent ? wk.income : 0,
+    incomeProgrammed: wk.isFuture ? wk.income : 0,
+    expenseSettled:    (!wk.isFuture && !wk.isCurrent) ? wk.expense : 0,
+    expenseOpen:       wk.isCurrent ? wk.expense : 0,
+    expenseProgrammed: wk.isFuture ? wk.expense : 0,
     balance: wk.isFuture ? null : wk.closingBalance,
   }))
 
@@ -323,10 +352,33 @@ function CashflowStatementTable() {
       <div className="flex items-center gap-1.5 text-xs text-gray-500"><div className="w-3 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: '#10b981' }} />Entradas</div>
       <div className="flex items-center gap-1.5 text-xs text-gray-500"><div className="w-3 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: '#ef4444' }} />Saídas</div>
       <div className="flex items-center gap-1.5 text-xs text-gray-500"><div className="w-4 flex-shrink-0 border-b-2 border-blue-500 rounded" style={{ marginTop: 1 }} />Saldo</div>
+      <div className="text-[11px] text-gray-400 mt-1 leading-snug">
+        <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded-sm flex-shrink-0 bg-gray-500" />Fechadas</div>
+        <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded-sm flex-shrink-0 bg-gray-500 opacity-55" />Em aberto</div>
+        <div className="flex items-center gap-1.5">
+          <svg width="12" height="10" className="flex-shrink-0">
+            <defs>
+              <pattern id="legend-stripes" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)"><rect width="2" height="4" fill="#6b7280" /></pattern>
+            </defs>
+            <rect width="12" height="10" fill="url(#legend-stripes)" opacity="0.55" />
+          </svg>
+          Programadas
+        </div>
+      </div>
     </div>
   )
 
-  function renderChart(cData: typeof chartData, nCols: number, isFutureCol: (k: number) => boolean) {
+  function renderChart(
+    cData: typeof chartData,
+    nCols: number,
+    _isFutureCol: (k: number) => boolean,
+    _isCurrentCol: (k: number) => boolean,
+  ) {
+    // Hierarquia visual (3 stacked bars por direção):
+    //   Atual    = faturas fechadas (SETTLED) + movimentos bancários → sólido cheio
+    //   Esperada = faturas em aberto OPEN/PARTIAL sem recorrência    → sólido c/ opacidade
+    //   Forecast = faturas programadas (recurrenceId != null)         → opacidade + tracejado
+    void _isFutureCol; void _isCurrentCol
     return (
       <tr>
         <td className="sticky left-0 bg-white z-10 px-5 align-middle border-b border-gray-100" style={{ minWidth: 220 }}>{chartLegend}</td>
@@ -337,16 +389,26 @@ function CashflowStatementTable() {
               margin={{ left: 0, right: 0, top: 8, bottom: 0 }}
               barCategoryGap="22%"
             >
+              <defs>
+                <pattern id="cf-stripes-green" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
+                  <rect width="4" height="8" fill="#10b981" />
+                </pattern>
+                <pattern id="cf-stripes-red" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
+                  <rect width="4" height="8" fill="#ef4444" />
+                </pattern>
+              </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
               <XAxis dataKey="label" hide />
               <YAxis hide />
               <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} />
-              <Bar dataKey="income" name="Entradas" fill="#10b981" maxBarSize={32} radius={[2, 2, 0, 0]} isAnimationActive={false}>
-                {cData.map((_, k) => <Cell key={k} fill="#10b981" fillOpacity={isFutureCol(k) ? 0.22 : 1} />)}
-              </Bar>
-              <Bar dataKey="expense" name="Saídas" fill="#ef4444" maxBarSize={32} radius={[2, 2, 0, 0]} isAnimationActive={false}>
-                {cData.map((_, k) => <Cell key={k} fill="#ef4444" fillOpacity={isFutureCol(k) ? 0.22 : 1} />)}
-              </Bar>
+              {/* Entradas: 3 segmentos empilhados */}
+              <Bar dataKey="incomeSettled"    stackId="income" name="Entradas (fechadas)"   fill="#10b981" fillOpacity={1}    maxBarSize={32} isAnimationActive={false} />
+              <Bar dataKey="incomeOpen"       stackId="income" name="Entradas (em aberto)"  fill="#10b981" fillOpacity={0.55} maxBarSize={32} isAnimationActive={false} />
+              <Bar dataKey="incomeProgrammed" stackId="income" name="Entradas (programadas)" fill="url(#cf-stripes-green)" fillOpacity={0.55} maxBarSize={32} radius={[2, 2, 0, 0]} isAnimationActive={false} />
+              {/* Saídas: 3 segmentos empilhados */}
+              <Bar dataKey="expenseSettled"    stackId="expense" name="Saídas (fechadas)"    fill="#ef4444" fillOpacity={1}    maxBarSize={32} isAnimationActive={false} />
+              <Bar dataKey="expenseOpen"       stackId="expense" name="Saídas (em aberto)"   fill="#ef4444" fillOpacity={0.55} maxBarSize={32} isAnimationActive={false} />
+              <Bar dataKey="expenseProgrammed" stackId="expense" name="Saídas (programadas)" fill="url(#cf-stripes-red)" fillOpacity={0.55} maxBarSize={32} radius={[2, 2, 0, 0]} isAnimationActive={false} />
               <Line type="monotone" dataKey="balance" name="Saldo Final" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3, strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -872,7 +934,7 @@ function CashflowStatementTable() {
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-50">
-          {renderChart(chartData, cols.length, (k) => cols[k].isFuture)}
+          {renderChart(chartData, cols.length, (k) => cols[k].isFuture, (k) => cols[k].isCurrent)}
 
           <tr className="bg-white hover:bg-gray-50/50">
             <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>
@@ -971,7 +1033,7 @@ function CashflowStatementTable() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {renderChart(weeklyChartData, visibleWeeks.length, (k) => visibleWeeks[k].isFuture)}
+            {renderChart(weeklyChartData, visibleWeeks.length, (k) => visibleWeeks[k].isFuture, (k) => visibleWeeks[k].isCurrent)}
 
             <tr className="bg-white hover:bg-gray-50/50">
               <td className="px-5 py-2.5 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>

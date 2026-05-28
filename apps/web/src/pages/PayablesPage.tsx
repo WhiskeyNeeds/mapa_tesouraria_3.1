@@ -590,6 +590,9 @@ export default function PayablesPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['payables'] })
       qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      // Edição de programada propaga aos filhos futuros — refresh do dashboard.
+      qc.invalidateQueries({ queryKey: ['dashboard-cashflow-statement'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
       setEditId(null)
       setEditRow(null)
       toast.success('Documento atualizado.')
@@ -851,6 +854,7 @@ export default function PayablesPage() {
     }
   }, [kpis, tocOnly])
 
+  const isClosed = (status: string) => status === 'SETTLED' || status === 'VOID'
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
   const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (p: Payable) => {
@@ -1321,13 +1325,8 @@ export default function PayablesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {outrasRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-5 py-16 text-center text-sm text-gray-400">
-                        Sem operações registadas. Usa o botão acima para registar a primeira operação.
-                      </td>
-                    </tr>
-                  ) : outrasRows.map((p) => {
+                  {(() => {
+                    const renderRow = (p: Payable) => {
                     const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
                     const displayDate = isSplit && p.promisedPaymentDate ? p.promisedPaymentDate : p.dueDate
                     const now = Date.now()
@@ -1423,7 +1422,36 @@ export default function PayablesPage() {
                         </td>
                       </tr>
                     )
-                  })}
+                    }
+
+                    const sectionHeader = (label: string, count: number) => (
+                      <tr key={`hdr-${label}`} className="bg-gray-50/80">
+                        <td colSpan={8} className="px-5 py-1.5 text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
+                          {label} <span className="ml-1 font-normal text-gray-400">({count})</span>
+                        </td>
+                      </tr>
+                    )
+
+                    if (outrasRows.length === 0) {
+                      return <tr><td colSpan={8} className="px-5 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
+                    }
+
+                    // No separador "Atuais", divide as linhas em "Em aberto" (OPEN/PARTIAL)
+                    // e "Liquidadas" (SETTLED/VOID) com cabeçalho de secção entre os grupos.
+                    if (outrasSubTab === 'atuais') {
+                      const openRows = outrasRows.filter((p) => !isClosed(p.status))
+                      const closedRows = outrasRows.filter((p) => isClosed(p.status))
+                      return (
+                        <>
+                          {openRows.length > 0 && sectionHeader('Em aberto', openRows.length)}
+                          {openRows.map(renderRow)}
+                          {closedRows.length > 0 && sectionHeader('Liquidadas', closedRows.length)}
+                          {closedRows.map(renderRow)}
+                        </>
+                      )
+                    }
+                    return outrasRows.map(renderRow)
+                  })()}
                 </tbody>
               </table>
             </div>

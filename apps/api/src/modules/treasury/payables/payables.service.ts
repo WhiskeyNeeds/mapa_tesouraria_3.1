@@ -316,6 +316,37 @@ export class TreasuryPayablesService {
 
     const updated = await this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
 
+    // Cascade para instâncias futuras geradas a partir desta programada.
+    // Simétrico ao receivables: replica campos relevantes nos filhos com
+    // dueDate >= hoje e status OPEN (sem pagamentos).
+    if (item.recurrenceId && !item.parentId) {
+      const childUpdate: Prisma.TreasuryPayableUpdateManyMutationInput = {}
+      if (data.entityName !== undefined)       childUpdate.entityName = data.entityName
+      if (data.description !== undefined)      childUpdate.description = data.description
+      if (data.totalAmount !== undefined) {
+        childUpdate.totalAmount = data.totalAmount
+        childUpdate.pendingAmount = data.totalAmount
+      }
+      if (data.categoryId !== undefined)       childUpdate.categoryId = data.categoryId
+      if (data.budgetCategoryId !== undefined) childUpdate.budgetCategoryId = data.budgetCategoryId
+      if (data.budgetId !== undefined)         childUpdate.budgetId = data.budgetId
+
+      if (Object.keys(childUpdate).length > 0) {
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        await this.prisma.treasuryPayable.updateMany({
+          where: {
+            clientId,
+            parentId: id,
+            deletedAt: null,
+            status: 'OPEN',
+            dueDate: { gte: today },
+          },
+          data: childUpdate,
+        })
+      }
+    }
+
     const changes = diffEntity(
       item as unknown as Record<string, unknown>,
       updated as unknown as Record<string, unknown>,
