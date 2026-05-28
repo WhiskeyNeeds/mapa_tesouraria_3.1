@@ -242,6 +242,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
   const { data: payments = [], isLoading } = useQuery<TocPayment[]>({
     queryKey: ['toc-purchase-payments', clientId, tocDocId],
     queryFn: () => api.get(`/toconline/${clientId}/purchases/${tocDocId}/payments`),
+    staleTime: 5 * 60 * 1000,
   })
 
   if (isLoading) {
@@ -432,6 +433,7 @@ export default function PayablesPage() {
     queryKey: ['toc-purchase-payments', selectedClientId, panelTocDocId],
     queryFn: () => api.get(`/toconline/${selectedClientId}/purchases/${panelTocDocId}/payments`),
     enabled: !!selectedClientId && !!panelTocDocId,
+    staleTime: 5 * 60 * 1000,
   })
 
 

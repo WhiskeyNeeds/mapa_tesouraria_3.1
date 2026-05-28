@@ -102,6 +102,7 @@ function DocSubRows({ clientId, tocDocId, isSupplier }: { clientId: string; tocD
         ? `/toconline/${clientId}/purchases/${tocDocId}/payments`
         : `/toconline/${clientId}/sales/${tocDocId}/receipts`,
     ),
+    staleTime: 5 * 60 * 1000,
   })
 
   if (isLoading) {
@@ -189,6 +190,7 @@ export default function EntityDetailPage({ entityType }: Props) {
       ),
     enabled: !!clientId && !!tocId,
     retry: 1,
+    staleTime: 10 * 60 * 1000,
   })
 
   const entityFilterParam = isSupplier
@@ -236,7 +238,7 @@ export default function EntityDetailPage({ entityType }: Props) {
         `/toconline/${clientId}/entity-payment-timing?entityType=${typeParam}&tocEntityId=${tocId}`,
       ),
     enabled: !!clientId && !!tocId,
-    staleTime: 0,
+    staleTime: 30 * 60 * 1000,
   })
 
   const updateConfig = useMutation({

@@ -255,6 +255,7 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
   const { data: receipts = [], isLoading } = useQuery<TocReceipt[]>({
     queryKey: ['toc-sales-receipts', clientId, tocDocId],
     queryFn: () => api.get(`/toconline/${clientId}/sales/${tocDocId}/receipts`),
+    staleTime: 5 * 60 * 1000,
   })
 
   if (isLoading) {
@@ -440,6 +441,7 @@ export default function ReceivablesPage() {
     queryKey: ['toc-sales-receipts', selectedClientId, panelTocDocId],
     queryFn: () => api.get(`/toconline/${selectedClientId}/sales/${panelTocDocId}/receipts`),
     enabled: !!selectedClientId && !!panelTocDocId,
+    staleTime: 5 * 60 * 1000,
   })
 
   const { data: tocCustomers = [] } = useQuery<TocCustomer[]>({
