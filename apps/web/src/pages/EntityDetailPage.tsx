@@ -92,18 +92,17 @@ function getInitials(name: string): string {
   return name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('')
 }
 
-function DocSubRows({ clientId, tocDocId, isSupplier, subIds }: { clientId: string; tocDocId: string; isSupplier: boolean; subIds?: unknown[] }) {
-  const idsParam = subIds?.length ? `?ids=${subIds.join(',')}` : ''
+function DocSubRows({ clientId, tocDocId, isSupplier }: { clientId: string; tocDocId: string; isSupplier: boolean }) {
   const { data = [], isLoading } = useQuery<TocSubItem[]>({
     queryKey: isSupplier
       ? ['toc-purchase-payments', clientId, tocDocId]
       : ['toc-sales-receipts', clientId, tocDocId],
     queryFn: () => api.get(
       isSupplier
-        ? `/toconline/${clientId}/purchases/${tocDocId}/payments${idsParam}`
-        : `/toconline/${clientId}/sales/${tocDocId}/receipts${idsParam}`,
+        ? `/toconline/${clientId}/purchases/${tocDocId}/payments`
+        : `/toconline/${clientId}/sales/${tocDocId}/receipts`,
     ),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
   })
 
   if (isLoading) {
@@ -478,7 +477,6 @@ export default function EntityDetailPage({ entityType }: Props) {
                             clientId={clientId}
                             tocDocId={key}
                             isSupplier={isSupplier}
-                            subIds={isSupplier ? doc.payments_ids : doc.receipts_ids}
                           />
                         )}
                       </Fragment>

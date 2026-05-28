@@ -84,16 +84,12 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
 
   fastify.get('/toconline/:clientId/sales/:docId/receipts', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId, docId } = request.params as { clientId: string; docId: string }
-    const { ids } = request.query as { ids?: string }
-    const knownIds = ids ? ids.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : undefined
-    return reply.send(await svc.getSalesDocumentReceipts(clientId, docId, knownIds))
+    return reply.send(await svc.getSalesDocumentReceipts(clientId, docId))
   })
 
   fastify.get('/toconline/:clientId/purchases/:docId/payments', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId, docId } = request.params as { clientId: string; docId: string }
-    const { ids } = request.query as { ids?: string }
-    const knownIds = ids ? ids.split(',').map(Number).filter(n => !isNaN(n) && n > 0) : undefined
-    return reply.send(await svc.getPurchaseDocumentPayments(clientId, docId, knownIds))
+    return reply.send(await svc.getPurchaseDocumentPayments(clientId, docId))
   })
 
   fastify.get('/toconline/:clientId/sales-receipts/:receiptId/lines', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
