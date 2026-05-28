@@ -290,7 +290,24 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     if (!entityType || !ids) return reply.status(400).send({ error: 'entityType and ids required' })
     const parsedIds = ids.split(',').map(Number).filter(n => Number.isFinite(n) && n > 0)
     if (parsedIds.length === 0) return reply.send([])
-    return reply.send(await svc.getEntityAllSubDocs(clientId, parsedIds, entityType as 'customer' | 'supplier'))
+
+    const syncEntityType = entityType === 'customer' ? 'salesReceipts' : 'purchasePayments'
+    const syncState = await fastify.prisma.tocSyncState.findFirst({
+      where: { clientId, entityType: syncEntityType },
+    })
+    if (!syncState?.lastSyncAt) {
+      return reply.send({ syncing: true, data: [] })
+    }
+
+    const items = entityType === 'customer'
+      ? await fastify.prisma.tocSalesReceipt.findMany({
+          where: { clientId, tocId: { in: parsedIds } },
+        })
+      : await fastify.prisma.tocPurchasePayment.findMany({
+          where: { clientId, tocId: { in: parsedIds } },
+        })
+
+    return reply.send(items.map(item => item.raw))
   })
 
   // ── Raw proxy (exploração de API — apenas admins) ─────────────────────────
