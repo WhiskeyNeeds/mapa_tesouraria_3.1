@@ -888,3 +888,149 @@ model TreasuryEntityConfig {
   @@index([clientId])
   @@map("treasury_entity_configs")
 }
+
+// ─── TOConline Mirror ────────────────────────────────────────────────────────
+
+model TocCustomer {
+  id        String   @id @default(cuid())
+  clientId  String
+  tocId     Int
+  name      String
+  nif       String?
+  email     String?
+  phone     String?
+  raw       Json
+  syncedAt  DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId])
+  @@map("toc_customers")
+}
+
+model TocSupplier {
+  id        String   @id @default(cuid())
+  clientId  String
+  tocId     Int
+  name      String
+  nif       String?
+  email     String?
+  phone     String?
+  raw       Json
+  syncedAt  DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId])
+  @@map("toc_suppliers")
+}
+
+model TocProduct {
+  id         String   @id @default(cuid())
+  clientId   String
+  tocId      Int
+  name       String
+  unitPrice  Float?
+  taxRate    Float?
+  raw        Json
+  syncedAt   DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId])
+  @@map("toc_products")
+}
+
+model TocService {
+  id         String   @id @default(cuid())
+  clientId   String
+  tocId      Int
+  name       String
+  unitPrice  Float?
+  taxRate    Float?
+  raw        Json
+  syncedAt   DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId])
+  @@map("toc_services")
+}
+
+model TocSalesDocument {
+  id           String   @id @default(cuid())
+  clientId     String
+  tocId        Int
+  customerId   Int?
+  date         String?
+  dueDate      String?
+  status       Int?
+  grossTotal   Float?
+  pendingTotal Float?
+  receiptsIds  Int[]
+  raw          Json
+  syncedAt     DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId, customerId])
+  @@index([clientId, date])
+  @@map("toc_sales_documents")
+}
+
+model TocPurchaseDocument {
+  id           String   @id @default(cuid())
+  clientId     String
+  tocId        Int
+  supplierId   Int?
+  date         String?
+  dueDate      String?
+  status       Int?
+  grossTotal   Float?
+  pendingTotal Float?
+  paymentsIds  Int[]
+  raw          Json
+  syncedAt     DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId, supplierId])
+  @@index([clientId, date])
+  @@map("toc_purchase_documents")
+}
+
+model TocSalesReceipt {
+  id         String   @id @default(cuid())
+  clientId   String
+  tocId      Int
+  customerId Int?
+  date       String?
+  grossTotal Float?
+  raw        Json
+  syncedAt   DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId, customerId])
+  @@map("toc_sales_receipts")
+}
+
+model TocPurchasePayment {
+  id         String   @id @default(cuid())
+  clientId   String
+  tocId      Int
+  supplierId Int?
+  date       String?
+  grossTotal Float?
+  raw        Json
+  syncedAt   DateTime @default(now())
+
+  @@unique([clientId, tocId])
+  @@index([clientId, supplierId])
+  @@map("toc_purchase_payments")
+}
+
+model TocSyncState {
+  id          String    @id @default(cuid())
+  clientId    String
+  entityType  String
+  lastSyncAt  DateTime?
+  lastError   String?
+  recordCount Int?
+
+  @@unique([clientId, entityType])
+  @@map("toc_sync_state")
+}
