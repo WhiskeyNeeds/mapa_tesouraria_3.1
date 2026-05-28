@@ -1047,103 +1047,94 @@ export class ToconlineService {
   ): Promise<EntityPaymentTiming> {
     const thisYear = new Date().getFullYear()
     const lastYear = thisYear - 1
-
     const cutoff = `${lastYear - 1}-01-01`
-    const entityIdKey = entityType === 'customer' ? 'customer_id' : 'supplier_id'
+    const entityIdNum = parseInt(tocEntityId, 10)
 
-    // Filter server-side — avoids fetching all documents (can be thousands)
-    const entityFilter = { [`filter[${entityIdKey}]`]: tocEntityId }
-    const byEntity = entityType === 'customer'
-      ? await this.getSalesDocuments(clientId, entityFilter)
-      : await this.getPurchaseDocuments(clientId, entityFilter)
-
-    console.info(`[paymentTiming] ${clientId} ${entityType} ${tocEntityId}: byEntity=${byEntity.length}`)
-    if (byEntity.length > 0) {
-      const sample = byEntity[0]
-      console.info(`[paymentTiming] sample doc: status=${sample.status} pending_total=${sample.pending_total} gross_total=${sample.gross_total} date=${sample.date}`)
+    const syncKey = entityType === 'customer' ? 'salesDocuments' : 'purchaseDocuments'
+    const syncState = await this.prisma.tocSyncState.findUnique({
+      where: { clientId_entityType: { clientId, entityType: syncKey } },
+    })
+    if (!syncState?.lastSyncAt) {
+      return { thisYear: null, lastYear: null, delayThisYear: null, delayLastYear: null }
     }
 
-    // "Settled" = status 3 (TOConline liquidado) OR any non-void doc with pending_total = 0
-    // Mirrors the same logic as tocDocStatusLabel on the frontend
-    const isEffectivelySettled = (d: Record<string, unknown>) => {
-      const s = Number(d.status)
-      if (s === 4 || s === 0) return false
-      if (s === 3) return true
-      return Number(d.pending_total ?? d.gross_total) === 0
+    const settledDocs = entityType === 'customer'
+      ? await this.prisma.tocSalesDocument.findMany({
+          where: {
+            clientId,
+            customerId: entityIdNum,
+            date: { gte: cutoff },
+            OR: [{ status: 3 }, { pendingTotal: { equals: 0 } }],
+          },
+          take: 50,
+          orderBy: { date: 'desc' },
+        })
+      : await this.prisma.tocPurchaseDocument.findMany({
+          where: {
+            clientId,
+            supplierId: entityIdNum,
+            date: { gte: cutoff },
+            OR: [{ status: 3 }, { pendingTotal: { equals: 0 } }],
+          },
+          take: 50,
+          orderBy: { date: 'desc' },
+        })
+
+    if (settledDocs.length === 0) {
+      return { thisYear: null, lastYear: null, delayThisYear: null, delayLastYear: null }
     }
 
-    const settledDocs = byEntity
-      .filter(d => isEffectivelySettled(d) && String(d.date ?? '') >= cutoff)
-      .slice(0, 50)
+    const allSubIds = [...new Set(
+      settledDocs.flatMap(d => entityType === 'customer'
+        ? (d as { receiptsIds: number[] }).receiptsIds
+        : (d as { paymentsIds: number[] }).paymentsIds
+      ),
+    )]
+    if (allSubIds.length === 0) {
+      return { thisYear: null, lastYear: null, delayThisYear: null, delayLastYear: null }
+    }
 
-    console.info(`[paymentTiming] settledDocs=${settledDocs.length} cutoff=${cutoff}`)
+    const subDocs = entityType === 'customer'
+      ? await this.prisma.tocSalesReceipt.findMany({
+          where: { clientId, tocId: { in: allSubIds } },
+          select: { tocId: true, date: true },
+        })
+      : await this.prisma.tocPurchasePayment.findMany({
+          where: { clientId, tocId: { in: allSubIds } },
+          select: { tocId: true, date: true },
+        })
 
-    if (settledDocs.length === 0) return { thisYear: null, lastYear: null, delayThisYear: null, delayLastYear: null }
+    const subDateMap = new Map(subDocs.map(d => [d.tocId, d.date]))
 
-    // For each effective settled invoice, fetch its receipts/payments and find the last payment date
     const invoicePayments: Array<{ invoiceDate: string; dueDate: string; lastPaymentDate: string }> = []
-
     for (const doc of settledDocs) {
-      try {
-        const knownIds = Array.isArray(
-          entityType === 'customer' ? doc.receipts_ids : doc.payments_ids,
-        )
-          ? ((entityType === 'customer' ? doc.receipts_ids : doc.payments_ids) as number[])
-          : undefined
-        const rawList = entityType === 'customer'
-          ? await this.getSalesDocumentReceipts(clientId, String(doc.id), knownIds)
-          : await this.getPurchaseDocumentPayments(clientId, String(doc.id), knownIds)
-
-        const dates = rawList
-          .map(r => {
-            const obj = r as Record<string, unknown>
-            if (obj.data && typeof obj.data === 'object') {
-              const d = obj.data as Record<string, unknown>
-              const attrs = (d.attributes && typeof d.attributes === 'object')
-                ? d.attributes as Record<string, unknown>
-                : d
-              return String(attrs.date ?? '')
-            }
-            return String((obj.attributes as Record<string, unknown> ?? obj).date ?? '')
-          })
-          .filter(d => d && d !== 'undefined')
-          .sort()
-
-        console.info(`[paymentTiming] doc ${doc.id}: rawList=${rawList.length} dates=${JSON.stringify(dates)}`)
-
-        if (!dates.length) continue
-        const lastPaymentDate = dates[dates.length - 1]
-        const invoiceDate = String(doc.date ?? '')
-        const dueDate = String(doc.due_date ?? doc.date ?? '')
-        if (invoiceDate && lastPaymentDate) {
-          invoicePayments.push({ invoiceDate, dueDate, lastPaymentDate })
-        }
-      } catch (err) {
-        console.warn(`[paymentTiming] doc ${doc.id} failed:`, err)
-      }
-      await new Promise(r => setTimeout(r, 150))
+      const ids = entityType === 'customer'
+        ? (doc as { receiptsIds: number[] }).receiptsIds
+        : (doc as { paymentsIds: number[] }).paymentsIds
+      const dates = ids
+        .map(id => subDateMap.get(id))
+        .filter((d): d is string => typeof d === 'string' && d.length > 0)
+        .sort()
+      if (!dates.length) continue
+      const invoiceDate = doc.date ?? ''
+      const dueDate = doc.dueDate ?? doc.date ?? ''
+      if (invoiceDate) invoicePayments.push({ invoiceDate, dueDate, lastPaymentDate: dates[dates.length - 1] })
     }
 
     const DAY_MS = 86_400_000
-
     const calcAvg = (year: number): number | null => {
-      const relevant = invoicePayments.filter(p => p.lastPaymentDate.startsWith(String(year)))
-      if (!relevant.length) return null
-      const days = relevant
-        .map(p => Math.round(
-          (new Date(p.lastPaymentDate).getTime() - new Date(p.invoiceDate).getTime()) / DAY_MS,
-        ))
+      const rel = invoicePayments.filter(p => p.lastPaymentDate.startsWith(String(year)))
+      if (!rel.length) return null
+      const days = rel
+        .map(p => Math.round((new Date(p.lastPaymentDate).getTime() - new Date(p.invoiceDate).getTime()) / DAY_MS))
         .filter(d => d >= 0)
-      if (!days.length) return null
-      return Math.round(days.reduce((a, b) => a + b, 0) / days.length)
+      return days.length ? Math.round(days.reduce((a, b) => a + b, 0) / days.length) : null
     }
 
     const calcDelay = (year: number): number | null => {
-      const relevant = invoicePayments.filter(p =>
-        p.lastPaymentDate.startsWith(String(year)) && p.dueDate,
-      )
-      if (!relevant.length) return null
-      const delays = relevant.map(p =>
+      const rel = invoicePayments.filter(p => p.lastPaymentDate.startsWith(String(year)) && p.dueDate)
+      if (!rel.length) return null
+      const delays = rel.map(p =>
         Math.round((new Date(p.lastPaymentDate).getTime() - new Date(p.dueDate).getTime()) / DAY_MS),
       )
       return Math.round(delays.reduce((a, b) => a + b, 0) / delays.length)
