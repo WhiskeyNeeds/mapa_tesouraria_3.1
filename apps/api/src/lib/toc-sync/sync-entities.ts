@@ -132,7 +132,7 @@ async function upsertAll<T extends { clientId: string; tocId: number }>(
   return items.length
 }
 
-export async function syncCustomers(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncCustomers(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getCustomers(clientId)
   return upsertAll(
     rows.map(r => extractCustomerFields(clientId, r)),
@@ -144,7 +144,7 @@ export async function syncCustomers(clientId: string, svc: ToconlineService, pri
   )
 }
 
-export async function syncSuppliers(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncSuppliers(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getSuppliers(clientId)
   return upsertAll(
     rows.map(r => extractSupplierFields(clientId, r)),
@@ -156,7 +156,7 @@ export async function syncSuppliers(clientId: string, svc: ToconlineService, pri
   )
 }
 
-export async function syncProducts(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncProducts(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getItems(clientId)
   return upsertAll(
     rows.map(r => extractProductFields(clientId, r)),
@@ -168,7 +168,7 @@ export async function syncProducts(clientId: string, svc: ToconlineService, pris
   )
 }
 
-export async function syncServices(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncServices(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getServices(clientId)
   return upsertAll(
     rows.map(r => extractServiceFields(clientId, r)),
@@ -180,7 +180,7 @@ export async function syncServices(clientId: string, svc: ToconlineService, pris
   )
 }
 
-export async function syncSalesDocuments(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncSalesDocuments(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllSalesDocumentsFlat(clientId)
   return upsertAll(
     rows.map(r => extractSalesDocFields(clientId, r)),
@@ -192,7 +192,7 @@ export async function syncSalesDocuments(clientId: string, svc: ToconlineService
   )
 }
 
-export async function syncPurchaseDocuments(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncPurchaseDocuments(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllPurchaseDocumentsFlat(clientId)
   return upsertAll(
     rows.map(r => extractPurchaseDocFields(clientId, r)),
@@ -204,7 +204,7 @@ export async function syncPurchaseDocuments(clientId: string, svc: ToconlineServ
   )
 }
 
-export async function syncSalesReceipts(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncSalesReceipts(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllSalesReceiptsFlat(clientId)
   return upsertAll(
     rows.map(r => extractSalesReceiptFields(clientId, r)),
@@ -216,7 +216,7 @@ export async function syncSalesReceipts(clientId: string, svc: ToconlineService,
   )
 }
 
-export async function syncPurchasePayments(clientId: string, svc: ToconlineService, prisma: PrismaClient) {
+export async function syncPurchasePayments(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllPurchasePaymentsFlat(clientId)
   return upsertAll(
     rows.map(r => extractPurchasePaymentFields(clientId, r)),
