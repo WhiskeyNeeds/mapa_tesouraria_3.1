@@ -144,7 +144,17 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
 
   fastify.get('/toconline/:clientId/customers', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.send(await svc.getCustomers(clientId))
+    const syncState = await fastify.prisma.tocSyncState.findUnique({
+      where: { clientId_entityType: { clientId, entityType: 'customers' } },
+    })
+    if (!syncState?.lastSyncAt) {
+      return reply.send(await svc.getCustomers(clientId))
+    }
+    const rows = await fastify.prisma.tocCustomer.findMany({
+      where: { clientId },
+      orderBy: { name: 'asc' },
+    })
+    return reply.send(rows.map(r => r.raw))
   })
 
   fastify.patch('/toconline/:clientId/customers/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
@@ -183,7 +193,17 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
 
   fastify.get('/toconline/:clientId/suppliers', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.send(await svc.getSuppliers(clientId))
+    const syncState = await fastify.prisma.tocSyncState.findUnique({
+      where: { clientId_entityType: { clientId, entityType: 'suppliers' } },
+    })
+    if (!syncState?.lastSyncAt) {
+      return reply.send(await svc.getSuppliers(clientId))
+    }
+    const rows = await fastify.prisma.tocSupplier.findMany({
+      where: { clientId },
+      orderBy: { name: 'asc' },
+    })
+    return reply.send(rows.map(r => r.raw))
   })
 
   fastify.patch('/toconline/:clientId/suppliers/:id', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
