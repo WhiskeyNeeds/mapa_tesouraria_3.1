@@ -928,8 +928,8 @@ model TocProduct {
   clientId   String
   tocId      Int
   name       String
-  unitPrice  Float?
-  taxRate    Float?
+  unitPrice  Decimal? @db.Decimal(18, 4)
+  taxRate    Decimal? @db.Decimal(5, 2)
   raw        Json
   syncedAt   DateTime @default(now())
 
@@ -943,8 +943,8 @@ model TocService {
   clientId   String
   tocId      Int
   name       String
-  unitPrice  Float?
-  taxRate    Float?
+  unitPrice  Decimal? @db.Decimal(18, 4)
+  taxRate    Decimal? @db.Decimal(5, 2)
   raw        Json
   syncedAt   DateTime @default(now())
 
@@ -961,8 +961,8 @@ model TocSalesDocument {
   date         String?
   dueDate      String?
   status       Int?
-  grossTotal   Float?
-  pendingTotal Float?
+  grossTotal   Decimal? @db.Decimal(18, 2)
+  pendingTotal Decimal? @db.Decimal(18, 2)
   receiptsIds  Int[]
   raw          Json
   syncedAt     DateTime @default(now())
@@ -981,8 +981,8 @@ model TocPurchaseDocument {
   date         String?
   dueDate      String?
   status       Int?
-  grossTotal   Float?
-  pendingTotal Float?
+  grossTotal   Decimal? @db.Decimal(18, 2)
+  pendingTotal Decimal? @db.Decimal(18, 2)
   paymentsIds  Int[]
   raw          Json
   syncedAt     DateTime @default(now())
@@ -999,7 +999,7 @@ model TocSalesReceipt {
   tocId      Int
   customerId Int?
   date       String?
-  grossTotal Float?
+  grossTotal Decimal? @db.Decimal(18, 2)
   raw        Json
   syncedAt   DateTime @default(now())
 
@@ -1014,7 +1014,7 @@ model TocPurchasePayment {
   tocId      Int
   supplierId Int?
   date       String?
-  grossTotal Float?
+  grossTotal Decimal? @db.Decimal(18, 2)
   raw        Json
   syncedAt   DateTime @default(now())
 
@@ -1030,6 +1030,7 @@ model TocSyncState {
   lastSyncAt  DateTime?
   lastError   String?
   recordCount Int?
+  updatedAt   DateTime  @updatedAt
 
   @@unique([clientId, entityType])
   @@map("toc_sync_state")
