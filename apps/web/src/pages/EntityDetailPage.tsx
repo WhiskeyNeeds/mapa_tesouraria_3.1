@@ -92,17 +92,33 @@ function getInitials(name: string): string {
   return name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('')
 }
 
-function DocSubRows({ clientId, tocDocId, isSupplier }: { clientId: string; tocDocId: string; isSupplier: boolean }) {
+function extractNumericIds(arr?: unknown[]): number[] {
+  if (!Array.isArray(arr)) return []
+  return arr.flatMap(x => {
+    if (typeof x === 'number' && x > 0) return [x]
+    if (typeof x === 'string') { const n = parseInt(x, 10); return n > 0 ? [n] : [] }
+    if (typeof x === 'object' && x !== null) {
+      const id = (x as Record<string, unknown>).id
+      if (typeof id === 'number' && id > 0) return [id]
+      if (typeof id === 'string') { const n = parseInt(id, 10); return n > 0 ? [n] : [] }
+    }
+    return []
+  })
+}
+
+function DocSubRows({ clientId, tocDocId, isSupplier, subIds }: { clientId: string; tocDocId: string; isSupplier: boolean; subIds: number[] }) {
+  const idsParam = subIds.length ? `?ids=${subIds.join(',')}` : ''
   const { data = [], isLoading } = useQuery<TocSubItem[]>({
     queryKey: isSupplier
-      ? ['toc-purchase-payments', clientId, tocDocId]
-      : ['toc-sales-receipts', clientId, tocDocId],
+      ? ['toc-purchase-payments', clientId, tocDocId, subIds]
+      : ['toc-sales-receipts', clientId, tocDocId, subIds],
     queryFn: () => api.get(
       isSupplier
-        ? `/toconline/${clientId}/purchases/${tocDocId}/payments`
-        : `/toconline/${clientId}/sales/${tocDocId}/receipts`,
+        ? `/toconline/${clientId}/purchases/${tocDocId}/payments${idsParam}`
+        : `/toconline/${clientId}/sales/${tocDocId}/receipts${idsParam}`,
     ),
-    staleTime: 0,
+    staleTime: 5 * 60 * 1000,
+    enabled: subIds.length > 0,
   })
 
   if (isLoading) {
@@ -477,6 +493,7 @@ export default function EntityDetailPage({ entityType }: Props) {
                             clientId={clientId}
                             tocDocId={key}
                             isSupplier={isSupplier}
+                            subIds={extractNumericIds(isSupplier ? doc.payments_ids : doc.receipts_ids)}
                           />
                         )}
                       </Fragment>
