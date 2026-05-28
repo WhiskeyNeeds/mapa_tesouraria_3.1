@@ -392,11 +392,13 @@ export class ToconlineService {
 
   async getSalesDocumentReceipts(clientId: string, docId: string, knownIds?: number[]) {
     let receiptIds: number[] = knownIds ?? []
+    console.info(`[TOConline] getSalesDocumentReceipts docId=${docId} knownIds=${JSON.stringify(knownIds)}`)
 
     if (receiptIds.length === 0) {
       // Fallback: re-fetch individual document to extract receipts_ids
       const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_documents/${docId}`)
       const obj = raw as Record<string, unknown>
+      console.info(`[TOConline] getSalesDocumentReceipts fallback docId=${docId} raw_keys=${Object.keys(obj).join(',')} receipts_ids_raw=${JSON.stringify((obj.receipts_ids ?? (obj.data as Record<string,unknown>|undefined)?.attributes))}`)
       if (obj.data && typeof obj.data === 'object') {
         const data = obj.data as Record<string, unknown>
         const attrs = (data.attributes ?? data) as Record<string, unknown>
@@ -406,11 +408,14 @@ export class ToconlineService {
       }
     }
 
+    console.info(`[TOConline] getSalesDocumentReceipts docId=${docId} receiptIds=${JSON.stringify(receiptIds)}`)
     if (receiptIds.length === 0) return []
 
     const results = await Promise.allSettled(
       receiptIds.map((id) => this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_receipts/${id}`))
     )
+    const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[]
+    if (rejected.length > 0) console.warn(`[TOConline] getSalesDocumentReceipts docId=${docId} rejected=${rejected.map(r => String(r.reason)).join('; ')}`)
     return results
       .filter((r): r is PromiseFulfilledResult<unknown> => r.status === 'fulfilled')
       .map((r) => r.value as Record<string, unknown>)

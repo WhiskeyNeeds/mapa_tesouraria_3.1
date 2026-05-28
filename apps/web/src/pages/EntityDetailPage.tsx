@@ -117,7 +117,7 @@ function DocSubRows({ clientId, tocDocId, isSupplier, subIds }: { clientId: stri
         ? `/toconline/${clientId}/purchases/${tocDocId}/payments${idsParam}`
         : `/toconline/${clientId}/sales/${tocDocId}/receipts${idsParam}`,
     ),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
   })
 
   if (isLoading) {
