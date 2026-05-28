@@ -1,3 +1,6 @@
 node_modules
 .env
 .superpowers/
+
+# Compiled output — reproducível com npm run build
+apps/api/dist
