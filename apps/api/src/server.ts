@@ -27,6 +27,14 @@ import { budgetsRoutes } from './modules/treasury/budgets/budgets.routes.js'
 import { budgetRulesRoutes } from './modules/treasury/budget-rules/budget-rules.routes.js'
 import { entityConfigsRoutes } from './modules/treasury/entity-configs/entity-configs.routes.js'
 import { HttpError } from './lib/errors.js'
+import { TocScheduler } from './lib/toc-sync/scheduler.js'
+import { ToconlineService } from './modules/toconline/toconline.service.js'
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    tocScheduler: TocScheduler
+  }
+}
 
 const fastify = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } })
 
@@ -81,6 +89,15 @@ await fastify.register(budgetRulesRoutes, { prefix: V1 })
 await fastify.register(entityConfigsRoutes, { prefix: V1 })
 
 fastify.get('/health', () => ({ status: 'ok', ts: new Date().toISOString() }))
+
+// ── TOConline Sync Scheduler ──────────────────────────────────────────────
+
+fastify.addHook('onReady', async () => {
+  const tocSvc = new ToconlineService(fastify.prisma)
+  const scheduler = new TocScheduler(fastify.prisma, tocSvc)
+  await scheduler.start()
+  fastify.decorate('tocScheduler', scheduler)
+})
 
 // ── Start ──────────────────────────────────────────────────────────────────
 
