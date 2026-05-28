@@ -17,6 +17,9 @@ export class ToconlineService {
   private refreshLocks = new Map<string, Promise<void>>()
   private configCache = new Map<string, { cfg: ToconlineConfig; ts: number }>()
   private static readonly CFG_TTL = 30_000 // 30 s — invalidated on every token write
+  // Serialises all TOConline HTTP calls per client — prevents concurrent requests from
+  // triggering 429 rate-limit errors when multiple handlers fire simultaneously.
+  private apiQueues = new Map<string, Promise<void>>()
 
   constructor(private prisma: PrismaClient) { }
 
@@ -151,30 +154,81 @@ export class ToconlineService {
     this.invalidateCache(clientId)
   }
 
+  async rawGet(clientId: string, path: string, params?: Record<string, string>): Promise<unknown> {
+    return this.apiGet<unknown>(clientId, path, params)
+  }
+
+  async getEntityAllSubDocs(
+    clientId: string,
+    ids: number[],
+    entityType: 'customer' | 'supplier',
+  ): Promise<Record<string, unknown>[]> {
+    const basePath = entityType === 'customer'
+      ? '/api/v1/commercial_sales_receipts'
+      : '/api/v1/commercial_purchases_payments'
+
+    const results: Record<string, unknown>[] = []
+    for (const id of ids) {
+      try {
+        const raw = await this.apiGet<unknown>(clientId, `${basePath}/${id}`)
+        const obj = raw as Record<string, unknown>
+        // unwrap JSON:API envelope { data: { id, attributes } } if present
+        if (obj.data && typeof obj.data === 'object' && !Array.isArray(obj.data)) {
+          const d = obj.data as Record<string, unknown>
+          results.push(d.attributes ? { id: d.id, ...(d.attributes as Record<string, unknown>) } : d)
+        } else {
+          results.push(obj)
+        }
+      } catch (e) {
+        console.warn(`[TOConline] entity-sub-docs: skip ${entityType} sub-doc ${id}:`, String(e))
+      }
+      await new Promise(r => setTimeout(r, 150))
+    }
+    return results
+  }
+
   // ── HTTP helper ────────────────────────────────────────────────────────────
 
-  private async apiGet<T>(clientId: string, path: string, params?: Record<string, string>): Promise<T> {
-    const cfg = await this.requireActiveConfig(clientId)
-    const token = decrypt(cfg.accessToken!)
-    const url = new URL(`${cfg.baseUrl}${path}`)
-    if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
+  private enqueue<T>(clientId: string, fn: () => Promise<T>): Promise<T> {
+    const current = this.apiQueues.get(clientId) ?? Promise.resolve()
+    const result = current.then(() => fn())
+    this.apiQueues.set(clientId, result.then(() => undefined, () => undefined))
+    return result
+  }
 
-    const t0 = Date.now()
-    let res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
-    console.info(`[TOConline] GET ${path} → ${res.status} (${Date.now() - t0}ms)`)
+  private apiGet<T>(clientId: string, path: string, params?: Record<string, string>): Promise<T> {
+    return this.enqueue(clientId, async () => {
+      const cfg = await this.requireActiveConfig(clientId)
+      const token = decrypt(cfg.accessToken!)
+      const url = new URL(`${cfg.baseUrl}${path}`)
+      if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
 
-    if (res.status === 401) {
-      let body401 = ''
-      try { body401 = JSON.stringify(await res.clone().json()) } catch { body401 = await res.text().catch(() => '') }
-      console.error(`[TOConline] 401 on GET ${path} for ${clientId}: ${body401}`)
-      await this.tryRefreshToken(clientId, cfg)
-      const cfg2 = await this.requireActiveConfig(clientId)
-      const token2 = decrypt(cfg2.accessToken!)
-      res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token2}` } })
-    }
+      const t0 = Date.now()
+      let res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+      console.info(`[TOConline] GET ${path} → ${res.status} (${Date.now() - t0}ms)`)
 
-    if (!res.ok) throw httpError(res.status, `TOConline GET ${path} failed: ${res.statusText}`)
-    return res.json() as Promise<T>
+      if (res.status === 401) {
+        let body401 = ''
+        try { body401 = JSON.stringify(await res.clone().json()) } catch { body401 = await res.text().catch(() => '') }
+        console.error(`[TOConline] 401 on GET ${path} for ${clientId}: ${body401}`)
+        await this.tryRefreshToken(clientId, cfg)
+        const cfg2 = await this.requireActiveConfig(clientId)
+        const token2 = decrypt(cfg2.accessToken!)
+        res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token2}` } })
+      }
+
+      if (res.status === 429) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          await new Promise(r => setTimeout(r, attempt * 500))
+          res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+          console.info(`[TOConline] GET ${path} retry ${attempt} → ${res.status}`)
+          if (res.status !== 429) break
+        }
+      }
+
+      if (!res.ok) throw httpError(res.status, `TOConline GET ${path} failed: ${res.statusText}`)
+      return res.json() as Promise<T>
+    })
   }
 
   // Fetches a TOConline master-data endpoint and normalises the JSON:API envelope
@@ -392,13 +446,11 @@ export class ToconlineService {
 
   async getSalesDocumentReceipts(clientId: string, docId: string, knownIds?: number[]) {
     let receiptIds: number[] = knownIds ?? []
-    console.info(`[TOConline] getSalesDocumentReceipts docId=${docId} knownIds=${JSON.stringify(knownIds)}`)
 
     if (receiptIds.length === 0) {
       // Fallback: re-fetch individual document to extract receipts_ids
       const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_documents/${docId}`)
       const obj = raw as Record<string, unknown>
-      console.info(`[TOConline] getSalesDocumentReceipts fallback docId=${docId} raw_keys=${Object.keys(obj).join(',')} receipts_ids_raw=${JSON.stringify((obj.receipts_ids ?? (obj.data as Record<string,unknown>|undefined)?.attributes))}`)
       if (obj.data && typeof obj.data === 'object') {
         const data = obj.data as Record<string, unknown>
         const attrs = (data.attributes ?? data) as Record<string, unknown>
@@ -408,7 +460,6 @@ export class ToconlineService {
       }
     }
 
-    console.info(`[TOConline] getSalesDocumentReceipts docId=${docId} receiptIds=${JSON.stringify(receiptIds)}`)
     if (receiptIds.length === 0) return []
 
     const results = await Promise.allSettled(
@@ -546,6 +597,22 @@ export class ToconlineService {
   async getPurchaseDocuments(clientId: string, filters?: Record<string, string>) {
     const raw = await this.apiGet<unknown>(clientId, '/api/v1/commercial_purchases_documents', filters)
     return this.unwrapArray(raw)
+  }
+
+  async getAllSalesDocumentsFlat(clientId: string) {
+    return this.apiGetFlat(clientId, '/api/v1/commercial_sales_documents')
+  }
+
+  async getAllPurchaseDocumentsFlat(clientId: string) {
+    return this.apiGetFlat(clientId, '/api/v1/commercial_purchases_documents')
+  }
+
+  async getAllSalesReceiptsFlat(clientId: string) {
+    return this.apiGetFlat(clientId, '/api/v1/commercial_sales_receipts')
+  }
+
+  async getAllPurchasePaymentsFlat(clientId: string) {
+    return this.apiGetFlat(clientId, '/api/v1/commercial_purchases_payments')
   }
 
   async getSalesDocuments(clientId: string, filters?: Record<string, string>) {
@@ -1015,42 +1082,46 @@ export class ToconlineService {
     // For each effective settled invoice, fetch its receipts/payments and find the last payment date
     const invoicePayments: Array<{ invoiceDate: string; dueDate: string; lastPaymentDate: string }> = []
 
-    await Promise.allSettled(
-      settledDocs.map(async (doc) => {
-        try {
-          const rawList = entityType === 'customer'
-            ? await this.getSalesDocumentReceipts(clientId, String(doc.id))
-            : await this.getPurchaseDocumentPayments(clientId, String(doc.id))
+    for (const doc of settledDocs) {
+      try {
+        const knownIds = Array.isArray(
+          entityType === 'customer' ? doc.receipts_ids : doc.payments_ids,
+        )
+          ? ((entityType === 'customer' ? doc.receipts_ids : doc.payments_ids) as number[])
+          : undefined
+        const rawList = entityType === 'customer'
+          ? await this.getSalesDocumentReceipts(clientId, String(doc.id), knownIds)
+          : await this.getPurchaseDocumentPayments(clientId, String(doc.id), knownIds)
 
-          const dates = rawList
-            .map(r => {
-              const obj = r as Record<string, unknown>
-              if (obj.data && typeof obj.data === 'object') {
-                const d = obj.data as Record<string, unknown>
-                const attrs = (d.attributes && typeof d.attributes === 'object')
-                  ? d.attributes as Record<string, unknown>
-                  : d
-                return String(attrs.date ?? '')
-              }
-              return String((obj.attributes as Record<string, unknown> ?? obj).date ?? '')
-            })
-            .filter(d => d && d !== 'undefined')
-            .sort()
+        const dates = rawList
+          .map(r => {
+            const obj = r as Record<string, unknown>
+            if (obj.data && typeof obj.data === 'object') {
+              const d = obj.data as Record<string, unknown>
+              const attrs = (d.attributes && typeof d.attributes === 'object')
+                ? d.attributes as Record<string, unknown>
+                : d
+              return String(attrs.date ?? '')
+            }
+            return String((obj.attributes as Record<string, unknown> ?? obj).date ?? '')
+          })
+          .filter(d => d && d !== 'undefined')
+          .sort()
 
-          console.info(`[paymentTiming] doc ${doc.id}: rawList=${rawList.length} dates=${JSON.stringify(dates)}`)
+        console.info(`[paymentTiming] doc ${doc.id}: rawList=${rawList.length} dates=${JSON.stringify(dates)}`)
 
-          if (!dates.length) return
-          const lastPaymentDate = dates[dates.length - 1]
-          const invoiceDate = String(doc.date ?? '')
-          const dueDate = String(doc.due_date ?? doc.date ?? '')
-          if (invoiceDate && lastPaymentDate) {
-            invoicePayments.push({ invoiceDate, dueDate, lastPaymentDate })
-          }
-        } catch (err) {
-          console.warn(`[paymentTiming] doc ${doc.id} failed:`, err)
+        if (!dates.length) continue
+        const lastPaymentDate = dates[dates.length - 1]
+        const invoiceDate = String(doc.date ?? '')
+        const dueDate = String(doc.due_date ?? doc.date ?? '')
+        if (invoiceDate && lastPaymentDate) {
+          invoicePayments.push({ invoiceDate, dueDate, lastPaymentDate })
         }
-      }),
-    )
+      } catch (err) {
+        console.warn(`[paymentTiming] doc ${doc.id} failed:`, err)
+      }
+      await new Promise(r => setTimeout(r, 150))
+    }
 
     const DAY_MS = 86_400_000
 
