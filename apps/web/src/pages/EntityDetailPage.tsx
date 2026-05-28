@@ -1,5 +1,5 @@
 // apps/web/src/pages/EntityDetailPage.tsx
-import { Fragment, useState, type ElementType } from 'react'
+import { Fragment, useState, useMemo, type ElementType } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, ChevronDown, RefreshCw, Hash, Mail, Phone, MapPin, Building2, FileText } from 'lucide-react'
@@ -9,6 +9,7 @@ import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import Badge from '@/components/ui/Badge'
 import KpiCard from '@/components/ui/KpiCard'
+import TocSyncStatus from '@/components/ui/TocSyncStatus'
 
 interface Props {
   entityType: 'supplier' | 'customer'
@@ -42,6 +43,7 @@ interface TocSubItem {
   document_no: string
   date: string
   gross_total: number
+  lines?: Array<{ receivable_id: number | string; [key: string]: unknown }>
   [key: string]: unknown
 }
 
@@ -92,33 +94,13 @@ function getInitials(name: string): string {
   return name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('')
 }
 
-function extractNumericIds(arr?: unknown[]): number[] {
-  if (!Array.isArray(arr)) return []
-  return arr.flatMap(x => {
-    if (typeof x === 'number' && x > 0) return [x]
-    if (typeof x === 'string') { const n = parseInt(x, 10); return n > 0 ? [n] : [] }
-    if (typeof x === 'object' && x !== null) {
-      const id = (x as Record<string, unknown>).id
-      if (typeof id === 'number' && id > 0) return [id]
-      if (typeof id === 'string') { const n = parseInt(id, 10); return n > 0 ? [n] : [] }
-    }
-    return []
-  })
-}
-
-function DocSubRows({ clientId, tocDocId, isSupplier, subIds }: { clientId: string; tocDocId: string; isSupplier: boolean; subIds: number[] }) {
-  const idsParam = subIds.length ? `?ids=${subIds.join(',')}` : ''
-  const { data = [], isLoading } = useQuery<TocSubItem[]>({
-    queryKey: isSupplier
-      ? ['toc-purchase-payments', clientId, tocDocId, subIds]
-      : ['toc-sales-receipts', clientId, tocDocId, subIds],
-    queryFn: () => api.get(
-      isSupplier
-        ? `/toconline/${clientId}/purchases/${tocDocId}/payments${idsParam}`
-        : `/toconline/${clientId}/sales/${tocDocId}/receipts${idsParam}`,
-    ),
-    staleTime: 0,
-  })
+function DocSubRows({ isSupplier, allSubDocs, subIds, isLoading }: {
+  isSupplier: boolean
+  allSubDocs: TocSubItem[]
+  subIds: number[]
+  isLoading: boolean
+}) {
+  const data = allSubDocs.filter(item => subIds.includes(Number(item.id)))
 
   if (isLoading) {
     return (
@@ -246,6 +228,26 @@ export default function EntityDetailPage({ entityType }: Props) {
     enabled: !!clientId,
   })
 
+  const allSubIds = useMemo(() => {
+    const docs = docsQuery.data ?? []
+    const field = isSupplier ? 'payments_ids' : 'receipts_ids'
+    return [...new Set(
+      docs.flatMap(d => {
+        const arr = d[field as keyof TocDoc]
+        return Array.isArray(arr) ? (arr as unknown[]).map(Number).filter(n => Number.isFinite(n) && n > 0) : []
+      }),
+    )]
+  }, [docsQuery.data, isSupplier])
+
+  const allSubDocsQuery = useQuery<TocSubItem[]>({
+    queryKey: isSupplier
+      ? ['toc-supplier-all-payments', clientId, tocId, allSubIds]
+      : ['toc-customer-all-receipts', clientId, tocId, allSubIds],
+    queryFn: () => api.get(`/toconline/${clientId}/entity-sub-docs?entityType=${typeParam}&ids=${allSubIds.join(',')}`),
+    enabled: !!clientId && !!tocId && docsQuery.isSuccess && allSubIds.length > 0,
+    staleTime: 5 * 60 * 1000,
+  })
+
   const paymentTimingQuery = useQuery<EntityPaymentTiming>({
     queryKey: ['entity-payment-timing', clientId, typeParam, tocId],
     queryFn: () =>
@@ -346,11 +348,18 @@ export default function EntityDetailPage({ entityType }: Props) {
           </span>
         </div>
 
-        <div className="ml-auto flex items-center gap-1.5">
-          <Hash className="w-3 h-3 text-gray-300" />
-          <span className="text-xs font-mono text-gray-500 bg-gray-50 border border-gray-100 px-2 py-0.5 rounded-md">
-            {entityNif}
-          </span>
+        <div className="ml-auto flex items-center gap-3">
+          <TocSyncStatus invalidateKeys={[
+            ['toc-customer-all-receipts', clientId ?? '', tocId ?? ''],
+            ['toc-supplier-all-payments', clientId ?? '', tocId ?? ''],
+            ['entity-payment-timing', clientId ?? '', typeParam, tocId ?? ''],
+          ]} />
+          <div className="flex items-center gap-1.5">
+            <Hash className="w-3 h-3 text-gray-300" />
+            <span className="text-xs font-mono text-gray-500 bg-gray-50 border border-gray-100 px-2 py-0.5 rounded-md">
+              {entityNif}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -487,13 +496,23 @@ export default function EntityDetailPage({ entityType }: Props) {
                             </Badge>
                           </td>
                         </tr>
-                        {isExpanded && clientId && (
-                          <DocSubRows
-                            clientId={clientId}
-                            tocDocId={key}
-                            isSupplier={isSupplier}
-                            subIds={extractNumericIds(isSupplier ? doc.payments_ids : doc.receipts_ids)}
-                          />
+                        {isExpanded && (
+                          allSubDocsQuery.data && 'syncing' in (allSubDocsQuery.data as object)
+                            ? (
+                              <tr>
+                                <td colSpan={5} className="py-3 px-4 text-sm text-gray-400 text-center italic">
+                                  A sincronizar dados TOConline…
+                                </td>
+                              </tr>
+                            )
+                            : (
+                              <DocSubRows
+                                isSupplier={isSupplier}
+                                allSubDocs={allSubDocsQuery.data ?? []}
+                                subIds={(isSupplier ? doc.payments_ids : doc.receipts_ids)?.map(Number).filter(n => n > 0) ?? []}
+                                isLoading={allSubDocsQuery.isLoading}
+                              />
+                            )
                         )}
                       </Fragment>
                     )

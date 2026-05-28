@@ -4,6 +4,7 @@ import type { ComponentType, CSSProperties } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
+import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import {
   Search, Users, Truck, Package, Wrench, AlertTriangle,
   ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2, Eye, Pencil,
@@ -2891,7 +2892,13 @@ export default function EmpresaPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Empresa</h1>
-        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">TOConline</span>
+        <div className="flex items-center gap-3">
+          <TocSyncStatus invalidateKeys={[
+            ['toc-customers', selectedClientId ?? ''],
+            ['toc-suppliers', selectedClientId ?? ''],
+          ]} />
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">TOConline</span>
+        </div>
       </div>
 
       <div className="card">
