@@ -1,13 +1,22 @@
 import { randomUUID } from 'crypto'
-import type { PrismaClient } from '@prisma/client'
+import type { PrismaClient, ToconlineConfig } from '@prisma/client'
 import { encrypt, decrypt } from '../../plugins/encrypt.js'
 import { httpError } from '../../lib/errors.js'
 import type { RedisClient } from '../../plugins/redis.js'
 
 const TOC_STATE_PREFIX = 'toconline:state:'
 
+export interface EntityPaymentTiming {
+  thisYear: number | null
+  lastYear: number | null
+  delayThisYear: number | null   // avg days late vs due_date (+late, −early)
+  delayLastYear: number | null
+}
+
 export class ToconlineService {
   private refreshLocks = new Map<string, Promise<void>>()
+  private configCache = new Map<string, { cfg: ToconlineConfig; ts: number }>()
+  private static readonly CFG_TTL = 30_000 // 30 s — invalidated on every token write
 
   constructor(private prisma: PrismaClient) { }
 
@@ -38,11 +47,13 @@ export class ToconlineService {
     rest.oauthUrl = rest.oauthUrl.trim().replace(/\/+$/, '')
     rest.baseUrl = rest.baseUrl.trim().replace(/\/+$/, '')
     rest.tocClientId = rest.tocClientId.trim()
-    return this.prisma.toconlineConfig.upsert({
+    const result = await this.prisma.toconlineConfig.upsert({
       where: { clientId },
       update: { ...rest, tocClientSecret: secretEnc, status: 'UNCONFIGURED', accessToken: null, refreshToken: null },
       create: { clientId, ...rest, tocClientSecret: secretEnc },
     })
+    this.invalidateCache(clientId)
+    return result
   }
 
   async getAuthUrl(clientId: string, redis: RedisClient): Promise<string> {
@@ -51,6 +62,7 @@ export class ToconlineService {
     const redirectUri = this.getRedirectUri()
     await redis.setex(`${TOC_STATE_PREFIX}${state}`, 600, clientId)
     await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'PENDING_AUTH' } })
+    this.invalidateCache(clientId)
 
     const params = new URLSearchParams({
       response_type: 'code',
@@ -97,6 +109,7 @@ export class ToconlineService {
         lastError: null,
       },
     })
+    this.invalidateCache(clientId)
   }
 
   async setTokensManually(clientId: string, data: {
@@ -108,7 +121,7 @@ export class ToconlineService {
     const accessToken = data.accessToken.trim()
     const refreshToken = data.refreshToken?.trim() || null
     if (!accessToken) throw httpError(400, 'accessToken não pode ser vazio')
-    return this.prisma.toconlineConfig.update({
+    const result = await this.prisma.toconlineConfig.update({
       where: { clientId },
       data: {
         accessToken: encrypt(accessToken),
@@ -118,6 +131,8 @@ export class ToconlineService {
         lastError: null,
       },
     })
+    this.invalidateCache(clientId)
+    return result
   }
 
   async getCredentialsForTesting(clientId: string) {
@@ -133,6 +148,7 @@ export class ToconlineService {
       where: { clientId },
       data: { accessToken: null, refreshToken: null, tokenExpiresAt: null, status: 'UNCONFIGURED' },
     })
+    this.invalidateCache(clientId)
   }
 
   // ── HTTP helper ────────────────────────────────────────────────────────────
@@ -143,7 +159,9 @@ export class ToconlineService {
     const url = new URL(`${cfg.baseUrl}${path}`)
     if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
 
+    const t0 = Date.now()
     let res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+    console.info(`[TOConline] GET ${path} → ${res.status} (${Date.now() - t0}ms)`)
 
     if (res.status === 401) {
       let body401 = ''
@@ -161,23 +179,42 @@ export class ToconlineService {
 
   // Fetches a TOConline master-data endpoint and normalises the JSON:API envelope
   // ({ data: [{ id, attributes }] }) into a flat array of plain objects.
-  private async apiGetFlat(clientId: string, path: string): Promise<Record<string, unknown>[]> {
-    const res = await this.apiGet<unknown>(clientId, path)
+  // Follows links.next automatically to retrieve all pages.
+  private async apiGetFlat(clientId: string, path: string, params?: Record<string, string>): Promise<Record<string, unknown>[]> {
+    type JsonApiItem = { id?: unknown; attributes?: Record<string, unknown> }
+    type JsonApiList = { data?: JsonApiItem[]; links?: { next?: string } }
 
-    if (Array.isArray(res)) return res as Record<string, unknown>[]
+    const all: Record<string, unknown>[] = []
+    let res = await this.apiGet<unknown>(clientId, path, params)
 
-    if (res != null && typeof res === 'object') {
+    for (let page = 0; page < 20; page++) {
+      if (Array.isArray(res)) {
+        all.push(...(res as Record<string, unknown>[]))
+        break
+      }
+      if (res == null || typeof res !== 'object') break
+
       const obj = res as Record<string, unknown>
+
       if (Array.isArray(obj.data)) {
-        type JsonApiItem = { id?: unknown; attributes?: Record<string, unknown> }
-        return (obj.data as JsonApiItem[]).map((item) => ({ id: item.id, ...(item.attributes ?? {}) }))
+        all.push(...(obj.data as JsonApiItem[]).map((item) => ({ id: item.id, ...(item.attributes ?? {}) })))
+        const next = (obj as JsonApiList).links?.next
+        if (!next) break
+        // next is an absolute URL — fetch with auth
+        const cfg = await this.requireActiveConfig(clientId)
+        const fetchRes = await fetch(next, { headers: { Authorization: `Bearer ${decrypt(cfg.accessToken!)}` } })
+        if (!fetchRes.ok) break
+        res = await fetchRes.json()
+        continue
       }
+
       for (const k of ['items', 'results', 'records', 'list']) {
-        if (Array.isArray(obj[k])) return obj[k] as Record<string, unknown>[]
+        if (Array.isArray(obj[k])) { all.push(...(obj[k] as Record<string, unknown>[])); break }
       }
+      break
     }
 
-    return []
+    return all
   }
 
   private async apiPatch<T>(clientId: string, path: string, body: unknown): Promise<T> {
@@ -333,6 +370,7 @@ export class ToconlineService {
       console.error(`[TOConline] refresh raw response body: ${rawBody}`)
       console.error(`[TOConline] refresh request: oauthUrl=${cfg.oauthUrl}, tocClientId=${cfg.tocClientId}, rt_preview=${rt.slice(0, 4)}...${rt.slice(-4)} (len=${rt.length})`)
       await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: `Refresh falhou: ${detail}` } })
+      this.invalidateCache(clientId)
       throw httpError(401, `TOConline refresh falhou: ${detail}`)
     }
 
@@ -347,6 +385,7 @@ export class ToconlineService {
         lastError: null,
       },
     })
+    this.invalidateCache(clientId)
   }
 
   // ── TOConline endpoints ────────────────────────────────────────────────────
@@ -597,7 +636,7 @@ export class ToconlineService {
   }
 
   async getCustomers(clientId: string) {
-    return this.apiGetFlat(clientId, '/api/customers')
+    return this.apiGetFlat(clientId, '/api/customers', { 'page[size]': '500' })
   }
 
   async getCustomerWithAddress(clientId: string, customerId: string) {
@@ -696,7 +735,7 @@ export class ToconlineService {
   }
 
   async getSuppliers(clientId: string) {
-    return this.apiGetFlat(clientId, '/api/suppliers')
+    return this.apiGetFlat(clientId, '/api/suppliers', { 'page[size]': '500' })
   }
 
   async getSupplierWithAddress(clientId: string, supplierId: string) {
@@ -790,7 +829,7 @@ export class ToconlineService {
   }
 
   async getItems(clientId: string) {
-    return this.apiGetFlat(clientId, '/api/products')
+    return this.apiGetFlat(clientId, '/api/products', { 'page[size]': '500' })
   }
 
   async createItem(clientId: string, attrs: Record<string, unknown>) {
@@ -798,7 +837,7 @@ export class ToconlineService {
   }
 
   async getServices(clientId: string) {
-    return this.apiGetFlat(clientId, '/api/services')
+    return this.apiGetFlat(clientId, '/api/services', { 'page[size]': '500' })
   }
 
   async createService(clientId: string, attrs: Record<string, unknown>) {
@@ -920,11 +959,134 @@ export class ToconlineService {
     }
   }
 
+  // ── Payment timing (prazo médio) ──────────────────────────────────────────
+
+  async getEntityPaymentTiming(
+    clientId: string,
+    entityType: 'customer' | 'supplier',
+    tocEntityId: string,
+  ): Promise<EntityPaymentTiming> {
+    const thisYear = new Date().getFullYear()
+    const lastYear = thisYear - 1
+
+    const cutoff = `${lastYear - 1}-01-01`
+    const entityIdKey = entityType === 'customer' ? 'customer_id' : 'supplier_id'
+
+    // Filter server-side — avoids fetching all documents (can be thousands)
+    const entityFilter = { [`filter[${entityIdKey}]`]: tocEntityId }
+    const byEntity = entityType === 'customer'
+      ? await this.getSalesDocuments(clientId, entityFilter)
+      : await this.getPurchaseDocuments(clientId, entityFilter)
+
+    console.info(`[paymentTiming] ${clientId} ${entityType} ${tocEntityId}: byEntity=${byEntity.length}`)
+    if (byEntity.length > 0) {
+      const sample = byEntity[0]
+      console.info(`[paymentTiming] sample doc: status=${sample.status} pending_total=${sample.pending_total} gross_total=${sample.gross_total} date=${sample.date}`)
+    }
+
+    // "Settled" = status 3 (TOConline liquidado) OR any non-void doc with pending_total = 0
+    // Mirrors the same logic as tocDocStatusLabel on the frontend
+    const isEffectivelySettled = (d: Record<string, unknown>) => {
+      const s = Number(d.status)
+      if (s === 4 || s === 0) return false
+      if (s === 3) return true
+      return Number(d.pending_total ?? d.gross_total) === 0
+    }
+
+    const settledDocs = byEntity
+      .filter(d => isEffectivelySettled(d) && String(d.date ?? '') >= cutoff)
+      .slice(0, 50)
+
+    console.info(`[paymentTiming] settledDocs=${settledDocs.length} cutoff=${cutoff}`)
+
+    if (settledDocs.length === 0) return { thisYear: null, lastYear: null, delayThisYear: null, delayLastYear: null }
+
+    // For each effective settled invoice, fetch its receipts/payments and find the last payment date
+    const invoicePayments: Array<{ invoiceDate: string; dueDate: string; lastPaymentDate: string }> = []
+
+    await Promise.allSettled(
+      settledDocs.map(async (doc) => {
+        try {
+          const rawList = entityType === 'customer'
+            ? await this.getSalesDocumentReceipts(clientId, String(doc.id))
+            : await this.getPurchaseDocumentPayments(clientId, String(doc.id))
+
+          const dates = rawList
+            .map(r => {
+              const obj = r as Record<string, unknown>
+              if (obj.data && typeof obj.data === 'object') {
+                const d = obj.data as Record<string, unknown>
+                const attrs = (d.attributes && typeof d.attributes === 'object')
+                  ? d.attributes as Record<string, unknown>
+                  : d
+                return String(attrs.date ?? '')
+              }
+              return String((obj.attributes as Record<string, unknown> ?? obj).date ?? '')
+            })
+            .filter(d => d && d !== 'undefined')
+            .sort()
+
+          console.info(`[paymentTiming] doc ${doc.id}: rawList=${rawList.length} dates=${JSON.stringify(dates)}`)
+
+          if (!dates.length) return
+          const lastPaymentDate = dates[dates.length - 1]
+          const invoiceDate = String(doc.date ?? '')
+          const dueDate = String(doc.due_date ?? doc.date ?? '')
+          if (invoiceDate && lastPaymentDate) {
+            invoicePayments.push({ invoiceDate, dueDate, lastPaymentDate })
+          }
+        } catch (err) {
+          console.warn(`[paymentTiming] doc ${doc.id} failed:`, err)
+        }
+      }),
+    )
+
+    const DAY_MS = 86_400_000
+
+    const calcAvg = (year: number): number | null => {
+      const relevant = invoicePayments.filter(p => p.lastPaymentDate.startsWith(String(year)))
+      if (!relevant.length) return null
+      const days = relevant
+        .map(p => Math.round(
+          (new Date(p.lastPaymentDate).getTime() - new Date(p.invoiceDate).getTime()) / DAY_MS,
+        ))
+        .filter(d => d >= 0)
+      if (!days.length) return null
+      return Math.round(days.reduce((a, b) => a + b, 0) / days.length)
+    }
+
+    const calcDelay = (year: number): number | null => {
+      const relevant = invoicePayments.filter(p =>
+        p.lastPaymentDate.startsWith(String(year)) && p.dueDate,
+      )
+      if (!relevant.length) return null
+      const delays = relevant.map(p =>
+        Math.round((new Date(p.lastPaymentDate).getTime() - new Date(p.dueDate).getTime()) / DAY_MS),
+      )
+      return Math.round(delays.reduce((a, b) => a + b, 0) / delays.length)
+    }
+
+    return {
+      thisYear: calcAvg(thisYear),
+      lastYear: calcAvg(lastYear),
+      delayThisYear: calcDelay(thisYear),
+      delayLastYear: calcDelay(lastYear),
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  private invalidateCache(clientId: string) {
+    this.configCache.delete(clientId)
+  }
+
   private async requireConfig(clientId: string) {
+    const now = Date.now()
+    const hit = this.configCache.get(clientId)
+    if (hit && now - hit.ts < ToconlineService.CFG_TTL) return hit.cfg
     const cfg = await this.getConfig(clientId)
     if (!cfg) throw httpError(404, 'TOConline not configured for this company')
+    this.configCache.set(clientId, { cfg, ts: now })
     return cfg
   }
 

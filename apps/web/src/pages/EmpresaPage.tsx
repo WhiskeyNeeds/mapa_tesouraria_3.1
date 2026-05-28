@@ -2852,22 +2852,22 @@ export default function EmpresaPage() {
   const { data: customers, isLoading: loadingCustomers, isError: errorCustomers } = useQuery<TocRow[]>({
     queryKey: ['toc-customers', selectedClientId],
     queryFn: async () => toRows(await api.get(`/toconline/${selectedClientId}/customers`)),
-    enabled, retry: false, throwOnError: false,
+    enabled, retry: false, throwOnError: false, staleTime: 5 * 60 * 1000,
   })
   const { data: suppliers, isLoading: loadingSuppliers, isError: errorSuppliers } = useQuery<TocRow[]>({
     queryKey: ['toc-suppliers', selectedClientId],
     queryFn: async () => toRows(await api.get(`/toconline/${selectedClientId}/suppliers`)),
-    enabled, retry: false, throwOnError: false,
+    enabled, retry: false, throwOnError: false, staleTime: 5 * 60 * 1000,
   })
   const { data: items, isLoading: loadingItems, isError: errorItems } = useQuery<TocRow[]>({
     queryKey: ['toc-items', selectedClientId],
     queryFn: async () => toRows(await api.get(`/toconline/${selectedClientId}/items`)),
-    enabled, retry: false, throwOnError: false,
+    enabled, retry: false, throwOnError: false, staleTime: 10 * 60 * 1000,
   })
   const { data: services, isLoading: loadingServices, isError: errorServices } = useQuery<TocRow[]>({
     queryKey: ['toc-services', selectedClientId],
     queryFn: async () => toRows(await api.get(`/toconline/${selectedClientId}/services`)),
-    enabled, retry: false, throwOnError: false,
+    enabled, retry: false, throwOnError: false, staleTime: 10 * 60 * 1000,
   })
 
   type TabState = { rows: TocRow[]; loading: boolean; error: boolean }
