@@ -390,17 +390,19 @@ export class ToconlineService {
 
   // ── TOConline endpoints ────────────────────────────────────────────────────
 
-  async getSalesDocumentReceipts(clientId: string, docId: string) {
-    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_documents/${docId}`)
-    const obj = raw as Record<string, unknown>
+  async getSalesDocumentReceipts(clientId: string, docId: string, knownIds?: number[]) {
+    let receiptIds: number[] = knownIds ?? []
 
-    let receiptIds: number[] = []
-    if (obj.data && typeof obj.data === 'object') {
-      const data = obj.data as Record<string, unknown>
-      const attrs = (data.attributes ?? data) as Record<string, unknown>
-      if (Array.isArray(attrs.receipts_ids)) receiptIds = attrs.receipts_ids as number[]
-    } else if (Array.isArray(obj.receipts_ids)) {
-      receiptIds = obj.receipts_ids as number[]
+    if (receiptIds.length === 0) {
+      const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_documents/${docId}`)
+      const obj = raw as Record<string, unknown>
+      if (obj.data && typeof obj.data === 'object') {
+        const data = obj.data as Record<string, unknown>
+        const attrs = (data.attributes ?? data) as Record<string, unknown>
+        if (Array.isArray(attrs.receipts_ids)) receiptIds = attrs.receipts_ids as number[]
+      } else if (Array.isArray(obj.receipts_ids)) {
+        receiptIds = obj.receipts_ids as number[]
+      }
     }
 
     if (receiptIds.length === 0) return []
@@ -413,17 +415,19 @@ export class ToconlineService {
       .map((r) => r.value as Record<string, unknown>)
   }
 
-  async getPurchaseDocumentPayments(clientId: string, docId: string) {
-    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_documents/${docId}`)
-    const obj = raw as Record<string, unknown>
+  async getPurchaseDocumentPayments(clientId: string, docId: string, knownIds?: number[]) {
+    let paymentIds: number[] = knownIds ?? []
 
-    let paymentIds: number[] = []
-    if (obj.data && typeof obj.data === 'object') {
-      const data = obj.data as Record<string, unknown>
-      const attrs = (data.attributes ?? data) as Record<string, unknown>
-      if (Array.isArray(attrs.payments_ids)) paymentIds = attrs.payments_ids as number[]
-    } else if (Array.isArray(obj.payments_ids)) {
-      paymentIds = obj.payments_ids as number[]
+    if (paymentIds.length === 0) {
+      const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_documents/${docId}`)
+      const obj = raw as Record<string, unknown>
+      if (obj.data && typeof obj.data === 'object') {
+        const data = obj.data as Record<string, unknown>
+        const attrs = (data.attributes ?? data) as Record<string, unknown>
+        if (Array.isArray(attrs.payments_ids)) paymentIds = attrs.payments_ids as number[]
+      } else if (Array.isArray(obj.payments_ids)) {
+        paymentIds = obj.payments_ids as number[]
+      }
     }
 
     if (paymentIds.length === 0) return []
