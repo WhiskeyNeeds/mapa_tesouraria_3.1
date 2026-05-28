@@ -71,14 +71,16 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
   // Legacy backend callback (kept for backwards compat)
   fastify.get('/toconline/callback', async (request, reply) => {
     const { code, state } = request.query as { code: string; state: string }
-    await svc.handleCallback(code, state, fastify.redis)
+    const clientId = await svc.handleCallback(code, state, fastify.redis)
+    void (fastify as any).tocScheduler?.registerClient(clientId)
     return reply.redirect(`${process.env.FRONTEND_URL}/definicoes?toconline=success`)
   })
 
   // Frontend-initiated callback: frontend sends code+state after the redirect
   fastify.post('/toconline/callback', async (request, reply) => {
     const { code, state } = request.body as { code: string; state: string }
-    await svc.handleCallback(code, state, fastify.redis)
+    const clientId = await svc.handleCallback(code, state, fastify.redis)
+    void (fastify as any).tocScheduler?.registerClient(clientId)
     return reply.status(204).send()
   })
 
@@ -280,5 +282,37 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     const { itemType } = request.query as { itemType?: string }
     await svc.deleteItemAnalytic(clientId, itemId, itemType ?? 'product')
     return reply.status(204).send()
+  })
+
+  fastify.get('/toconline/:clientId/entity-sub-docs', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { entityType, ids } = request.query as { entityType?: string; ids?: string }
+    if (!entityType || !ids) return reply.status(400).send({ error: 'entityType and ids required' })
+    const parsedIds = ids.split(',').map(Number).filter(n => Number.isFinite(n) && n > 0)
+    if (parsedIds.length === 0) return reply.send([])
+    return reply.send(await svc.getEntityAllSubDocs(clientId, parsedIds, entityType as 'customer' | 'supplier'))
+  })
+
+  // ── Raw proxy (exploração de API — apenas admins) ─────────────────────────
+  fastify.get('/toconline/:clientId/raw', { onRequest: [fastify.requireAdmin] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { path, ...rest } = request.query as { path: string; [k: string]: string }
+    if (!path) return reply.status(400).send({ error: 'query param "path" é obrigatório' })
+    const params = Object.keys(rest).length ? rest : undefined
+    const t0 = Date.now()
+    const data = await svc.rawGet(clientId, path, params)
+    return reply.send({ _meta: { durationMs: Date.now() - t0, path, params: params ?? {} }, data })
+  })
+
+  fastify.post('/toconline/:clientId/sync', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const result = await (fastify as any).tocScheduler.triggerSync(clientId)
+    return reply.send(result)
+  })
+
+  fastify.get('/toconline/:clientId/sync-status', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const states = await fastify.prisma.tocSyncState.findMany({ where: { clientId } })
+    return reply.send(states)
   })
 }

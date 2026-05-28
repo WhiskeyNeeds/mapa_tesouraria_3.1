@@ -77,7 +77,7 @@ export class ToconlineService {
     return `${cfg.oauthUrl}/auth?${params}`
   }
 
-  async handleCallback(code: string, state: string, redis: RedisClient): Promise<void> {
+  async handleCallback(code: string, state: string, redis: RedisClient): Promise<string> {
     const clientId = await redis.get(`${TOC_STATE_PREFIX}${state}`)
     if (!clientId) throw httpError(400, 'Invalid or expired OAuth state')
     await redis.del(`${TOC_STATE_PREFIX}${state}`)
@@ -113,6 +113,7 @@ export class ToconlineService {
       },
     })
     this.invalidateCache(clientId)
+    return clientId
   }
 
   async setTokensManually(clientId: string, data: {
