@@ -76,6 +76,28 @@ export class TreasuryRecurrencesService {
     const now = new Date()
     const horizon = new Date(Date.now() + horizonDays * 86400000)
 
+    // Backfill budgetId on existing children that inherit from a root with a budgetId
+    const payableRoots = await this.prisma.treasuryPayable.findMany({
+      where: { clientId, parentId: null, recurrenceId: { not: null }, budgetId: { not: null }, deletedAt: null },
+      select: { id: true, budgetId: true },
+    })
+    for (const root of payableRoots) {
+      await this.prisma.treasuryPayable.updateMany({
+        where: { clientId, parentId: root.id, budgetId: null, deletedAt: null },
+        data: { budgetId: root.budgetId },
+      })
+    }
+    const receivableRoots = await this.prisma.treasuryReceivable.findMany({
+      where: { clientId, parentId: null, recurrenceId: { not: null }, budgetId: { not: null }, deletedAt: null },
+      select: { id: true, budgetId: true },
+    })
+    for (const root of receivableRoots) {
+      await this.prisma.treasuryReceivable.updateMany({
+        where: { clientId, parentId: root.id, budgetId: null, deletedAt: null },
+        data: { budgetId: root.budgetId },
+      })
+    }
+
     const recurrences = await this.prisma.treasuryRecurrence.findMany({
       where: {
         clientId,
@@ -127,7 +149,7 @@ export class TreasuryRecurrencesService {
         // race past the existence check at the same time.
         if (isReceivable) {
           const exists = await this.prisma.treasuryReceivable.findFirst({
-            where: { recurrenceId: rec.id, dueDate: nextDate, deletedAt: null },
+            where: { recurrenceId: rec.id, dueDate: nextDate, deletedAt: null, parentId: { not: null } },
             select: { id: true },
           })
           if (!exists) {
@@ -149,6 +171,7 @@ export class TreasuryRecurrencesService {
                   currency: root.currency,
                   recurrenceId: rec.id,
                   parentId: root.id,
+                  ...(root.budgetId ? { budgetId: root.budgetId } : {}),
                 },
               })
               created++
@@ -159,7 +182,7 @@ export class TreasuryRecurrencesService {
         } else {
           const payRoot = rec.payables[0]
           const exists = await this.prisma.treasuryPayable.findFirst({
-            where: { recurrenceId: rec.id, dueDate: nextDate, deletedAt: null },
+            where: { recurrenceId: rec.id, dueDate: nextDate, deletedAt: null, parentId: { not: null } },
             select: { id: true },
           })
           if (!exists) {
@@ -181,6 +204,7 @@ export class TreasuryRecurrencesService {
                   currency: payRoot.currency,
                   recurrenceId: rec.id,
                   parentId: payRoot.id,
+                  ...(payRoot.budgetId ? { budgetId: payRoot.budgetId } : {}),
                 },
               })
               created++

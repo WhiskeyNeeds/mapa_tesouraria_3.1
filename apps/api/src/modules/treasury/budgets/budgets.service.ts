@@ -67,7 +67,7 @@ export class TreasuryBudgetsService {
     const totalAmount = Number(budget.totalAmount.toString())
     const progress = await this.computeProgress(budget.id, budget.type, totalAmount)
 
-    const docWhere = { budgetId: id, deletedAt: null }
+    const docWhere = { budgetId: id, deletedAt: null, NOT: { recurrenceId: { not: null as string | null }, parentId: null } }
     const docInclude = { category: { select: { id: true, name: true, color: true } } }
     const docOrder = [{ dueDate: 'asc' as const }]
 
@@ -84,9 +84,14 @@ export class TreasuryBudgetsService {
   }
 
   private async computeProgress(budgetId: string, type: TreasuryCategoryType, totalAmount: number): Promise<BudgetProgress> {
+    // Recurrence template roots (parentId=null, recurrenceId set) are excluded — only actual
+    // transaction instances (children) count. Old-style roots (pendingAmount>0) are still
+    // counted because they predate the template convention.
+    const excludeTemplates = { recurrenceId: { not: null as string | null }, parentId: null }
+
     if (type === 'REVENUE') {
       const docs = await this.prisma.treasuryReceivable.findMany({
-        where: { budgetId, deletedAt: null, status: { not: 'VOID' } },
+        where: { budgetId, deletedAt: null, status: { not: 'VOID' }, NOT: excludeTemplates },
         select: { receivedAmount: true, pendingAmount: true },
       })
       const paidAmount = docs.reduce((s, d) => s + Number(d.receivedAmount ?? 0), 0)
@@ -98,7 +103,7 @@ export class TreasuryBudgetsService {
     }
 
     const docs = await this.prisma.treasuryPayable.findMany({
-      where: { budgetId, deletedAt: null, status: { not: 'VOID' } },
+      where: { budgetId, deletedAt: null, status: { not: 'VOID' }, NOT: excludeTemplates },
       select: { paidAmount: true, pendingAmount: true },
     })
     const paidAmount = docs.reduce((s, d) => s + Number(d.paidAmount ?? 0), 0)

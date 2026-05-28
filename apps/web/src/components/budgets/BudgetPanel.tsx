@@ -6,10 +6,29 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { X, Pencil, Trash2, CheckCircle, MoveRight, XCircle, Plus } from 'lucide-react'
+import Modal from '@/components/ui/Modal'
+import DocDetailPanel from '@/components/treasury/DocDetailPanel'
 
 interface BudgetProgress { paidAmount: number; expectedAmount: number; availableAmount: number; totalAllocated: number; overrunAmount: number }
 interface Rule { id: string; textPattern: string | null; budget: { id: string; name: string }; category: { id: string; name: string; color: string | null } }
-interface Doc { id: string; entityName: string | null; description: string | null; dueDate: string; totalAmount: number; paidAmount?: number; receivedAmount?: number; pendingAmount: number; status: string; budgetAutoAssigned: boolean; category?: { id: string; name: string; color: string | null } | null }
+interface Doc {
+  id: string
+  entityName: string | null
+  entityNif: string | null
+  reference: string | null
+  description: string | null
+  documentDate: string | null
+  dueDate: string
+  promisedPaymentDate: string | null
+  totalAmount: number
+  paidAmount?: number
+  receivedAmount?: number
+  pendingAmount: number
+  status: string
+  origin: string
+  budgetAutoAssigned: boolean
+  category?: { id: string; name: string; color: string | null } | null
+}
 interface BudgetDetail {
   id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: string
   startDate: string; endDate: string; totalAmount: number; color: string | null
@@ -45,6 +64,7 @@ export default function BudgetPanel({
   const [showNewRule, setShowNewRule] = useState(false)
   const [movingDocId, setMovingDocId] = useState<string | null>(null)
   const [moveTargetBudgetId, setMoveTargetBudgetId] = useState('')
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
 
   const { data: budget, isLoading } = useQuery<BudgetDetail>({
     queryKey: ['budget-detail', selectedClientId, budgetId],
@@ -69,6 +89,12 @@ export default function BudgetPanel({
     qc.invalidateQueries({ queryKey: ['budgets', selectedClientId] })
   }
 
+  function patchDoc(docId: string, payload: Record<string, unknown>) {
+    const seg = budget!.type === 'REVENUE' ? 'receivables' : 'payables'
+    return api.patch(`/treasury/${selectedClientId}/${seg}/${docId}`, payload)
+  }
+
+  // --- mutations: rules ---
   const createRule = useMutation({
     mutationFn: () => api.post(`/treasury/${selectedClientId}/budget-rules`, {
       budgetId,
@@ -85,11 +111,7 @@ export default function BudgetPanel({
     onError: (e: Error) => toast.error(e.message),
   })
 
-  function patchDoc(docId: string, payload: Record<string, unknown>) {
-    const path = `/treasury/${selectedClientId}/${budget!.type === 'REVENUE' ? 'receivables' : 'payables'}/${docId}`
-    return api.patch(path, payload)
-  }
-
+  // --- mutations: review tab ---
   const confirmDoc = useMutation({
     mutationFn: (docId: string) => patchDoc(docId, { budgetAutoAssigned: false }),
     onSuccess: () => { invalidate(); toast.success('Transação confirmada') },
@@ -118,6 +140,7 @@ export default function BudgetPanel({
     onError: (e: Error) => toast.error(e.message),
   })
 
+
   if (isLoading || !budget) {
     return (
       <div className="w-[400px] border-l border-gray-200 bg-white flex items-center justify-center">
@@ -134,6 +157,7 @@ export default function BudgetPanel({
   const expectedPct = budget.totalAmount > 0 ? (progress.expectedAmount / budget.totalAmount) * 100 : 0
   const overrun = progress.availableAmount < 0
   const availableCategories = categories.filter((c) => c.type === budget.type)
+
 
   return (
     <div className="w-[420px] flex-shrink-0 border-l border-gray-200 bg-white flex flex-col h-full overflow-hidden">
@@ -195,7 +219,11 @@ export default function BudgetPanel({
             {budget.documents.length === 0 ? (
               <p className="text-xs text-gray-400 italic text-center py-8">Sem transações associadas a este budget.</p>
             ) : budget.documents.map((doc) => (
-              <div key={doc.id} className="border border-gray-200 rounded-lg p-3">
+              <button
+                key={doc.id}
+                onClick={() => setSelectedDocId(doc.id)}
+                className="w-full text-left border border-gray-200 rounded-lg p-3 hover:bg-gray-50 hover:border-gray-300 transition-colors cursor-pointer"
+              >
                 <div className="flex justify-between items-start">
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-gray-900 truncate">{doc.entityName ?? '—'}</p>
@@ -211,7 +239,7 @@ export default function BudgetPanel({
                     </span>
                   </div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -372,6 +400,25 @@ export default function BudgetPanel({
         )}
 
       </div>
+
+      {/* Modal de detalhe da transação */}
+      <Modal
+        open={selectedDocId !== null}
+        onClose={() => setSelectedDocId(null)}
+        title=""
+        size="sm"
+        hideHeader
+        noPadding
+      >
+        {selectedDocId && (
+          <DocDetailPanel
+            docId={selectedDocId}
+            docType={budget.type === 'EXPENSE' ? 'payable' : 'receivable'}
+            onClose={() => setSelectedDocId(null)}
+            onMutated={invalidate}
+          />
+        )}
+      </Modal>
     </div>
   )
 }
