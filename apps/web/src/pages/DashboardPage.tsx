@@ -379,6 +379,15 @@ function CashflowStatementTable() {
     //   Esperada = faturas em aberto OPEN/PARTIAL sem recorrência    → sólido c/ opacidade
     //   Forecast = faturas programadas (recurrenceId != null)         → opacidade + tracejado
     void _isFutureCol; void _isCurrentCol
+    // Formata o tick do eixo Y de forma compacta (ex: 12,5k / 1,2M) para caber
+    // numa largura reduzida e não roubar espaço às barras.
+    const compactNumber = (n: number): string => {
+      const abs = Math.abs(n)
+      const sign = n < 0 ? '-' : ''
+      if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toLocaleString('pt-PT', { maximumFractionDigits: 1 })}M €`
+      if (abs >= 1_000)     return `${sign}${(abs / 1_000).toLocaleString('pt-PT', { maximumFractionDigits: 1 })}k €`
+      return `${sign}${abs.toLocaleString('pt-PT', { maximumFractionDigits: 0 })} €`
+    }
     return (
       <tr>
         <td className="sticky left-0 bg-white z-10 px-5 align-middle border-b border-gray-100" style={{ minWidth: 220 }}>{chartLegend}</td>
@@ -386,7 +395,7 @@ function CashflowStatementTable() {
           <ResponsiveContainer width="100%" height={200}>
             <ComposedChart
               data={cData}
-              margin={{ left: 0, right: 0, top: 8, bottom: 0 }}
+              margin={{ left: 12, right: 12, top: 12, bottom: 0 }}
               barCategoryGap="22%"
             >
               <defs>
@@ -397,9 +406,15 @@ function CashflowStatementTable() {
                   <rect width="4" height="8" fill="#ef4444" />
                 </pattern>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
               <XAxis dataKey="label" hide />
-              <YAxis hide />
+              <YAxis
+                width={60}
+                tickFormatter={compactNumber}
+                tick={{ fontSize: 10, fill: '#9ca3af' }}
+                axisLine={false}
+                tickLine={false}
+              />
               <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} />
               {/* Entradas: 3 segmentos empilhados */}
               <Bar dataKey="incomeSettled"    stackId="income" name="Entradas (fechadas)"   fill="#10b981" fillOpacity={1}    maxBarSize={32} isAnimationActive={false} />
