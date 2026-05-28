@@ -221,6 +221,8 @@ model Client {
   treasuryBudgets             TreasuryBudget[]
   treasuryBudgetCategories    TreasuryBudgetCategory[]
   treasuryDunningRules        TreasuryDunningRule[]
+  treasuryDunningTracks       TreasuryDunningTrack[]
+  treasuryDunningTrackAssignments TreasuryDunningTrackAssignment[]
   productAnalytics            ProductAnalytic[]
 
   @@index([isActive])
@@ -861,13 +863,62 @@ model TreasuryBudget {
 
 // Categorias específicas para budgets — entidade independente das categorias de movimentos.
 // Aplica-se apenas a faturas (Receivables/Payables) que são imputadas a budgets.
+/// Régua de cobrança ("dunning track"): agrupa 1+ regras de cobrança
+/// com uma identidade própria. Clientes TOC são atribuídos a uma régua;
+/// quando o motor corre, usa apenas as regras dessa régua.
+///
+/// Cada tenant tem 1 régua marcada como `isDefault` que é usada quando o
+/// cliente TOC não tem atribuição explícita.
+model TreasuryDunningTrack {
+  id        String  @id @default(cuid())
+  clientId  String
+  name      String  @db.VarChar(120)
+  isActive  Boolean @default(true)
+  /// Quando true, é a régua usada para clientes TOC sem atribuição explícita.
+  /// Apenas 1 por tenant (regra mantida em código + index único parcial).
+  isDefault Boolean @default(false)
+  sortOrder Int     @default(100)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client      Client                           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  rules       TreasuryDunningRule[]
+  assignments TreasuryDunningTrackAssignment[]
+
+  @@unique([clientId, name])
+  @@index([clientId, isActive])
+  @@map("treasury_dunning_tracks")
+}
+
+/// Atribuição de um cliente TOC a uma régua. Many-to-1: cada (tenant,
+/// tocCustomerId) tem no máximo 1 régua; uma régua pode estar atribuída
+/// a vários clientes TOC.
+model TreasuryDunningTrackAssignment {
+  id            String @id @default(cuid())
+  clientId      String
+  tocCustomerId String
+  trackId       String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  track  TreasuryDunningTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, tocCustomerId])
+  @@index([trackId])
+  @@map("treasury_dunning_track_assignments")
+}
+
 /// Regra de cobrança / "dunning": define quando enviar um lembrete automático
 /// ao cliente com base na data prometida de pagamento da fatura
 /// (`promisedPaymentDate`). Faturas sem `promisedPaymentDate` não são elegíveis.
 ///
-/// Cada regra usa um único `emailTemplate` (1 tom de cada vez). Por defeito
-/// o tom é sugerido a partir de `offsetDays` (antes → amigável, no dia →
-/// formal, depois → firme).
+/// Cada regra pertence a uma `TreasuryDunningTrack` (régua). Usa um único
+/// `emailTemplate` (1 tom de cada vez). Por defeito o tom é sugerido a partir
+/// de `offsetDays` (antes → amigável, no dia → formal, depois → firme).
 ///
 /// offsetDays é o número de dias relativos a `promisedPaymentDate`:
 ///   -7 → enviar 7 dias antes da data de pagamento
@@ -876,6 +927,7 @@ model TreasuryBudget {
 model TreasuryDunningRule {
   id              String                    @id @default(cuid())
   clientId        String
+  trackId         String
   name            String                    @db.VarChar(120)
   offsetDays      Int
   direction       TreasuryFollowupDirection @default(RECEIVABLE)
@@ -897,10 +949,12 @@ model TreasuryDunningRule {
   deletedAt DateTime?
 
   client        Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  track         TreasuryDunningTrack      @relation(fields: [trackId], references: [id], onDelete: Cascade)
   emailTemplate TreasuryEmailTemplate?    @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
   category      TreasuryCategory?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   executions    TreasuryDunningExecution[]
 
+  @@index([trackId, isActive, offsetDays])
   @@index([clientId, isActive, offsetDays])
   @@index([clientId, direction])
   @@map("treasury_dunning_rules")

@@ -6,7 +6,7 @@ import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
 import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
-import DunningRulesTab from '@/components/settings/DunningRulesTab'
+import DunningTracksTab from '@/components/settings/DunningTracksTab'
 import BudgetCategoriesTab from '@/components/settings/BudgetCategoriesTab'
 
 interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean; usageCount: number }
@@ -282,7 +282,7 @@ export default function SettingsPage() {
   const tabs = [
     { id: 'categories', label: 'Categorias' },
     { id: 'rules', label: 'Regras de Classificação' },
-    { id: 'dunning', label: 'Regras de Cobrança' },
+    { id: 'dunning', label: 'Réguas de Cobrança' },
     { id: 'settings', label: 'Configurações' },
     { id: 'toconline', label: 'TOConline' },
   ] as const
@@ -687,7 +687,7 @@ export default function SettingsPage() {
       )}
 
       {tab === 'dunning' && selectedClientId && (
-        <DunningRulesTab clientId={selectedClientId} />
+        <DunningTracksTab clientId={selectedClientId} />
       )}
 
       {tab === 'toconline' && (

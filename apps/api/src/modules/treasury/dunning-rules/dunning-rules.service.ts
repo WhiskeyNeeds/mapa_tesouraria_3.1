@@ -4,6 +4,7 @@ import type { FollowupsService } from '../followups/followups.service.js'
 import type { ToconlineService } from '../../toconline/toconline.service.js'
 
 export interface DunningRuleInput {
+  trackId: string
   name: string
   offsetDays: number
   direction?: TreasuryFollowupDirection
@@ -22,9 +23,13 @@ export class TreasuryDunningRulesService {
     private toconline?: ToconlineService,
   ) {}
 
-  async list(clientId: string) {
+  async list(clientId: string, filters: { trackId?: string } = {}) {
     return this.prisma.treasuryDunningRule.findMany({
-      where: { clientId, deletedAt: null },
+      where: {
+        clientId,
+        deletedAt: null,
+        ...(filters.trackId ? { trackId: filters.trackId } : {}),
+      },
       include: {
         emailTemplate: { select: { id: true, name: true, scope: true } },
         category: { select: { id: true, name: true, color: true, type: true } },
@@ -41,17 +46,28 @@ export class TreasuryDunningRulesService {
     if (!tpl) throw httpError(404, 'Template de email não encontrado')
   }
 
+  private async assertTrackOwnership(clientId: string, trackId: string) {
+    const t = await this.prisma.treasuryDunningTrack.findFirst({
+      where: { id: trackId, clientId, deletedAt: null },
+      select: { id: true },
+    })
+    if (!t) throw httpError(404, 'Régua não encontrada')
+  }
+
   async create(clientId: string, data: DunningRuleInput) {
+    if (!data.trackId) throw httpError(400, 'Régua (trackId) é obrigatória')
     if (!data.name?.trim()) throw httpError(400, 'Nome é obrigatório')
     if (typeof data.offsetDays !== 'number' || !Number.isFinite(data.offsetDays)) {
       throw httpError(400, 'Offset de dias inválido')
     }
     if (!data.emailTemplateId) throw httpError(400, 'Template de email é obrigatório')
+    await this.assertTrackOwnership(clientId, data.trackId)
     await this.assertTemplateOwnership(clientId, data.emailTemplateId)
 
     return this.prisma.treasuryDunningRule.create({
       data: {
         clientId,
+        trackId: data.trackId,
         name: data.name.trim(),
         offsetDays: Math.trunc(data.offsetDays),
         direction: data.direction ?? 'RECEIVABLE',
@@ -94,6 +110,11 @@ export class TreasuryDunningRulesService {
       updateData.emailTemplate = { connect: { id: data.emailTemplateId } }
     }
 
+    if (data.trackId !== undefined && data.trackId !== rule.trackId) {
+      await this.assertTrackOwnership(clientId, data.trackId)
+      updateData.track = { connect: { id: data.trackId } }
+    }
+
     return this.prisma.treasuryDunningRule.update({ where: { id }, data: updateData })
   }
 
@@ -108,16 +129,51 @@ export class TreasuryDunningRulesService {
    * `promisedPaymentDate` (faturas sem data prometida são ignoradas).
    * Usa o template único associado à regra. Idempotente por
    * `(ruleId, receivableId)`.
+   *
+   * `opts.trackIds`: se fornecido, restringe a execução às regras das réguas
+   * cujos ids constam da lista. Se vazio ou undefined, corre todas as ativas.
    */
-  async execute(clientId: string, opts: { now?: Date } = {}) {
+  async execute(clientId: string, opts: { now?: Date; trackIds?: string[] } = {}) {
     const now = opts.now ?? new Date()
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
 
+    const trackFilter = opts.trackIds && opts.trackIds.length > 0
+      ? { trackId: { in: opts.trackIds } }
+      : {}
+
+    // Só corre regras cujas réguas estão ativas.
     const rules = await this.prisma.treasuryDunningRule.findMany({
-      where: { clientId, deletedAt: null, isActive: true },
-      include: { emailTemplate: true },
+      where: {
+        clientId,
+        deletedAt: null,
+        isActive: true,
+        track: { isActive: true, deletedAt: null },
+        ...trackFilter,
+      },
+      include: { emailTemplate: true, track: { select: { id: true, name: true, isDefault: true } } },
       orderBy: [{ sortOrder: 'asc' }, { offsetDays: 'asc' }],
     })
+
+    // Mapa de atribuição (cliente TOC → trackId) + track default do tenant.
+    // Permite resolver, para cada receivable, qual a régua aplicável.
+    const assignments = await this.prisma.treasuryDunningTrackAssignment.findMany({
+      where: { clientId },
+      select: { tocCustomerId: true, trackId: true },
+    })
+    const assignmentMap = new Map(assignments.map((a) => [a.tocCustomerId, a.trackId]))
+
+    const defaultTrack = await this.prisma.treasuryDunningTrack.findFirst({
+      where: { clientId, deletedAt: null, isDefault: true, isActive: true },
+      select: { id: true },
+    })
+    const defaultTrackId = defaultTrack?.id ?? null
+
+    function trackForCustomer(tocCustomerId: string | null): string | null {
+      if (tocCustomerId && assignmentMap.has(tocCustomerId)) {
+        return assignmentMap.get(tocCustomerId) ?? null
+      }
+      return defaultTrackId
+    }
 
     let totalSent = 0
     let totalSkipped = 0
@@ -125,6 +181,8 @@ export class TreasuryDunningRulesService {
     const ruleResults: Array<{
       ruleId: string
       ruleName: string
+      trackId: string
+      trackName: string
       offsetDays: number
       templateName: string | null
       reason?: 'NO_TEMPLATE' | 'PAYABLE_NOT_SUPPORTED'
@@ -154,6 +212,8 @@ export class TreasuryDunningRulesService {
       const ruleSummary = {
         ruleId: rule.id,
         ruleName: rule.name,
+        trackId: rule.trackId,
+        trackName: rule.track.name,
         offsetDays: rule.offsetDays,
         templateName: rule.emailTemplate?.name ?? null,
         eligibleCount: 0,
@@ -188,10 +248,13 @@ export class TreasuryDunningRulesService {
         ...(rule.categoryId ? { categoryId: rule.categoryId } : {}),
       } as const
 
-      const invoices = await this.prisma.treasuryReceivable.findMany({
+      const allInvoices = await this.prisma.treasuryReceivable.findMany({
         where: baseFilter,
         select: { id: true, reference: true, entityName: true, totalAmount: true, promisedPaymentDate: true, pendingAmount: true, tocCustomerId: true },
       })
+      // Só conta como elegível se a régua aplicável ao receivable for a desta regra.
+      // Se o cliente TOC não tem atribuição, cai na régua default (resolvido por trackForCustomer).
+      const invoices = allInvoices.filter((inv) => trackForCustomer(inv.tocCustomerId) === rule.trackId)
       ruleSummary.eligibleCount = invoices.length
 
       for (const inv of invoices) {
