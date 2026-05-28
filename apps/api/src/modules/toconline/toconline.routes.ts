@@ -124,6 +124,13 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.status(201).send(await svc.createSalesDocument(clientId, request.body))
   })
 
+  fastify.get('/toconline/:clientId/entity-payment-timing', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { entityType, tocEntityId } = request.query as { entityType?: string; tocEntityId?: string }
+    if (!entityType || !tocEntityId) return reply.status(400).send({ error: 'entityType and tocEntityId required' })
+    return reply.send(await svc.getEntityPaymentTiming(clientId, entityType as 'customer' | 'supplier', tocEntityId))
+  })
+
   fastify.get('/toconline/:clientId/countries', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     return reply.send(await svc.getCountries(clientId))
