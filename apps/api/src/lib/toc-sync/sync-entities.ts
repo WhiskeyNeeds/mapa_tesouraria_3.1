@@ -21,7 +21,7 @@ function intArr(v: unknown): number[] {
 export function extractCustomerFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     name: str(item.name) ?? '',
     nif: str(item.fiscal_id) ?? str(item.nif),
     email: str(item.email),
@@ -34,7 +34,7 @@ export function extractCustomerFields(clientId: string, item: Raw) {
 export function extractSupplierFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     name: str(item.name) ?? '',
     nif: str(item.fiscal_id) ?? str(item.nif),
     email: str(item.email),
@@ -47,7 +47,7 @@ export function extractSupplierFields(clientId: string, item: Raw) {
 export function extractProductFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     name: str(item.name) ?? '',
     unitPrice: num(item.price) ?? num(item.unit_price),
     taxRate: num(item.tax_rate),
@@ -59,7 +59,7 @@ export function extractProductFields(clientId: string, item: Raw) {
 export function extractServiceFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     name: str(item.name) ?? '',
     unitPrice: num(item.price) ?? num(item.unit_price),
     taxRate: num(item.tax_rate),
@@ -71,7 +71,7 @@ export function extractServiceFields(clientId: string, item: Raw) {
 export function extractSalesDocFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     customerId: num(item.customer_id) !== null ? Math.round(num(item.customer_id)!) : null,
     date: str(item.date),
     dueDate: str(item.due_date),
@@ -87,7 +87,7 @@ export function extractSalesDocFields(clientId: string, item: Raw) {
 export function extractPurchaseDocFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     supplierId: num(item.supplier_id) !== null ? Math.round(num(item.supplier_id)!) : null,
     date: str(item.date),
     dueDate: str(item.due_date),
@@ -103,7 +103,7 @@ export function extractPurchaseDocFields(clientId: string, item: Raw) {
 export function extractSalesReceiptFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     customerId: num(item.customer_id) !== null ? Math.round(num(item.customer_id)!) : null,
     date: str(item.date),
     grossTotal: num(item.gross_total),
@@ -115,7 +115,7 @@ export function extractSalesReceiptFields(clientId: string, item: Raw) {
 export function extractPurchasePaymentFields(clientId: string, item: Raw) {
   return {
     clientId,
-    tocId: Number(item.id),
+    tocId: num(item.id) ?? 0,
     supplierId: num(item.supplier_id) !== null ? Math.round(num(item.supplier_id)!) : null,
     date: str(item.date),
     grossTotal: num(item.gross_total),
