@@ -27,7 +27,6 @@ import { followupsRoutes } from './modules/treasury/followups/followups.routes.j
 import { budgetsRoutes } from './modules/treasury/budgets/budgets.routes.js'
 import { budgetRulesRoutes } from './modules/treasury/budget-rules/budget-rules.routes.js'
 import { entityConfigsRoutes } from './modules/treasury/entity-configs/entity-configs.routes.js'
-import { budgetCategoriesRoutes } from './modules/treasury/budget-categories/budget-categories.routes.js'
 import { dunningRulesRoutes } from './modules/treasury/dunning-rules/dunning-rules.routes.js'
 import { HttpError } from './lib/errors.js'
 import { TocScheduler } from './lib/toc-sync/scheduler.js'
@@ -91,7 +90,6 @@ await fastify.register(followupsRoutes, { prefix: V1 })
 await fastify.register(budgetsRoutes, { prefix: V1 })
 await fastify.register(budgetRulesRoutes, { prefix: V1 })
 await fastify.register(entityConfigsRoutes, { prefix: V1 })
-await fastify.register(budgetCategoriesRoutes, { prefix: V1 })
 await fastify.register(dunningRulesRoutes, { prefix: V1 })
 
 fastify.get('/health', () => ({ status: 'ok', ts: new Date().toISOString() }))
