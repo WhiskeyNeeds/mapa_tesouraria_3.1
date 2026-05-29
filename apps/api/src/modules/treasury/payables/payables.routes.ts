@@ -23,13 +23,13 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as {
       status?: string; origin?: TreasuryDocOrigin; categoryId?: string
-      entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string
+      entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string; paymentDateFrom?: string; paymentDateTo?: string
       isRecurrent?: string; overdue?: string; tocSupplierId?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
     const statusValue = q.status?.includes(',')
       ? (q.status.split(',') as TreasuryDocStatus[])
       : (q.status as TreasuryDocStatus | undefined)
-    const validSortBy = ['dueDate', 'totalAmount', 'pendingAmount', 'entityName'].includes(q.sortBy ?? '') ? q.sortBy as 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' : undefined
+    const validSortBy = ['dueDate', 'totalAmount', 'pendingAmount', 'entityName', 'reference', 'promisedPaymentDate', 'status'].includes(q.sortBy ?? '') ? q.sortBy as 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status' : undefined
     const validSortDir = q.sortDir === 'asc' || q.sortDir === 'desc' ? q.sortDir : undefined
     return reply.send(await svc.list(clientId, {
       ...q,

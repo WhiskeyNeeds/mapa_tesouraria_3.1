@@ -84,10 +84,12 @@ export class TreasuryPayablesService {
     dueDateTo?: string
     docDateFrom?: string
     docDateTo?: string
+    paymentDateFrom?: string
+    paymentDateTo?: string
     isRecurrent?: boolean
     overdue?: boolean
     tocSupplierId?: string
-    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'
+    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
@@ -97,7 +99,7 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusList: TreasuryDocStatus[] | undefined = overdue
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -126,6 +128,12 @@ export class TreasuryPayablesService {
         documentDate: {
           ...(docDateFrom ? { gte: new Date(docDateFrom) } : {}),
           ...(docDateTo ? { lt: new Date(new Date(docDateTo).getTime() + 86400000) } : {}),
+        },
+      } : {}),
+      ...(paymentDateFrom || paymentDateTo ? {
+        promisedPaymentDate: {
+          ...(paymentDateFrom ? { gte: new Date(paymentDateFrom) } : {}),
+          ...(paymentDateTo ? { lt: new Date(new Date(paymentDateTo).getTime() + 86400000) } : {}),
         },
       } : {}),
       ...(isRecurrent !== undefined ? { recurrenceId: isRecurrent ? { not: null } : null } : {}),
@@ -193,10 +201,10 @@ export class TreasuryPayablesService {
       ...tocMapped,
     ]
 
-    const sortKey: keyof Pick<PayableListItem, 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'> = sortBy
+    const sortKey = sortBy as string
     allItems.sort((a, b) => {
-      const va = a[sortKey] as Date | number | string | null
-      const vb = b[sortKey] as Date | number | string | null
+      const va = a[sortKey] as Date | number | string | null | undefined
+      const vb = b[sortKey] as Date | number | string | null | undefined
       if (va == null && vb == null) return 0
       if (va == null) return sortDir === 'asc' ? 1 : -1
       if (vb == null) return sortDir === 'asc' ? -1 : 1
@@ -893,14 +901,22 @@ export class TreasuryPayablesService {
 
   async getKpis(clientId: string) {
     const now = new Date()
+    // "Abertas": emitted but not settled. Excludes recurrence templates (parentless
+    // with recurrenceId) and future recurrence instances (dueDate > now).
+    const abertasClause: Prisma.TreasuryPayableWhereInput = {
+      OR: [
+        { recurrenceId: null },
+        { AND: [{ parentId: { not: null } }, { dueDate: { lte: now } }] },
+      ],
+    }
     const [totalOpen, overdue, paidMonth] = await Promise.all([
       this.prisma.treasuryPayable.aggregate({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, ...abertasClause },
         _sum: { pendingAmount: true },
         _count: true,
       }),
       this.prisma.treasuryPayable.count({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now }, ...abertasClause },
       }),
       this.prisma.treasuryPayable.aggregate({
         where: { clientId, deletedAt: null, status: 'SETTLED', updatedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
@@ -912,15 +928,15 @@ export class TreasuryPayablesService {
       const from = i === 0 ? new Date(0) : new Date(Date.now() - days * 86400000)
       const to = new Date(Date.now() - (i === 0 ? 0 : (i === 1 ? 31 : (i === 2 ? 61 : 91))) * 86400000)
       return this.prisma.treasuryPayable.count({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now, gte: from, lte: to } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now, gte: from, lte: to }, ...abertasClause },
       })
     }))
 
     return {
-      totalPending: Number(totalOpen._sum.pendingAmount ?? 0),
+      totalPending: Number(totalOpen._sum?.pendingAmount ?? 0),
       countOpen: totalOpen._count,
       countOverdue: overdue,
-      paidThisMonth: Number(paidMonth._sum.totalAmount ?? 0),
+      paidThisMonth: Number(paidMonth._sum?.totalAmount ?? 0),
       aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
     }
   }
