@@ -343,32 +343,68 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
 
   fastify.get('/toconline/:clientId/customer-stats', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const rows = await fastify.prisma.treasuryReceivable.groupBy({
+
+    // Faturas TOConline em aberto (pendingTotal > 0, não anuladas)
+    const tocRows = await fastify.prisma.tocSalesDocument.groupBy({
+      by: ['customerId'],
+      where: { clientId, pendingTotal: { gt: 0 }, NOT: { status: 4 }, customerId: { not: null } },
+      _count: { id: true },
+      _sum: { pendingTotal: true },
+    })
+
+    // Faturas criadas localmente na tesouraria (origin = LOCAL)
+    const localRows = await fastify.prisma.treasuryReceivable.groupBy({
       by: ['tocCustomerId'],
-      where: { clientId, status: { notIn: ['SETTLED', 'VOID'] }, tocCustomerId: { not: null } },
+      where: { clientId, origin: 'LOCAL', status: { notIn: ['SETTLED', 'VOID'] }, tocCustomerId: { not: null } },
       _count: { id: true },
       _sum: { pendingAmount: true },
     })
-    return reply.send(rows.map(r => ({
-      tocId: Number(r.tocCustomerId),
-      openCount: r._count.id,
-      pendingAmount: Number(r._sum.pendingAmount ?? 0),
-    })))
+
+    const map = new Map<number, { openCount: number; pendingAmount: number }>()
+    for (const r of tocRows) {
+      const id = r.customerId!
+      map.set(id, { openCount: r._count.id, pendingAmount: Number(r._sum.pendingTotal ?? 0) })
+    }
+    for (const r of localRows) {
+      const id = Number(r.tocCustomerId!)
+      const cur = map.get(id) ?? { openCount: 0, pendingAmount: 0 }
+      map.set(id, { openCount: cur.openCount + r._count.id, pendingAmount: cur.pendingAmount + Number(r._sum.pendingAmount ?? 0) })
+    }
+
+    return reply.send([...map.entries()].map(([tocId, s]) => ({ tocId, ...s })))
   })
 
   fastify.get('/toconline/:clientId/supplier-stats', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const rows = await fastify.prisma.treasuryPayable.groupBy({
+
+    // Faturas TOConline em aberto
+    const tocRows = await fastify.prisma.tocPurchaseDocument.groupBy({
+      by: ['supplierId'],
+      where: { clientId, pendingTotal: { gt: 0 }, NOT: { status: 4 }, supplierId: { not: null } },
+      _count: { id: true },
+      _sum: { pendingTotal: true },
+    })
+
+    // Faturas criadas localmente
+    const localRows = await fastify.prisma.treasuryPayable.groupBy({
       by: ['tocSupplierId'],
-      where: { clientId, status: { notIn: ['SETTLED', 'VOID'] }, tocSupplierId: { not: null } },
+      where: { clientId, origin: 'LOCAL', status: { notIn: ['SETTLED', 'VOID'] }, tocSupplierId: { not: null } },
       _count: { id: true },
       _sum: { pendingAmount: true },
     })
-    return reply.send(rows.map(r => ({
-      tocId: Number(r.tocSupplierId),
-      openCount: r._count.id,
-      pendingAmount: Number(r._sum.pendingAmount ?? 0),
-    })))
+
+    const map = new Map<number, { openCount: number; pendingAmount: number }>()
+    for (const r of tocRows) {
+      const id = r.supplierId!
+      map.set(id, { openCount: r._count.id, pendingAmount: Number(r._sum.pendingTotal ?? 0) })
+    }
+    for (const r of localRows) {
+      const id = Number(r.tocSupplierId!)
+      const cur = map.get(id) ?? { openCount: 0, pendingAmount: 0 }
+      map.set(id, { openCount: cur.openCount + r._count.id, pendingAmount: cur.pendingAmount + Number(r._sum.pendingAmount ?? 0) })
+    }
+
+    return reply.send([...map.entries()].map(([tocId, s]) => ({ tocId, ...s })))
   })
 
   fastify.post('/toconline/:clientId/sync', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
