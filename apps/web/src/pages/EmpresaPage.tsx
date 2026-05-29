@@ -90,7 +90,6 @@ const COLUMNS: Record<Tab, ColDef[]> = {
     { header: 'Faturas em aberto', keys: [], headerClassName: 'text-right', special: 'stat-open'    as const },
     { header: 'Valor em dívida',   keys: [], headerClassName: 'text-right', special: 'stat-pending' as const },
     { header: 'Ativo',             keys: [], headerClassName: 'text-center', special: 'stat-active'  as const },
-    { header: '',                  keys: [],                          special: 'nova-conta'   as const },
   ],
   fornecedores: [
     { header: 'NIF',               keys: ['tax_registration_number'], sortKey: 'tax_registration_number', className: 'font-mono text-xs' },
@@ -98,7 +97,6 @@ const COLUMNS: Record<Tab, ColDef[]> = {
     { header: 'Faturas em aberto', keys: [], headerClassName: 'text-right', special: 'stat-open'    as const },
     { header: 'Valor em dívida',   keys: [], headerClassName: 'text-right', special: 'stat-pending' as const },
     { header: 'Ativo',             keys: [], headerClassName: 'text-center', special: 'stat-active'  as const },
-    { header: '',                  keys: [],                          special: 'nova-conta'   as const },
   ],
   produtos: [
     { header: 'Código',               keys: ['item_code'],                sortKey: 'item_code',            className: 'font-mono text-xs text-gray-500' },
