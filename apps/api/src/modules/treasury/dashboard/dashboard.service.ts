@@ -1,158 +1,12 @@
 import type { PrismaClient } from '@prisma/client'
 import { resolveAccountBalance } from '../bank-accounts/balance.js'
 import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
-import { ToconlineService } from '../../toconline/toconline.service.js'
 
 export class TreasuryDashboardService {
   private recurrencesSvc: TreasuryRecurrencesService
-  private toconline: ToconlineService
 
   constructor(private prisma: PrismaClient) {
     this.recurrencesSvc = new TreasuryRecurrencesService(prisma)
-    this.toconline = new ToconlineService(prisma)
-  }
-
-  /**
-   * Sincroniza faturas TOC para a BD local dentro de uma janela temporal.
-   * Idempotente: usa `tocSalesDocId` / `tocPurchasesDocId` como chave para
-   * evitar duplicados. Silenciosamente falha se o TOC estiver inacessível
-   * (degraded mode — dashboard usa só os dados locais existentes).
-   */
-  private async autoImportTocDocs(clientId: string, start: Date, end: Date) {
-    const adminId = (await this.prisma.user.findFirst({
-      where: { userRoles: { some: { role: { name: 'ADMIN' } } } },
-      select: { id: true },
-    }))?.id ?? ''
-
-    const ACTIVE_STATUS = new Set([1, 2, 5])  // 1=emitido, 2=parcial, 5=vencido
-    const INVOICE_TYPES_SALES = new Set(['ft', 'fs', 'fr'])
-    const INVOICE_TYPES_PURCH = new Set(['fc', 'dsp'])
-    type TocDoc = Record<string, unknown> & {
-      id?: string | number; document_no?: string; document_type?: string
-      status?: number; date?: string; due_date?: string
-      gross_total?: number; pending_total?: number
-      customer_id?: string | number; customer_business_name?: string; customer_tax_registration_number?: string
-      supplier_id?: string | number; supplier_business_name?: string; supplier_tax_registration_number?: string
-      currency_iso_code?: string; notes?: string
-    }
-
-    // ── Sales (receivables) ─────────────────────────────────────────────
-    try {
-      const raw = await this.toconline.getSalesDocuments(clientId)
-      const tocDocs = (Array.isArray(raw) ? raw : []) as TocDoc[]
-      const eligible = tocDocs.filter((d) => {
-        if (!ACTIVE_STATUS.has(Number(d.status))) return false
-        const t = String(d.document_type ?? '').toLowerCase()
-        if (!INVOICE_TYPES_SALES.has(t)) return false
-        if (!d.due_date) return false
-        const due = new Date(d.due_date)
-        return due >= start && due <= end
-      })
-      if (eligible.length > 0) {
-        const tocIds = eligible.map((d) => String(d.id))
-        const existing = await this.prisma.treasuryReceivable.findMany({
-          where: { clientId, tocSalesDocId: { in: tocIds }, deletedAt: null },
-          select: { tocSalesDocId: true },
-        })
-        const existingIds = new Set(existing.map((r) => r.tocSalesDocId))
-        for (const d of eligible) {
-          if (existingIds.has(String(d.id))) continue
-          try {
-            const dueDate = new Date(d.due_date as string)
-            const docDate = d.date ? new Date(d.date as string) : dueDate
-            const gross = Number(d.gross_total ?? 0)
-            const pending = Number(d.pending_total ?? gross)
-            const received = Math.max(0, gross - pending)
-            const status = Number(d.status) === 2 ? 'PARTIAL' : 'OPEN'
-            await this.prisma.treasuryReceivable.create({
-              data: {
-                clientId,
-                createdById: adminId,
-                entityName: (d.customer_business_name as string) ?? null,
-                entityNif: (d.customer_tax_registration_number as string) ?? null,
-                tocCustomerId: d.customer_id != null ? String(d.customer_id) : null,
-                tocSalesDocId: String(d.id),
-                reference: (d.document_no as string) ?? null,
-                description: (d.notes as string) ?? null,
-                documentDate: docDate,
-                dueDate,
-                promisedPaymentDate: dueDate,
-                totalAmount: gross,
-                pendingAmount: pending,
-                receivedAmount: received,
-                currency: (d.currency_iso_code as string) ?? 'EUR',
-                status,
-                origin: 'TOCONLINE',
-                tocSyncedAt: new Date(),
-              },
-            })
-          } catch (err) {
-            console.error('[Dashboard] auto-import receivable falhou para', d.id, err)
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[Dashboard] auto-import sales: TOC inacessível:', err)
-    }
-
-    // ── Purchases (payables) ────────────────────────────────────────────
-    try {
-      const raw = await this.toconline.getPurchaseDocuments(clientId)
-      const tocDocs = (Array.isArray(raw) ? raw : []) as TocDoc[]
-      const eligible = tocDocs.filter((d) => {
-        if (!ACTIVE_STATUS.has(Number(d.status))) return false
-        const t = String(d.document_type ?? '').toLowerCase()
-        if (!INVOICE_TYPES_PURCH.has(t)) return false
-        if (!d.due_date) return false
-        const due = new Date(d.due_date)
-        return due >= start && due <= end
-      })
-      if (eligible.length > 0) {
-        const tocIds = eligible.map((d) => String(d.id))
-        const existing = await this.prisma.treasuryPayable.findMany({
-          where: { clientId, tocPurchasesDocId: { in: tocIds }, deletedAt: null },
-          select: { tocPurchasesDocId: true },
-        })
-        const existingIds = new Set(existing.map((p) => p.tocPurchasesDocId))
-        for (const d of eligible) {
-          if (existingIds.has(String(d.id))) continue
-          try {
-            const dueDate = new Date(d.due_date as string)
-            const docDate = d.date ? new Date(d.date as string) : dueDate
-            const gross = Number(d.gross_total ?? 0)
-            const pending = Number(d.pending_total ?? gross)
-            const paid = Math.max(0, gross - pending)
-            const status = Number(d.status) === 2 ? 'PARTIAL' : 'OPEN'
-            await this.prisma.treasuryPayable.create({
-              data: {
-                clientId,
-                createdById: adminId,
-                entityName: (d.supplier_business_name as string) ?? null,
-                entityNif: (d.supplier_tax_registration_number as string) ?? null,
-                tocSupplierId: d.supplier_id != null ? String(d.supplier_id) : null,
-                tocPurchasesDocId: String(d.id),
-                reference: (d.document_no as string) ?? null,
-                description: (d.notes as string) ?? null,
-                documentDate: docDate,
-                dueDate,
-                promisedPaymentDate: dueDate,
-                totalAmount: gross,
-                pendingAmount: pending,
-                paidAmount: paid,
-                currency: (d.currency_iso_code as string) ?? 'EUR',
-                status,
-                origin: 'TOCONLINE',
-                tocSyncedAt: new Date(),
-              },
-            })
-          } catch (err) {
-            console.error('[Dashboard] auto-import payable falhou para', d.id, err)
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[Dashboard] auto-import purchases: TOC inacessível:', err)
-    }
   }
 
   private async fetchAccountBalances(clientId: string): Promise<Map<string, number>> {
@@ -448,13 +302,14 @@ export class TreasuryDashboardService {
       await this.recurrencesSvc.processForClient(clientId, Math.min(horizonDays, 365))
     }
 
-    // Auto-import: traz para local quaisquer faturas TOC (sales+purchases)
-    // dentro da janela do ano que ainda não estão em local. Idempotente.
-    // Garante que o chart cobre tudo o que existe no TOC, sem precisar do
-    // import manual em Documentos de Venda/Compra.
-    await this.autoImportTocDocs(clientId, start, end)
+    // Lê faturas TOC pendentes diretamente das tabelas espelho locais
+    // (sincronizadas em background pelo TocScheduler a cada 5 min).
+    // Antes fazia 2 pedidos HTTP ao TOC no caminho crítico — agora é só BD.
+    const startStr = start.toISOString().slice(0, 10)
+    const endStr = end.toISOString().slice(0, 10)
+    const ACTIVE_TOC_STATUS = [1, 2, 5]  // 1=emitido, 2=parcial, 5=vencido
 
-    const [movements, categories, bankAccounts] = await Promise.all([
+    const [movements, categories, bankAccounts, tocSalesPending, tocPurchPending] = await Promise.all([
       this.prisma.treasuryBankMovement.findMany({
         where: { clientId, deletedAt: null, date: { gte: start, lte: end } },
         select: { date: true, amount: true, categoryId: true },
@@ -467,6 +322,14 @@ export class TreasuryDashboardService {
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
         select: { id: true },
+      }),
+      this.prisma.tocSalesDocument.findMany({
+        where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: { gte: startStr, lte: endStr } },
+        select: { tocId: true, dueDate: true, pendingTotal: true, grossTotal: true, raw: true },
+      }),
+      this.prisma.tocPurchaseDocument.findMany({
+        where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: { gte: startStr, lte: endStr } },
+        select: { tocId: true, dueDate: true, pendingTotal: true, grossTotal: true, raw: true },
       }),
     ])
 
@@ -507,13 +370,19 @@ export class TreasuryDashboardService {
     const [pendingRec, pendingPay] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
         where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true },
+        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocSalesDocId: true },
       }),
       this.prisma.treasuryPayable.findMany({
         where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true },
+        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocPurchasesDocId: true },
       }),
     ])
+
+    // tocIds que já existem como treasuryReceivable/Payable — evita
+    // double-count quando o doc TOC também foi importado para local.
+    const importedSalesTocIds = new Set(pendingRec.map(r => r.tocSalesDocId).filter((s): s is string => !!s))
+    const importedPurchTocIds = new Set(pendingPay.map(p => p.tocPurchasesDocId).filter((s): s is string => !!s))
+
     for (const r of pendingRec) {
       if (r.dueDate.getFullYear() !== year) continue
       const idx = r.dueDate.getMonth()
@@ -527,6 +396,34 @@ export class TreasuryDashboardService {
       const amt = Number(p.pendingAmount)
       if (p.recurrenceId) monthlyProgrammedExpense[idx] += amt
       else monthlyOpenExpense[idx] += amt
+    }
+
+    // Faturas TOC sincronizadas que ainda não foram importadas como
+    // receivable/payable — contam como "open" (não têm recorrência). Filtra
+    // pelos tipos elegíveis (raw.document_type) tal como o auto-import fazia.
+    const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
+    const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
+    for (const d of tocSalesPending) {
+      if (importedSalesTocIds.has(String(d.tocId))) continue
+      const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (!SALES_INVOICE_TYPES.has(docType)) continue
+      if (!d.dueDate) continue
+      const due = new Date(d.dueDate)
+      if (due.getFullYear() !== year) continue
+      const amt = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (amt <= 0) continue
+      monthlyOpenIncome[due.getMonth()] += amt
+    }
+    for (const d of tocPurchPending) {
+      if (importedPurchTocIds.has(String(d.tocId))) continue
+      const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (!PURCH_INVOICE_TYPES.has(docType)) continue
+      if (!d.dueDate) continue
+      const due = new Date(d.dueDate)
+      if (due.getFullYear() !== year) continue
+      const amt = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (amt <= 0) continue
+      monthlyOpenExpense[due.getMonth()] += amt
     }
 
     // Totais agregados para tabela e back-compute do saldo.

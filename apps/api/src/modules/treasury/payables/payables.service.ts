@@ -1,4 +1,4 @@
-import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma } from '@prisma/client'
+import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma, TocPurchaseDocument } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { computeNextDate } from '../recurrences/utils.js'
 import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
@@ -6,6 +6,63 @@ import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
 import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
+
+interface PayableListItem {
+  id: string
+  reference: string | null
+  entityName: string | null
+  documentDate: Date | null
+  dueDate: Date
+  totalAmount: number | Prisma.Decimal
+  pendingAmount: number | Prisma.Decimal
+  paidAmount: number | Prisma.Decimal
+  status: TreasuryDocStatus
+  origin: TreasuryDocOrigin
+  tocPurchasesDocId: string | null
+  tocSupplierId: string | null
+  recurrenceId: string | null
+  parentId: string | null
+  category: { id: string; name: string; color: string | null; launchToc: boolean } | null
+  children: unknown[]
+  _src: 'local' | 'toc'
+  _tocRaw: Prisma.JsonValue | null
+  [key: string]: unknown
+}
+
+function mapTocPurchaseToPayable(d: TocPurchaseDocument, now: Date): PayableListItem | null {
+  const tocStatus = d.status ?? 0
+  if (tocStatus === 0 || tocStatus === 4) return null
+  let mappedStatus: TreasuryDocStatus
+  if (tocStatus === 3) mappedStatus = 'SETTLED'
+  else if (tocStatus === 2) mappedStatus = 'PARTIAL'
+  else mappedStatus = 'OPEN'
+  const gross = Number(d.grossTotal ?? 0)
+  const pending = Number(d.pendingTotal ?? gross)
+  const paid = Math.max(0, gross - pending)
+  const dueDate = d.dueDate ? new Date(d.dueDate) : now
+  const documentDate = d.date ? new Date(d.date) : null
+  const raw = (d.raw ?? {}) as Record<string, unknown>
+  return {
+    id: `toc-${d.tocId}`,
+    reference: (raw.document_no as string) ?? null,
+    entityName: (raw.supplier_business_name as string) ?? null,
+    documentDate,
+    dueDate,
+    totalAmount: gross,
+    pendingAmount: pending,
+    paidAmount: paid,
+    status: mappedStatus,
+    origin: 'TOCONLINE',
+    tocPurchasesDocId: String(d.tocId),
+    tocSupplierId: d.supplierId != null ? String(d.supplierId) : null,
+    recurrenceId: null,
+    parentId: null,
+    category: null,
+    children: [],
+    _src: 'toc',
+    _tocRaw: d.raw,
+  }
+}
 
 export class TreasuryPayablesService {
   private recurrencesSvc: TreasuryRecurrencesService
@@ -41,11 +98,11 @@ export class TreasuryPayablesService {
     await this.recurrencesSvc.processForClient(clientId, 180)
 
     const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
-    const effectiveStatusFilter = overdue
-      ? { status: { in: ['OPEN', 'PARTIAL'] as TreasuryDocStatus[] } }
-      : Array.isArray(status)
-        ? status.length === 1 ? { status: status[0] } : { status: { in: status } }
-        : status ? { status } : {}
+    const statusList: TreasuryDocStatus[] | undefined = overdue
+      ? ['OPEN', 'PARTIAL']
+      : Array.isArray(status) ? status : status ? [status] : undefined
+    const effectiveStatusFilter = statusList ? { status: { in: statusList } } : {}
+
     const where: Prisma.TreasuryPayableWhereInput = {
       clientId,
       deletedAt: null,
@@ -74,19 +131,82 @@ export class TreasuryPayablesService {
       ...(isRecurrent !== undefined ? { recurrenceId: isRecurrent ? { not: null } : null } : {}),
     }
 
-    const [total, items] = await Promise.all([
-      this.prisma.treasuryPayable.count({ where }),
-      this.prisma.treasuryPayable.findMany({
-        where,
-        include: {
-          category: { select: { id: true, name: true, color: true, launchToc: true } },
-          children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
-        },
-        orderBy: { [sortBy]: sortDir },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-    ])
+    const localItems = await this.prisma.treasuryPayable.findMany({
+      where,
+      include: {
+        category: { select: { id: true, name: true, color: true, launchToc: true } },
+        children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
+      },
+    })
+
+    // Docs TOC ainda não materializados localmente — vêm das tabelas espelho.
+    // Filtros locais (categoryId, isRecurrent, origin=LOCAL) excluem TOC docs.
+    const importedTocIds = new Set(localItems.map((p) => p.tocPurchasesDocId).filter((s): s is string => !!s))
+    const tocCandidates = (categoryId || isRecurrent !== undefined || origin === 'LOCAL')
+      ? []
+      : await this.prisma.tocPurchaseDocument.findMany({
+          where: {
+            clientId,
+            ...(tocSupplierId ? { supplierId: Number(tocSupplierId) } : {}),
+            ...(dueDateFrom || dueDateTo ? {
+              dueDate: {
+                ...(dueDateFrom ? { gte: dueDateFrom } : {}),
+                ...(dueDateTo ? { lte: dueDateTo } : {}),
+              },
+            } : {}),
+          },
+        })
+
+    const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
+    const now = new Date()
+    const tocMapped = tocCandidates
+      .filter((d) => !importedTocIds.has(String(d.tocId)))
+      .filter((d) => {
+        const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+        return PURCH_INVOICE_TYPES.has(docType)
+      })
+      .map((d) => mapTocPurchaseToPayable(d, now))
+      .filter((r): r is PayableListItem => r !== null)
+      .filter((r) => {
+        if (!statusList) return true
+        return statusList.includes(r.status)
+      })
+      .filter((r) => {
+        if (!entityName) return true
+        const q = entityName.toLowerCase()
+        return (r.entityName ?? '').toLowerCase().includes(q) || (r.reference ?? '').toLowerCase().includes(q)
+      })
+      .filter((r) => {
+        if (!overdue) return true
+        return r.dueDate < now
+      })
+      .filter((r) => {
+        if (!docDateFrom && !docDateTo) return true
+        if (!r.documentDate) return false
+        if (docDateFrom && r.documentDate < new Date(docDateFrom)) return false
+        if (docDateTo && r.documentDate >= new Date(new Date(docDateTo).getTime() + 86400000)) return false
+        return true
+      })
+
+    const allItems: PayableListItem[] = [
+      ...localItems.map((p) => ({ ...p, _src: 'local' as const, _tocRaw: null })),
+      ...tocMapped,
+    ]
+
+    const sortKey: keyof Pick<PayableListItem, 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'> = sortBy
+    allItems.sort((a, b) => {
+      const va = a[sortKey] as Date | number | string | null
+      const vb = b[sortKey] as Date | number | string | null
+      if (va == null && vb == null) return 0
+      if (va == null) return sortDir === 'asc' ? 1 : -1
+      if (vb == null) return sortDir === 'asc' ? -1 : 1
+      if (va < vb) return sortDir === 'asc' ? -1 : 1
+      if (va > vb) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+
+    const total = allItems.length
+    const items = allItems.slice((page - 1) * limit, page * limit)
 
     return { total, page, limit, items }
   }

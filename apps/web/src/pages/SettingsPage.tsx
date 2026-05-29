@@ -11,7 +11,7 @@ import BudgetRulesTab from '@/components/settings/BudgetRulesTab'
 import DunningTracksTab from '@/components/settings/DunningTracksTab'
 import BudgetCategoriesTab from '@/components/settings/BudgetCategoriesTab'
 
-interface Category { id: string; name: string; type: string; launchToc: boolean; color: string; isArchived: boolean; usageCount: number }
+interface Category { id: string; name: string; type: string; color: string; isArchived: boolean; usageCount: number }
 interface Settings {
   reconciliationDryRun: boolean; autoMatchEnabled: boolean; autoMatchThreshold: number
   syncIntervalMinutes: number; lowBalanceEnabled: boolean; importFileRetentionDays: number
@@ -46,9 +46,9 @@ export default function SettingsPage() {
   const toast = useToast()
   const [tab, setTab] = useState<'categories' | 'rules' | 'settings' | 'toconline' | 'dunning'>('categories')
   const [showNewCat, setShowNewCat] = useState(false)
-  const [newCat, setNewCat] = useState({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' })
+  const [newCat, setNewCat] = useState({ name: '', type: 'EXPENSE', color: '#6b7280' })
   const [editCat, setEditCat] = useState<Category | null>(null)
-  const [editCatForm, setEditCatForm] = useState({ name: '', color: '#6b7280', launchToc: false })
+  const [editCatForm, setEditCatForm] = useState({ name: '', color: '#6b7280' })
   const [showArchived, setShowArchived] = useState(false)
   const [categoriesSubTab, setCategoriesSubTab] = useState<'movements' | 'budgets'>('movements')
 
@@ -154,7 +154,7 @@ export default function SettingsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['categories'] })
       setShowNewCat(false)
-      setNewCat({ name: '', type: 'EXPENSE', launchToc: false, color: '#6b7280' })
+      setNewCat({ name: '', type: 'EXPENSE', color: '#6b7280' })
       toast.success('Categoria criada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -364,7 +364,7 @@ export default function SettingsPage() {
                       ) : (
                         <>
                           <button
-                            onClick={() => { setEditCat(c); setEditCatForm({ name: c.name, color: c.color, launchToc: false }) }}
+                            onClick={() => { setEditCat(c); setEditCatForm({ name: c.name, color: c.color }) }}
                             className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-primary-600 rounded transition-all"
                             title="Editar"
                           >

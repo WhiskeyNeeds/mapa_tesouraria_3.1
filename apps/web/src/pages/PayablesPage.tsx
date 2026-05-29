@@ -69,10 +69,12 @@ interface Payable {
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   parentId?: string | null
-  category?: { id: string; name: string; color: string; launchToc: boolean } | null
+  category?: { id: string; name: string; color: string } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
+  _src?: 'local' | 'toc'
+  _tocRaw?: TocPurchaseDoc | null
 }
-interface Category { id: string; name: string; type: string; launchToc: boolean }
+interface Category { id: string; name: string; type: string }
 interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
 interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
 interface TocSupplier { id: string | number; business_name?: string; tax_registration_number?: string; [key: string]: unknown }
@@ -92,12 +94,10 @@ const emptyRecurrence = {
   endDate: '',
   occurrences: '',
 }
-const emptyTocLine = { description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
 const emptyOutrasForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
   dueDate: '', totalAmount: '', budgetId: '', budgetCategoryId: '',
 }
-const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
 
 
 type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc }
@@ -329,12 +329,6 @@ export default function PayablesPage() {
   const [importTocDoc, setImportTocDoc] = useState<TocPurchaseDoc | null>(null)
   const [importTocCatId, setImportTocCatId] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-  const [tocCreate, setTocCreate] = useState(false)
-  const [tocDocType, setTocDocType] = useState('FC')
-  const [tocLines, setTocLines] = useState([{ ...emptyTocLine }])
-  const [taxExemptionCode, setTaxExemptionCode] = useState('M07')
-  const [vatIncludedPrices, setVatIncludedPrices] = useState(false)
-  const [retentionPct, setRetentionPct] = useState('')
   const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras'>('fornecedores')
   const [outrasSubTab, setOutrasSubTab] = useState<'atuais' | 'futuras' | 'programadas'>('atuais')
   const [showNewOutras, setShowNewOutras] = useState(false)
@@ -414,14 +408,6 @@ export default function PayablesPage() {
     throwOnError: false,
   })
 
-  const { data: tocDocs, isLoading: tocLoading, refetch: refetchToc } = useQuery<TocPurchaseDoc[]>({
-    queryKey: ['toc-purchases', selectedClientId],
-    queryFn: () => api.get(`/toconline/${selectedClientId}/purchases`),
-    enabled: !!selectedClientId && isTocEnabled,
-    retry: false,
-    throwOnError: false,
-  })
-
   const { data: panelDocDetail } = useQuery<Payable>({
     queryKey: ['payable-detail', selectedClientId, panelDoc?.id],
     queryFn: () => api.get(`/treasury/${selectedClientId}/payables/${panelDoc!.id}`),
@@ -436,23 +422,6 @@ export default function PayablesPage() {
     enabled: !!selectedClientId && !!panelTocDocId,
   })
 
-
-  const selectedCategory = useMemo(
-    () => categories.find((c) => c.id === form.categoryId) ?? null,
-    [categories, form.categoryId],
-  )
-
-  const hasIseLines = tocCreate && tocLines.some((l) => l.tax_code === 'ISE')
-
-  const tocLinesTotal = useMemo(() => {
-    if (!tocCreate) return null
-    return tocLines.reduce((sum, l) => {
-      const qty = parseFloat(l.quantity) || 0
-      const price = parseFloat(l.unit_price) || 0
-      const vatPct = TAX_RATES[l.tax_code ?? 'NOR'] ?? 23
-      return sum + qty * price * (1 + vatPct / 100)
-    }, 0)
-  }, [tocCreate, tocLines])
 
   const create = useMutation({
     mutationFn: () => {
@@ -476,22 +445,6 @@ export default function PayablesPage() {
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
       }
-      if (selectedCategory?.launchToc && tocCreate && tocLines.some((l) => l.description && l.unit_price)) {
-        body.tocDocumentType = tocDocType
-        body.tocLines = tocLines
-          .filter((l) => l.description && l.unit_price)
-          .map((l) => ({
-            description: l.description,
-            quantity: parseFloat(l.quantity) || 1,
-            unit_price: parseFloat(l.unit_price),
-            tax_code: l.tax_code || 'NOR',
-          }))
-        if (hasIseLines && taxExemptionCode) {
-          body.taxExemptionCode = taxExemptionCode
-        }
-        if (vatIncludedPrices) body.vatIncludedPrices = true
-        if (retentionPct) body.retentionPct = parseFloat(retentionPct)
-      }
       return api.post(`/treasury/${selectedClientId}/payables`, body)
     },
     onSuccess: () => {
@@ -500,12 +453,6 @@ export default function PayablesPage() {
       setShowNew(false)
       setForm(emptyForm)
       setRecForm(emptyRecurrence)
-      setTocCreate(false)
-      setTocDocType('FC')
-      setTocLines([{ ...emptyTocLine }])
-      setTaxExemptionCode('M07')
-      setVatIncludedPrices(false)
-      setRetentionPct('')
       toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Conta a pagar criada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -777,82 +724,21 @@ export default function PayablesPage() {
     URL.revokeObjectURL(url)
   }
 
-  // IDs já importados do TOConline
-  const importedIds = new Set(
-    (data?.items ?? []).map((p) => p.tocPurchasesDocId).filter(Boolean) as string[]
-  )
+  // Lista unificada: backend junta payables locais + docs TOC ainda não
+  // importados. Cada item traz `_src: 'local' | 'toc'` e `_tocRaw` quando TOC.
+  const items = data?.items ?? []
+  const rows: Row[] = items
+    .filter((p) => !!p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId) || p._src === 'toc')
+    .map((p) => {
+      if (p._src === 'toc' && p._tocRaw) return { _src: 'toc' as const, d: p._tocRaw }
+      return { _src: 'local' as const, p }
+    })
 
-  // Apenas faturas de compra (FC, DSP, NDF); sem rascunhos (0) nem anulados (4)
-  const PURCHASE_INVOICE_TYPES = new Set(['fc', 'dsp', 'ndf'])
-  const tocOnly = (tocDocs ?? []).filter((d) => {
-    if (importedIds.has(String(d.id))) return false
-    const t = (d.document_type ?? '').toLowerCase()
-    if (!PURCHASE_INVOICE_TYPES.has(t)) return false
-    const s = Number(d.status)
-    if (s === 0 || s === 4) return false
-    if (isOverdueFilter) {
-      if (s !== 1 && s !== 2 && s !== 5) return false
-      if (!d.due_date || new Date(d.due_date) >= new Date()) return false
-    } else if (statusFilter) {
-      if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
-      if (statusFilter === 'OPEN,PARTIAL' && s !== 1 && s !== 2 && s !== 5) return false
-      if (statusFilter === 'PARTIAL' && s !== 2) return false
-      if (statusFilter === 'SETTLED' && s !== 3) return false
-      if (statusFilter === 'VOID') return false
-    }
-    if (dueDateFrom && d.due_date && d.due_date < dueDateFrom) return false
-    if (dueDateTo && d.due_date && d.due_date > dueDateTo) return false
-    if (docDateFrom && d.date && d.date < docDateFrom) return false
-    if (docDateTo && d.date && d.date > docDateTo) return false
-    return true
-  })
+  // NCFs ainda não vêm na lista unificada (ver comentário em ReceivablesPage).
+  const tocNcMap = useMemo(() => new Map<string, TocPurchaseDoc[]>(), [])
 
-  // Mapa NCF → faturas-pai (para mostrar notas de crédito dentro da fatura associada)
-  const tocNcMap = useMemo(() => {
-    const map = new Map<string, TocPurchaseDoc[]>()
-    for (const d of tocDocs ?? []) {
-      if ((d.document_type ?? '').toLowerCase() !== 'ncf') continue
-      const pids = Array.isArray(d.parent_documents_ids)
-        ? (d.parent_documents_ids as unknown[])
-        : d.parent_documents_ids != null ? [d.parent_documents_ids] : []
-      for (const pid of pids) {
-        const key = String(pid)
-        if (!map.has(key)) map.set(key, [])
-        map.get(key)!.push(d)
-      }
-    }
-    return map
-  }, [tocDocs])
-
-  const localForRows = (data?.items ?? []).filter((p) => !!p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
-
-  const rows: Row[] = [
-    ...localForRows.map((p) => ({ _src: 'local' as const, p })),
-    ...tocOnly.map((d) => ({ _src: 'toc' as const, d })),
-  ].sort((a, b) => {
-    const dateA = a._src === 'local' ? a.p.documentDate : a.d.date
-    const dateB = b._src === 'local' ? b.p.documentDate : b.d.date
-    return new Date(dateB).getTime() - new Date(dateA).getTime()
-  })
-
-  // KPIs combinados: locais (endpoint /kpis) + TOConline ainda não importados
-  // Docs TOConline liquidados (status=3) ficam visíveis na lista mas não contam nos KPIs
-  const combinedKpis = useMemo(() => {
-    if (!kpis) return null
-    const now = new Date()
-    const tocPending = (pendingToc => pendingToc.reduce((s, d) => s + Number(d.pending_total ?? d.gross_total ?? 0), 0))(tocOnly.filter(d => Number(d.status) !== 3))
-    const tocOpenCount = tocOnly.filter(d => Number(d.status) !== 3).length
-    const tocOverdue = tocOnly.filter((d) => Number(d.status) !== 3 && d.due_date && new Date(d.due_date) < now).length
-    const totalOpen = kpis.countOpen + tocOpenCount
-    const totalOverdue = kpis.countOverdue + tocOverdue
-    return {
-      totalPending: kpis.totalPending + tocPending,
-      countOpen: totalOpen - totalOverdue,
-      countOverdue: totalOverdue,
-      paidThisMonth: kpis.paidThisMonth,
-      aging: kpis.aging,
-    }
-  }, [kpis, tocOnly])
+  // KPIs: endpoint /kpis ainda não inclui pendentes TOC não importados.
+  const combinedKpis = kpis
 
   const isClosed = (status: string) => status === 'SETTLED' || status === 'VOID'
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
@@ -969,12 +855,8 @@ export default function PayablesPage() {
                 </button>
               )}
               <span className="text-sm text-gray-400 ml-auto">
-                {data?.total ?? 0} locais{tocOnly.length > 0 ? ` · ${tocOnly.length} do TOConline` : ''}
+                {data?.total ?? 0} documentos
               </span>
-              {tocLoading && <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" />}
-              <button onClick={() => refetchToc()} className="text-xs text-gray-400 hover:text-gray-600" title="Atualizar TOConline">
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
               <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                 <Download className="w-4 h-4" />
               </button>
@@ -1243,7 +1125,7 @@ export default function PayablesPage() {
                 {rows.length > 0 && (() => {
                   // Sem filtros activos: mostrar totais globais vindos do endpoint /kpis
                   if (!hasFilters && combinedKpis) {
-                    const globalCount = (data?.total ?? 0) + tocOnly.length
+                    const globalCount = data?.total ?? 0
                     return (
                       <tfoot>
                         <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
@@ -1617,11 +1499,11 @@ export default function PayablesPage() {
         </div>
       </Modal>
 
-      <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} title="Nova Conta a Pagar" size="lg">
+      <Modal open={showNew} onClose={() => setShowNew(false)} title="Nova Conta a Pagar" size="lg">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <label className="label">Categoria</label>
-            <select className="input" value={form.categoryId} onChange={(e) => { setForm({ ...form, categoryId: e.target.value }); setTocCreate(false) }}>
+            <select className="input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
               <option value="">Selecionar...</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
@@ -1649,169 +1531,16 @@ export default function PayablesPage() {
             <input className="input" value={form.entityNif} onChange={(e) => setForm({ ...form, entityNif: e.target.value })} placeholder="123456789" />
           </div>
           <div>
-            <label className="label">
-              Nº Documento
-              {tocCreate && <span className="ml-1 text-xs text-gray-400 font-normal">(preenchido pelo TOConline)</span>}
-            </label>
-            <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder={tocCreate ? 'automático' : 'FC2024/001'} disabled={tocCreate} />
+            <label className="label">Nº Documento</label>
+            <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FC2024/001" />
           </div>
           <div>
-            <label className="label">
-              Valor (€)
-              {tocCreate && tocLinesTotal !== null && <span className="ml-1 text-xs text-gray-400 font-normal">estimado: {tocLinesTotal.toFixed(2)}</span>}
-            </label>
-            <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} disabled={tocCreate} placeholder={tocCreate ? 'calculado das linhas' : ''} />
+            <label className="label">Valor (€)</label>
+            <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} />
           </div>
           <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: pickWorkday(e.target.value, form.dueDate) })} /></div>
           <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
         </div>
-
-        {false && (
-          <div className="mt-4 border-t border-blue-100 pt-4 space-y-3">
-            <label className="flex items-center gap-2 cursor-pointer select-none"></label>
-
-            {tocCreate && (
-              <div className="pl-6 space-y-3">
-                <div>
-                  <label className="label">Tipo de documento</label>
-                  <select className="input w-auto" value={tocDocType} onChange={(e) => setTocDocType(e.target.value)}>
-                    <option value="FC">FC — Fatura de Compra</option>
-                    <option value="DSP">DSP — Fatura de Despesa</option>
-                  </select>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="label mb-0">Linhas do documento</label>
-                    <button
-                      type="button"
-                      onClick={() => setTocLines((prev) => [...prev, { ...emptyTocLine }])}
-                      className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" /> Adicionar linha
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {tocLines.map((line, i) => (
-                      <div key={i} className="grid grid-cols-12 gap-2 items-start p-2 bg-blue-50/40 rounded-lg border border-blue-100">
-                        <div className="col-span-5">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Descrição</div>}
-                          <input
-                            className="input text-sm py-1"
-                            placeholder="Descrição do serviço/produto"
-                            value={line.description}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, description: e.target.value } : l))}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Qtd.</div>}
-                          <input
-                            type="number"
-                            className="input text-sm py-1"
-                            min="0.001"
-                            step="1"
-                            value={line.quantity}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, quantity: e.target.value } : l))}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Preço unit.</div>}
-                          <input
-                            type="number"
-                            className="input text-sm py-1"
-                            min="0"
-                            step="0.01"
-                            placeholder="0.00"
-                            value={line.unit_price}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, unit_price: e.target.value } : l))}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">IVA</div>}
-                          <select
-                            className="input text-sm py-1"
-                            value={line.tax_code}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, tax_code: e.target.value } : l))}
-                          >
-                            <option value="NOR">NOR — 23%</option>
-                            <option value="INT">INT — 13%</option>
-                            <option value="RED">RED — 6%</option>
-                            <option value="ISE">ISE — Isento</option>
-                          </select>
-                        </div>
-                        <div className="col-span-1 flex items-end justify-center pb-0.5">
-                          {i === 0 && <div className="text-[10px] text-transparent uppercase mb-1">Del</div>}
-                          {tocLines.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => setTocLines((prev) => prev.filter((_, idx) => idx !== i))}
-                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {(tocLinesTotal ?? 0) > 0 && (
-                    <div className="mt-2 text-right text-sm text-blue-700 font-semibold">
-                      Total c/IVA: {(tocLinesTotal ?? 0).toFixed(2)} €
-                    </div>
-                  )}
-                  {hasIseLines && (
-                    <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
-                      <p className="text-xs text-amber-700 font-medium">Linha isenta de IVA — motivo de isenção obrigatório</p>
-                      <div className="flex items-center gap-2">
-                        <select
-                          className="input text-sm py-1 flex-1"
-                          value={taxExemptionCode}
-                          onChange={(e) => setTaxExemptionCode(e.target.value)}
-                        >
-                          <option value="M07">M07 — Artigo 9.º do CIVA</option>
-                          <option value="M08">M08 — Artigo 14.º do CIVA</option>
-                          <option value="M09">M09 — Artigo 15.º do CIVA</option>
-                          <option value="M10">M10 — Regime especial de isenção (Art. 53.º)</option>
-                          <option value="M11">M11 — Regime especial dos tabaceiros</option>
-                          <option value="M12">M12 — Regime de IVA de caixa</option>
-                          <option value="M16">M16 — Artigo 14.º do RITI</option>
-                          <option value="M19">M19 — Outras isenções</option>
-                          <option value="M20">M20 — IVA — regime forfetário</option>
-                          <option value="M99">M99 — Não sujeito; não tributado</option>
-                        </select>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-3 flex flex-wrap gap-4 items-start">
-                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-700">
-                      <input
-                        type="checkbox"
-                        className="rounded border-gray-300 text-blue-600"
-                        checked={vatIncludedPrices}
-                        onChange={(e) => setVatIncludedPrices(e.target.checked)}
-                      />
-                      Preços com IVA incluído
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-gray-700 whitespace-nowrap">Retenção na fonte (%)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.5"
-                        className="input text-sm py-1 w-20"
-                        placeholder="ex: 25"
-                        value={retentionPct}
-                        onChange={(e) => setRetentionPct(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         <div className="mt-4 border-t border-gray-100 pt-4 space-y-3">
           <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -1894,7 +1623,7 @@ export default function PayablesPage() {
           <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
-          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} className="btn-secondary flex-1">Cancelar</button>
+          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence) }} className="btn-secondary flex-1">Cancelar</button>
           <button
             onClick={() => create.mutate()}
             className="btn-primary flex-1"
@@ -2566,7 +2295,8 @@ export default function PayablesPage() {
         clientId={selectedClientId ?? ''}
         entityName={panelDoc?.entityName ?? ''}
         onInvoiceClick={(payableId) => {
-          const tocDoc = (tocDocs ?? []).find((d) => String(d.id) === String(payableId))
+          const match = items.find((p) => p._tocRaw && String(p._tocRaw.id) === String(payableId))
+          const tocDoc = match?._tocRaw
           if (!tocDoc) return
           const s = Number(tocDoc.status)
           setPanelDoc({

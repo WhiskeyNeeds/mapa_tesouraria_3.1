@@ -92,7 +92,10 @@ export class TreasuryReconciliationsService {
       if (alloc.amount > Number(doc.pendingAmount)) throw httpError(400, `Allocation ${alloc.amount} exceeds pending ${doc.pendingAmount} for ${doc.reference}`)
 
       totalAllocated += alloc.amount
-      allocDetails.push({ ...alloc, doc, launchToc: (doc as { category?: { launchToc: boolean } | null }).category?.launchToc ?? false })
+      // launchToc forçado a false: a app deixou de lançar recibos/pagamentos no
+      // TOC pelo frontend (intencional). O caminho fica como dead-code para uma
+      // futura reativação por integração.
+      allocDetails.push({ ...alloc, doc, launchToc: false })
     }
 
     if (totalAllocated > Math.abs(totalMovements) + 0.01) {
@@ -163,9 +166,8 @@ export class TreasuryReconciliationsService {
       let tocFirstError: string | undefined
 
       for (const alloc of data.allocations) {
-        const launchToc = alloc.type === 'receivable'
-          ? (await tx.treasuryReceivable.findUnique({ where: { id: alloc.id }, include: { category: true } }))?.category?.launchToc ?? false
-          : (await tx.treasuryPayable.findUnique({ where: { id: alloc.id }, include: { category: true } }))?.category?.launchToc ?? false
+        // Forçado a false: ver comentário em preview() acima.
+        const launchToc = false
 
         if (alloc.type === 'receivable') {
           let tocReceiptId: string | undefined

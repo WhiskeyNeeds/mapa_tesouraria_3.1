@@ -88,14 +88,52 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     const { clientId, docId } = request.params as { clientId: string; docId: string }
     const { ids } = request.query as { ids?: string }
     const knownIds = ids ? ids.split(',').map(Number).filter(n => Number.isFinite(n) && n > 0) : undefined
-    return reply.send(await svc.getSalesDocumentReceipts(clientId, docId, knownIds))
+    const [docSync, recSync] = await Promise.all([
+      fastify.prisma.tocSyncState.findUnique({ where: { clientId_entityType: { clientId, entityType: 'salesDocuments' } } }),
+      fastify.prisma.tocSyncState.findUnique({ where: { clientId_entityType: { clientId, entityType: 'salesReceipts' } } }),
+    ])
+    if (!docSync?.lastSyncAt || !recSync?.lastSyncAt) {
+      return reply.send(await svc.getSalesDocumentReceipts(clientId, docId, knownIds))
+    }
+    let receiptIds: number[] = knownIds ?? []
+    if (receiptIds.length === 0) {
+      const doc = await fastify.prisma.tocSalesDocument.findUnique({
+        where: { clientId_tocId: { clientId, tocId: Number(docId) } },
+        select: { receiptsIds: true },
+      })
+      receiptIds = doc?.receiptsIds ?? []
+    }
+    if (receiptIds.length === 0) return reply.send([])
+    const rows = await fastify.prisma.tocSalesReceipt.findMany({
+      where: { clientId, tocId: { in: receiptIds } },
+    })
+    return reply.send(rows.map((r) => r.raw))
   })
 
   fastify.get('/toconline/:clientId/purchases/:docId/payments', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId, docId } = request.params as { clientId: string; docId: string }
     const { ids } = request.query as { ids?: string }
     const knownIds = ids ? ids.split(',').map(Number).filter(n => Number.isFinite(n) && n > 0) : undefined
-    return reply.send(await svc.getPurchaseDocumentPayments(clientId, docId, knownIds))
+    const [docSync, paySync] = await Promise.all([
+      fastify.prisma.tocSyncState.findUnique({ where: { clientId_entityType: { clientId, entityType: 'purchaseDocuments' } } }),
+      fastify.prisma.tocSyncState.findUnique({ where: { clientId_entityType: { clientId, entityType: 'purchasePayments' } } }),
+    ])
+    if (!docSync?.lastSyncAt || !paySync?.lastSyncAt) {
+      return reply.send(await svc.getPurchaseDocumentPayments(clientId, docId, knownIds))
+    }
+    let paymentIds: number[] = knownIds ?? []
+    if (paymentIds.length === 0) {
+      const doc = await fastify.prisma.tocPurchaseDocument.findUnique({
+        where: { clientId_tocId: { clientId, tocId: Number(docId) } },
+        select: { paymentsIds: true },
+      })
+      paymentIds = doc?.paymentsIds ?? []
+    }
+    if (paymentIds.length === 0) return reply.send([])
+    const rows = await fastify.prisma.tocPurchasePayment.findMany({
+      where: { clientId, tocId: { in: paymentIds } },
+    })
+    return reply.send(rows.map((r) => r.raw))
   })
 
   fastify.get('/toconline/:clientId/sales-receipts/:receiptId/lines', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
@@ -111,7 +149,21 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
   fastify.get('/toconline/:clientId/purchases', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const filters = request.query as Record<string, string>
-    return reply.send(await svc.getPurchaseDocuments(clientId, filters))
+    const syncState = await fastify.prisma.tocSyncState.findUnique({
+      where: { clientId_entityType: { clientId, entityType: 'purchaseDocuments' } },
+    })
+    if (!syncState?.lastSyncAt) {
+      return reply.send(await svc.getPurchaseDocuments(clientId, filters))
+    }
+    const supplierIdFilter = filters['filter[supplier_id]']
+    const rows = await fastify.prisma.tocPurchaseDocument.findMany({
+      where: {
+        clientId,
+        ...(supplierIdFilter ? { supplierId: Number(supplierIdFilter) } : {}),
+      },
+      orderBy: { date: 'desc' },
+    })
+    return reply.send(rows.map((r) => r.raw))
   })
 
   fastify.post('/toconline/:clientId/purchases', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
@@ -122,7 +174,21 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
   fastify.get('/toconline/:clientId/sales', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const filters = request.query as Record<string, string>
-    return reply.send(await svc.getSalesDocuments(clientId, filters))
+    const syncState = await fastify.prisma.tocSyncState.findUnique({
+      where: { clientId_entityType: { clientId, entityType: 'salesDocuments' } },
+    })
+    if (!syncState?.lastSyncAt) {
+      return reply.send(await svc.getSalesDocuments(clientId, filters))
+    }
+    const customerIdFilter = filters['filter[customer_id]']
+    const rows = await fastify.prisma.tocSalesDocument.findMany({
+      where: {
+        clientId,
+        ...(customerIdFilter ? { customerId: Number(customerIdFilter) } : {}),
+      },
+      orderBy: { date: 'desc' },
+    })
+    return reply.send(rows.map((r) => r.raw))
   })
 
   fastify.post('/toconline/:clientId/sales', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {

@@ -29,7 +29,7 @@ interface TocRawDoc {
 interface Document {
   id: string; reference: string; entityName: string; dueDate: string
   pendingAmount: number; totalAmount: number; status: string
-  category?: { name: string; color: string; launchToc: boolean } | null
+  category?: { name: string; color: string } | null
   type: 'receivable' | 'payable'
   _src: 'local' | 'toc'
   _tocRaw?: TocRawDoc

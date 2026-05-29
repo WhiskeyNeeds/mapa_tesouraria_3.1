@@ -72,10 +72,12 @@ interface Receivable {
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   parentId?: string | null
-  category?: { id: string; name: string; color: string; launchToc: boolean } | null
+  category?: { id: string; name: string; color: string } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; receivedAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
+  _src?: 'local' | 'toc'
+  _tocRaw?: TocSalesDoc | null
 }
-interface Category { id: string; name: string; type: string; launchToc: boolean }
+interface Category { id: string; name: string; type: string }
 interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
 interface TocCustomer { id: string | number; business_name?: string; tax_identification_number?: string;[key: string]: unknown }
 
@@ -94,12 +96,10 @@ const emptyRecurrence = {
   endDate: '',
   occurrences: '',
 }
-const emptyTocLine = { item_type: 'Service', description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
 const emptyOutrasForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
   dueDate: '', totalAmount: '', budgetId: '',
 }
-const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
 
 
 type Row = { _src: 'local'; r: Receivable } | { _src: 'toc'; d: TocSalesDoc }
@@ -345,12 +345,6 @@ export default function ReceivablesPage() {
   const [importTocDoc, setImportTocDoc] = useState<TocSalesDoc | null>(null)
   const [importTocCatId, setImportTocCatId] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-  const [tocCreate, setTocCreate] = useState(false)
-  const [tocDocType, setTocDocType] = useState('FT')
-  const [tocLines, setTocLines] = useState([{ ...emptyTocLine }])
-  const [taxExemptionCode, setTaxExemptionCode] = useState('M07')
-  const [vatIncludedPrices, setVatIncludedPrices] = useState(false)
-  const [retentionPct, setRetentionPct] = useState('')
   const [activeTab, setActiveTab] = useState<'clientes' | 'outras'>('clientes')
   const [outrasSubTab, setOutrasSubTab] = useState<'atuais' | 'futuras' | 'programadas'>('atuais')
   const [outrasForm, setOutrasForm] = useState(emptyOutrasForm)
@@ -423,13 +417,6 @@ export default function ReceivablesPage() {
   const [budgetSuggestion, setBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
   const [outrasBudgetSuggestion, setOutrasBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
 
-  const { data: tocDocs, isLoading: tocLoading, refetch: refetchToc } = useQuery<TocSalesDoc[]>({
-    queryKey: ['toc-sales', selectedClientId],
-    queryFn: () => api.get(`/toconline/${selectedClientId}/sales`),
-    enabled: !!selectedClientId && isTocEnabled,
-    retry: false,
-    throwOnError: false,
-  })
 
   const { data: panelDocDetail } = useQuery<Receivable>({
     queryKey: ['receivable-detail', selectedClientId, panelDoc?.id],
@@ -473,18 +460,6 @@ export default function ReceivablesPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showCustomerDropdown])
 
-  const hasIseLines = tocCreate && tocLines.some((l) => l.tax_code === 'ISE')
-
-  const tocLinesTotal = useMemo(() => {
-    if (!tocCreate) return null
-    return tocLines.reduce((sum, l) => {
-      const qty = parseFloat(l.quantity) || 0
-      const price = parseFloat(l.unit_price) || 0
-      const vatPct = TAX_RATES[l.tax_code ?? 'NOR'] ?? 23
-      return sum + qty * price * (1 + vatPct / 100)
-    }, 0)
-  }, [tocCreate, tocLines])
-
   const create = useMutation({
     mutationFn: () => {
       const isMonthlyRec = recForm.isRecurrent && ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency)
@@ -506,24 +481,7 @@ export default function ReceivablesPage() {
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
       }
-      if (tocCreate && tocLines.some((l) => l.description && l.unit_price)) {
-        if (selectedTocCustomer) body.tocCustomerId = String(selectedTocCustomer.id)
-        body.tocDocumentType = tocDocType
-        body.tocLines = tocLines
-          .filter((l) => l.description && l.unit_price)
-          .map((l) => ({
-            item_type: l.item_type || 'Service',
-            description: l.description,
-            quantity: parseFloat(l.quantity) || 1,
-            unit_price: parseFloat(l.unit_price),
-            tax_code: l.tax_code || 'NOR',
-          }))
-        if (hasIseLines && taxExemptionCode) {
-          body.taxExemptionCode = taxExemptionCode
-        }
-        if (vatIncludedPrices) body.vatIncludedPrices = true
-        if (retentionPct) body.retentionPct = parseFloat(retentionPct)
-      }
+      if (selectedTocCustomer) body.tocCustomerId = String(selectedTocCustomer.id)
       return api.post(`/treasury/${selectedClientId}/receivables`, body)
     },
     onSuccess: () => {
@@ -532,12 +490,6 @@ export default function ReceivablesPage() {
       setShowNew(false)
       setForm(emptyForm)
       setRecForm(emptyRecurrence)
-      setTocCreate(false)
-      setTocDocType('FT')
-      setTocLines([{ ...emptyTocLine }])
-      setTaxExemptionCode('M07')
-      setVatIncludedPrices(false)
-      setRetentionPct('')
       setSelectedTocCustomer(null)
       setTocCustomerSearch('')
       setBudgetSuggestion(null)
@@ -850,82 +802,23 @@ export default function ReceivablesPage() {
     URL.revokeObjectURL(url)
   }
 
-  // IDs já importados do TOConline
-  const importedIds = new Set(
-    (data?.items ?? []).map((r) => r.tocSalesDocId).filter(Boolean) as string[]
-  )
-
-  // Apenas faturas de venda (FT, FS, FR); sem rascunhos (0) nem anulados (4)
-  const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
-  const tocOnly = (tocDocs ?? []).filter((d) => {
-    if (importedIds.has(String(d.id))) return false
-    const t = (d.document_type ?? '').toLowerCase()
-    if (!SALES_INVOICE_TYPES.has(t)) return false
-    const s = Number(d.status)
-    if (s === 0 || s === 4) return false
-    if (isOverdueFilter) {
-      if (s !== 1 && s !== 2 && s !== 5) return false
-      if (!d.due_date || new Date(d.due_date) >= new Date()) return false
-    } else if (statusFilter) {
-      if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
-      if (statusFilter === 'OPEN,PARTIAL' && s !== 1 && s !== 2 && s !== 5) return false
-      if (statusFilter === 'PARTIAL' && s !== 2) return false
-      if (statusFilter === 'SETTLED' && s !== 3) return false
-      if (statusFilter === 'VOID') return false
-    }
-    if (dueDateFrom && d.due_date && d.due_date < dueDateFrom) return false
-    if (dueDateTo && d.due_date && d.due_date > dueDateTo) return false
-    if (docDateFrom && d.date && d.date < docDateFrom) return false
-    if (docDateTo && d.date && d.date > docDateTo) return false
-    return true
+  // Lista unificada: o backend já junta receivables locais + TOC docs ainda
+  // não importados. Cada item traz `_src: 'local' | 'toc'` e `_tocRaw` para o
+  // raw do TOC quando aplicável.
+  const items = data?.items ?? []
+  const rows: Row[] = items.map((r) => {
+    if (r._src === 'toc' && r._tocRaw) return { _src: 'toc' as const, d: r._tocRaw }
+    return { _src: 'local' as const, r }
   })
 
-  // Mapa NC → faturas-pai (para mostrar NCs dentro da fatura associada)
-  const tocNcMap = useMemo(() => {
-    const map = new Map<string, TocSalesDoc[]>()
-    for (const d of tocDocs ?? []) {
-      if ((d.document_type ?? '').toLowerCase() !== 'nc') continue
-      const pids = Array.isArray(d.parent_documents_ids)
-        ? (d.parent_documents_ids as unknown[])
-        : d.parent_documents_ids != null ? [d.parent_documents_ids] : []
-      for (const pid of pids) {
-        const key = String(pid)
-        if (!map.has(key)) map.set(key, [])
-        map.get(key)!.push(d)
-      }
-    }
-    return map
-  }, [tocDocs])
+  // NCs (notas de crédito) ainda não estão na lista unificada; o map fica vazio
+  // por agora. A expansão de NCs dentro das faturas pode ser reativada quando
+  // o backend incluir NCs no payload de receivables.
+  const tocNcMap = useMemo(() => new Map<string, TocSalesDoc[]>(), [])
 
-  const localForRows = (data?.items ?? []).filter((r) => !!r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
-
-  const rows: Row[] = [
-    ...localForRows.map((r) => ({ _src: 'local' as const, r })),
-    ...tocOnly.map((d) => ({ _src: 'toc' as const, d })),
-  ].sort((a, b) => {
-    const dateA = a._src === 'local' ? a.r.documentDate : a.d.date
-    const dateB = b._src === 'local' ? b.r.documentDate : b.d.date
-    return new Date(dateB).getTime() - new Date(dateA).getTime()
-  })
-
-  // KPIs combinados: locais (endpoint /kpis) + TOConline ainda não importados
-  // Docs TOConline liquidados (status=3) ficam visíveis na lista mas não contam nos KPIs
-  const combinedKpis = useMemo(() => {
-    if (!kpis) return null
-    const now = new Date()
-    const tocPending = (pendingToc => pendingToc.reduce((s, d) => s + Number(d.pending_total ?? d.gross_total ?? 0), 0))(tocOnly.filter(d => Number(d.status) !== 3))
-    const tocOpenCount = tocOnly.filter(d => Number(d.status) !== 3).length
-    const tocOverdue = tocOnly.filter((d) => Number(d.status) !== 3 && d.due_date && new Date(d.due_date) < now).length
-    const totalOpen = kpis.countOpen + tocOpenCount
-    const totalOverdue = kpis.countOverdue + tocOverdue
-    return {
-      totalPending: kpis.totalPending + tocPending,
-      countOpen: totalOpen - totalOverdue,
-      countOverdue: totalOverdue,
-      settledThisMonth: kpis.settledThisMonth,
-      aging: kpis.aging,
-    }
-  }, [kpis, tocOnly])
+  // KPIs: o endpoint /kpis ainda não inclui pendentes TOC não importados —
+  // usa-se o valor local enquanto não atualizamos esse endpoint.
+  const combinedKpis = kpis
 
   return (
     <>
@@ -1037,12 +930,8 @@ export default function ReceivablesPage() {
                         </button>
                       )}
                       <span className="text-sm text-gray-400 ml-auto">
-                        {data?.total ?? 0} locais{tocOnly.length > 0 ? ` · ${tocOnly.length} do TOConline` : ''}
+                        {data?.total ?? 0} documentos
                       </span>
-                      {tocLoading && <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" />}
-                      <button onClick={() => refetchToc()} className="text-xs text-gray-400 hover:text-gray-600" title="Atualizar TOConline">
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      </button>
                       <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                         <Download className="w-4 h-4" />
                       </button>
@@ -1322,7 +1211,7 @@ export default function ReceivablesPage() {
                         {rows.length > 0 && (() => {
                           // Sem filtros activos: mostrar totais globais vindos do endpoint /kpis
                           if (!hasFilters && combinedKpis) {
-                            const globalCount = (data?.total ?? 0) + tocOnly.length
+                            const globalCount = data?.total ?? 0
                             return (
                               <tfoot>
                                 <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
@@ -1681,7 +1570,7 @@ export default function ReceivablesPage() {
               </div>
             </Modal>
 
-            <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setSelectedTocCustomer(null); setTocCustomerSearch(''); setBudgetSuggestion(null) }} title="Nova Conta a Receber" size="lg">
+            <Modal open={showNew} onClose={() => { setShowNew(false); setSelectedTocCustomer(null); setTocCustomerSearch(''); setBudgetSuggestion(null) }} title="Nova Conta a Receber" size="lg">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <label className="label">Categoria</label>
@@ -1783,173 +1672,15 @@ export default function ReceivablesPage() {
                   <input className="input" value={form.entityNif} onChange={(e) => setForm({ ...form, entityNif: e.target.value })} placeholder="123456789" />
                 </div>
                 <div>
-                  <label className="label">
-                    Nº Documento
-                    {tocCreate && <span className="ml-1 text-xs text-gray-400 font-normal">(preenchido pelo TOConline)</span>}
-                  </label>
-                  <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder={tocCreate ? 'automático' : 'FT2024/001'} disabled={tocCreate} />
+                  <label className="label">Nº Documento</label>
+                  <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FT2024/001" />
                 </div>
                 <div>
-                  <label className="label">
-                    Valor (€)
-                    {tocCreate && tocLinesTotal !== null && <span className="ml-1 text-xs text-gray-400 font-normal">estimado: {tocLinesTotal.toFixed(2)}</span>}
-                  </label>
-                  <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} disabled={tocCreate} placeholder={tocCreate ? 'calculado das linhas' : ''} />
+                  <label className="label">Valor (€)</label>
+                  <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} />
                 </div>
                 <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: pickWorkday(e.target.value, form.dueDate) })} /></div>
                 <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-              </div>
-
-              <div className="mt-4 border-t border-green-100 pt-4 space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800 rounded-full">TOConline</span>
-                  <div>
-                    <label className="label mb-0 inline">Tipo de documento</label>
-                    <select className="input w-auto ml-2" value={tocDocType} onChange={(e) => setTocDocType(e.target.value)}>
-                      <option value="FT">FT — Fatura</option>
-                      <option value="FS">FS — Fatura Simplificada</option>
-                      <option value="FR">FR — Fatura-Recibo</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="label mb-0">Linhas do documento</label>
-                    <button
-                      type="button"
-                      onClick={() => setTocLines((prev) => [...prev, { ...emptyTocLine }])}
-                      className="text-xs text-green-600 hover:text-green-800 flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" /> Adicionar linha
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {tocLines.map((line, i) => (
-                      <div key={i} className="grid grid-cols-12 gap-2 items-start p-2 bg-green-50/40 rounded-lg border border-green-100">
-                        <div className="col-span-2">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Tipo</div>}
-                          <select
-                            className="input text-sm py-1"
-                            value={line.item_type}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, item_type: e.target.value } : l))}
-                          >
-                            <option value="Service">Serviço</option>
-                            <option value="Product">Produto</option>
-                          </select>
-                        </div>
-                        <div className="col-span-4">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Descrição</div>}
-                          <input
-                            className="input text-sm py-1"
-                            placeholder="Descrição"
-                            value={line.description}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, description: e.target.value } : l))}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Qtd.</div>}
-                          <input
-                            type="number"
-                            className="input text-sm py-1"
-                            min="0.001"
-                            step="1"
-                            value={line.quantity}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, quantity: e.target.value } : l))}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">Preço unit.</div>}
-                          <input
-                            type="number"
-                            className="input text-sm py-1"
-                            min="0"
-                            step="0.01"
-                            placeholder="0.00"
-                            value={line.unit_price}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, unit_price: e.target.value } : l))}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          {i === 0 && <div className="text-[10px] text-gray-400 uppercase mb-1">IVA</div>}
-                          <select
-                            className="input text-sm py-1"
-                            value={line.tax_code}
-                            onChange={(e) => setTocLines((prev) => prev.map((l, idx) => idx === i ? { ...l, tax_code: e.target.value } : l))}
-                          >
-                            <option value="NOR">NOR 23%</option>
-                            <option value="INT">INT 13%</option>
-                            <option value="RED">RED 6%</option>
-                            <option value="ISE">ISE 0%</option>
-                          </select>
-                        </div>
-                        <div className="col-span-1 flex items-end justify-center pb-0.5">
-                          {i === 0 && <div className="text-[10px] text-transparent uppercase mb-1">Del</div>}
-                          {tocLines.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => setTocLines((prev) => prev.filter((_, idx) => idx !== i))}
-                              className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {(tocLinesTotal ?? 0) > 0 && (
-                    <div className="mt-2 text-right text-sm text-green-700 font-semibold">
-                      Total c/IVA: {(tocLinesTotal ?? 0).toFixed(2)} €
-                    </div>
-                  )}
-                  {hasIseLines && (
-                    <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
-                      <p className="text-xs text-amber-700 font-medium">Linha isenta de IVA — motivo de isenção obrigatório</p>
-                      <select
-                        className="input text-sm py-1 w-full"
-                        value={taxExemptionCode}
-                        onChange={(e) => setTaxExemptionCode(e.target.value)}
-                      >
-                        <option value="M07">M07 — Artigo 9.º do CIVA</option>
-                        <option value="M08">M08 — Artigo 14.º do CIVA</option>
-                        <option value="M09">M09 — Artigo 15.º do CIVA</option>
-                        <option value="M10">M10 — Regime especial de isenção (Art. 53.º)</option>
-                        <option value="M11">M11 — Regime especial dos tabaceiros</option>
-                        <option value="M12">M12 — Regime de IVA de caixa</option>
-                        <option value="M16">M16 — Artigo 14.º do RITI</option>
-                        <option value="M19">M19 — Outras isenções</option>
-                        <option value="M20">M20 — IVA — regime forfetário</option>
-                        <option value="M99">M99 — Não sujeito; não tributado</option>
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="mt-3 flex flex-wrap gap-4 items-start">
-                    <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-700">
-                      <input
-                        type="checkbox"
-                        className="rounded border-gray-300 text-green-600"
-                        checked={vatIncludedPrices}
-                        onChange={(e) => setVatIncludedPrices(e.target.checked)}
-                      />
-                      Preços com IVA incluído
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-gray-700 whitespace-nowrap">Retenção na fonte (%)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.5"
-                        className="input text-sm py-1 w-20"
-                        placeholder="ex: 25"
-                        value={retentionPct}
-                        onChange={(e) => setRetentionPct(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </div>
               </div>
 
               <div className="mt-4 border-t border-gray-100 pt-4 space-y-3">
@@ -2033,12 +1764,12 @@ export default function ReceivablesPage() {
                 <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
               )}
               <div className="flex gap-3 mt-6">
-                <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FT'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setSelectedTocCustomer(null); setTocCustomerSearch(''); setBudgetSuggestion(null) }} className="btn-secondary flex-1">Cancelar</button>
+                <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setSelectedTocCustomer(null); setTocCustomerSearch(''); setBudgetSuggestion(null) }} className="btn-secondary flex-1">Cancelar</button>
                 <button
                   onClick={() => create.mutate()}
                   className="btn-primary flex-1"
                   disabled={(() => {
-                    if (create.isPending || !tocLines.some((l) => l.description && l.unit_price) || !form.dueDate) return true
+                    if (create.isPending || !form.totalAmount || !form.dueDate) return true
                     const isMonthlyRec = recForm.isRecurrent && ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency)
                     if (isMonthlyRec && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
                     if (recForm.isRecurrent && recForm.endType === 'date') {
@@ -2712,7 +2443,8 @@ export default function ReceivablesPage() {
             clientId={selectedClientId ?? ''}
             entityName={panelDoc?.entityName ?? ''}
             onInvoiceClick={(receivableId) => {
-              const tocDoc = (tocDocs ?? []).find((d) => String(d.id) === String(receivableId))
+              const match = items.find((r) => r._tocRaw && String(r._tocRaw.id) === String(receivableId))
+              const tocDoc = match?._tocRaw
               if (!tocDoc) return
               const s = Number(tocDoc.status)
               setPanelDoc({

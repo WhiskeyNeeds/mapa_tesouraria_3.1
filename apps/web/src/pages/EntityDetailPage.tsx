@@ -571,7 +571,7 @@ export default function EntityDetailPage({ entityType }: Props) {
                 <div className="h-24 bg-gray-100 rounded-xl animate-pulse" />
                 <div className="h-24 bg-gray-100 rounded-xl animate-pulse opacity-40" />
               </div>
-            ) : (avgDaysThisYear == null && delayThisYear == null) ? (
+            ) : (avgDaysThisYear == null && delayThisYear == null && avgDaysLastYear == null && delayLastYear == null) ? (
               <p className="text-xs text-gray-400">Sem dados de pagamentos liquidados.</p>
             ) : (
               <div className="grid grid-cols-2 gap-2">
@@ -605,32 +605,30 @@ export default function EntityDetailPage({ entityType }: Props) {
                 </div>
 
                 {/* Ano anterior */}
-                <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-3 flex flex-col gap-2.5">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{lastYear}</span>
+                <div className="rounded-xl border border-primary-100 bg-white p-3 flex flex-col gap-2.5">
+                  <span className="text-[10px] font-bold text-primary-500 uppercase tracking-widest">{lastYear}</span>
                   <div>
                     <div className="flex items-baseline gap-1 leading-none">
-                      <span className="text-2xl font-bold text-gray-300">
+                      <span className="text-2xl font-bold text-gray-900">
                         {avgDaysLastYear ?? '—'}
                       </span>
                       {avgDaysLastYear != null && (
-                        <span className="text-xs text-gray-300">dias</span>
+                        <span className="text-xs text-gray-400">dias</span>
                       )}
                     </div>
                     <div className="text-[10px] text-gray-400 mt-1">fatura → pagamento</div>
                   </div>
-                  {delayLastYear != null ? (
+                  {delayLastYear != null && (
                     <span className={cn(
-                      'self-start text-[11px] font-semibold rounded-md px-1.5 py-0.5 opacity-70',
+                      'self-start text-[11px] font-semibold rounded-md px-1.5 py-0.5',
                       delayLastYear === 0 ? 'bg-gray-100 text-gray-500'
-                        : delayLastYear > 0 ? 'bg-red-50 text-red-500'
-                          : 'bg-emerald-50 text-emerald-600',
+                        : delayLastYear > 0 ? 'bg-red-50 text-red-600'
+                          : 'bg-emerald-50 text-emerald-700',
                     )}>
                       {delayLastYear === 0 ? 'Na data'
                         : delayLastYear > 0 ? `+${delayLastYear}d vs venc.`
                           : `−${Math.abs(delayLastYear)}d vs venc.`}
                     </span>
-                  ) : (
-                    <span className="text-[11px] text-gray-300">sem dados</span>
                   )}
                 </div>
 

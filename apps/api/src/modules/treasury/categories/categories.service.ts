@@ -30,7 +30,6 @@ export class TreasuryCategoriesService {
   async create(clientId: string, data: {
     name: string
     type: TreasuryCategoryType
-    launchToc?: boolean
     tocExpenseCategoryId?: string
     tocTaxDescriptorId?: string
     color?: string
@@ -41,12 +40,13 @@ export class TreasuryCategoriesService {
       const parent = await this.prisma.treasuryCategory.findFirst({ where: { id: data.parentId, clientId, deletedAt: null } })
       if (!parent) throw httpError(404, 'Parent category not found')
     }
-    return this.prisma.treasuryCategory.create({ data: { clientId, ...data } })
+    // launchToc forçado a false: a app já não dispara escritas no TOC pelo
+    // frontend; mantém-se a coluna na BD para integração futura.
+    return this.prisma.treasuryCategory.create({ data: { clientId, ...data, launchToc: false } })
   }
 
   async update(clientId: string, id: string, data: Partial<{
     name: string
-    launchToc: boolean
     tocExpenseCategoryId: string
     color: string
     icon: string
