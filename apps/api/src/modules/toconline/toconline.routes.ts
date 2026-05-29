@@ -344,10 +344,10 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
   fastify.get('/toconline/:clientId/customer-stats', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
 
-    // Faturas TOConline em aberto (pendingTotal > 0, não anuladas)
+    // Faturas TOConline em aberto — status 1 (finalizado) ou 2 (parcial), com pendente > 0
     const tocRows = await fastify.prisma.tocSalesDocument.groupBy({
       by: ['customerId'],
-      where: { clientId, pendingTotal: { gt: 0 }, NOT: { status: 4 }, customerId: { not: null } },
+      where: { clientId, pendingTotal: { gt: 0 }, status: { in: [1, 2] }, customerId: { not: null } },
       _count: { id: true },
       _sum: { pendingTotal: true },
     })
@@ -377,10 +377,10 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
   fastify.get('/toconline/:clientId/supplier-stats', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
 
-    // Faturas TOConline em aberto
+    // Faturas TOConline em aberto — status 1, 2 ou 5 (aberto em compras), com pendente > 0
     const tocRows = await fastify.prisma.tocPurchaseDocument.groupBy({
       by: ['supplierId'],
-      where: { clientId, pendingTotal: { gt: 0 }, NOT: { status: 4 }, supplierId: { not: null } },
+      where: { clientId, pendingTotal: { gt: 0 }, status: { in: [1, 2, 5] }, supplierId: { not: null } },
       _count: { id: true },
       _sum: { pendingTotal: true },
     })
