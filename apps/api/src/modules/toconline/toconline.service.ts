@@ -468,9 +468,25 @@ export class ToconlineService {
     )
     const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[]
     if (rejected.length > 0) console.warn(`[TOConline] getSalesDocumentReceipts docId=${docId} rejected=${rejected.map(r => String(r.reason)).join('; ')}`)
+    const numericDocId = Number(docId)
     return results
       .filter((r): r is PromiseFulfilledResult<unknown> => r.status === 'fulfilled')
-      .map((r) => r.value as Record<string, unknown>)
+      .map((r) => {
+        const raw = r.value as Record<string, unknown>
+        let attrs: Record<string, unknown>
+        if (raw.data && typeof raw.data === 'object') {
+          const d = raw.data as Record<string, unknown>
+          attrs = (d.attributes ?? d) as Record<string, unknown>
+        } else {
+          attrs = raw
+        }
+        const lines = Array.isArray(attrs.lines) ? attrs.lines as Array<Record<string, unknown>> : []
+        const matchLine = lines.find((line) => Number(line.receivable_id) === numericDocId)
+        return {
+          ...raw,
+          _received_for_doc: matchLine ? Number(matchLine.received_value ?? 0) : null,
+        }
+      })
   }
 
   async getPurchaseDocumentPayments(clientId: string, docId: string, knownIds?: number[]) {
@@ -494,9 +510,25 @@ export class ToconlineService {
     const results = await Promise.allSettled(
       paymentIds.map((id) => this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_payments/${id}`))
     )
+    const numericDocId = Number(docId)
     return results
       .filter((r): r is PromiseFulfilledResult<unknown> => r.status === 'fulfilled')
-      .map((r) => r.value as Record<string, unknown>)
+      .map((r) => {
+        const raw = r.value as Record<string, unknown>
+        let attrs: Record<string, unknown>
+        if (raw.data && typeof raw.data === 'object') {
+          const d = raw.data as Record<string, unknown>
+          attrs = (d.attributes ?? d) as Record<string, unknown>
+        } else {
+          attrs = raw
+        }
+        const lines = Array.isArray(attrs.lines) ? attrs.lines as Array<Record<string, unknown>> : []
+        const matchLine = lines.find((line) => Number(line.payable_id) === numericDocId)
+        return {
+          ...raw,
+          _paid_for_doc: matchLine ? Number(matchLine.paid_value ?? matchLine.received_value ?? 0) : null,
+        }
+      })
   }
 
   async getSalesReceiptLines(clientId: string, receiptId: string) {

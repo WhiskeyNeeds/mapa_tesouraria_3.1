@@ -7,6 +7,17 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// Builds a lex-sortable key from a document reference. Extracts the 4-digit year
+// and the trailing sequence number (after "/") so refs sort by year first and
+// then numerically within the year — "FT 2024/9" < "FT 2024/10" < "FT 2025/1".
+// Falls back to a lowercased version of the input when the pattern doesn't match.
+export function refSortKey(ref: string | null | undefined): string {
+  const s = ref ?? ''
+  const m = s.match(/(\d{4})\D+(\d+)(?!.*\d)/)
+  if (m) return `${m[1]}-${m[2].padStart(12, '0')}`
+  return s.toLowerCase()
+}
+
 // Returns true when the given YYYY-MM-DD string falls on Saturday or Sunday.
 // Empty/invalid strings are treated as non-weekend so they don't trip validation.
 export function isWeekend(ymd: string): boolean {

@@ -27,10 +27,12 @@ export class TreasuryPayablesService {
     dueDateTo?: string
     docDateFrom?: string
     docDateTo?: string
+    paymentDateFrom?: string
+    paymentDateTo?: string
     isRecurrent?: boolean
     overdue?: boolean
     tocSupplierId?: string
-    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'
+    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
@@ -40,7 +42,7 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const effectiveStatusFilter = overdue
       ? { status: { in: ['OPEN', 'PARTIAL'] as TreasuryDocStatus[] } }
       : Array.isArray(status)
@@ -69,6 +71,12 @@ export class TreasuryPayablesService {
         documentDate: {
           ...(docDateFrom ? { gte: new Date(docDateFrom) } : {}),
           ...(docDateTo ? { lt: new Date(new Date(docDateTo).getTime() + 86400000) } : {}),
+        },
+      } : {}),
+      ...(paymentDateFrom || paymentDateTo ? {
+        promisedPaymentDate: {
+          ...(paymentDateFrom ? { gte: new Date(paymentDateFrom) } : {}),
+          ...(paymentDateTo ? { lt: new Date(new Date(paymentDateTo).getTime() + 86400000) } : {}),
         },
       } : {}),
       ...(isRecurrent !== undefined ? { recurrenceId: isRecurrent ? { not: null } : null } : {}),
@@ -773,14 +781,22 @@ export class TreasuryPayablesService {
 
   async getKpis(clientId: string) {
     const now = new Date()
+    // "Abertas": emitted but not settled. Excludes recurrence templates (parentless
+    // with recurrenceId) and future recurrence instances (dueDate > now).
+    const abertasClause = {
+      OR: [
+        { recurrenceId: null },
+        { AND: [{ parentId: { not: null } }, { dueDate: { lte: now } }] },
+      ],
+    } as const
     const [totalOpen, overdue, paidMonth] = await Promise.all([
       this.prisma.treasuryPayable.aggregate({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, ...abertasClause },
         _sum: { pendingAmount: true },
         _count: true,
       }),
       this.prisma.treasuryPayable.count({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now }, ...abertasClause },
       }),
       this.prisma.treasuryPayable.aggregate({
         where: { clientId, deletedAt: null, status: 'SETTLED', updatedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
@@ -792,7 +808,7 @@ export class TreasuryPayablesService {
       const from = i === 0 ? new Date(0) : new Date(Date.now() - days * 86400000)
       const to = new Date(Date.now() - (i === 0 ? 0 : (i === 1 ? 31 : (i === 2 ? 61 : 91))) * 86400000)
       return this.prisma.treasuryPayable.count({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now, gte: from, lte: to } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now, gte: from, lte: to }, ...abertasClause },
       })
     }))
 

@@ -5,12 +5,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { formatCurrency, formatDate, isWeekend, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel, tocStatusVariant } from '@/lib/utils'
+import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel, tocStatusVariant } from '@/lib/utils'
 import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
+import DateRangePopover from '@/components/ui/DateRangePopover'
 import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, Printer, Mail, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
@@ -43,6 +44,7 @@ interface TocReceipt {
   gross_total: number
   net_total?: number
   receipt_series?: string
+  _received_for_doc?: number | null
   [key: string]: unknown
 }
 
@@ -227,27 +229,6 @@ function ReceiptDetailModal({
           )}
         </div>
 
-        <div className="flex items-center justify-between px-6 py-3 border-t border-gray-100">
-          <div className="flex items-center gap-2">
-            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-600">
-              <Printer className="w-3.5 h-3.5" />Imprimir
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-600">
-              <Mail className="w-3.5 h-3.5" />Enviar por email
-            </button>
-            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-red-200 rounded-lg hover:bg-red-50 transition-colors text-red-500">
-              <XCircle className="w-3.5 h-3.5" />Anular
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <button className="w-8 h-8 flex items-center justify-center border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-gray-400">
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <button className="px-4 py-1.5 bg-primary-600 text-white text-xs font-semibold rounded-lg hover:bg-primary-700 transition-colors uppercase tracking-wide">
-              Opções de Pagamento
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   )
@@ -327,13 +308,14 @@ export default function ReceivablesPage() {
   const [dueDateTo, setDueDateTo] = useState('')
   const [docDateFrom, setDocDateFrom] = useState('')
   const [docDateTo, setDocDateTo] = useState('')
-  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName'>('dueDate')
+  const [paymentDateFrom, setPaymentDateFrom] = useState('')
+  const [paymentDateTo, setPaymentDateTo] = useState('')
+  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'>('dueDate')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
   const [showNew, setShowNew] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [recForm, setRecForm] = useState(emptyRecurrence)
-  const [isRecurrentFilter, setIsRecurrentFilter] = useState(false)
   const [isOverdueFilter, setIsOverdueFilter] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [editRow, setEditRow] = useState<Receivable | null>(null)
@@ -352,7 +334,7 @@ export default function ReceivablesPage() {
   const [vatIncludedPrices, setVatIncludedPrices] = useState(false)
   const [retentionPct, setRetentionPct] = useState('')
   const [activeTab, setActiveTab] = useState<'clientes' | 'outras'>('clientes')
-  const [outrasSubTab, setOutrasSubTab] = useState<'atuais' | 'futuras' | 'programadas'>('atuais')
+  const [outrasSubTab, setOutrasSubTab] = useState<'fechadas' | 'futuras' | 'programadas' | 'abertas'>('abertas')
   const [outrasForm, setOutrasForm] = useState(emptyOutrasForm)
   const [showNewOutras, setShowNewOutras] = useState(false)
   const [outrasContact, setOutrasContact] = useState<TocCustomer | null>(null)
@@ -388,7 +370,7 @@ export default function ReceivablesPage() {
   })
 
   const { data } = useQuery({
-    queryKey: ['receivables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, sortBy, sortDir, page, isRecurrentFilter, isOverdueFilter],
+    queryKey: ['receivables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), limit: '25' })
       if (isOverdueFilter) {
@@ -401,7 +383,8 @@ export default function ReceivablesPage() {
       if (dueDateTo) params.set('dueDateTo', dueDateTo)
       if (docDateFrom) params.set('docDateFrom', docDateFrom)
       if (docDateTo) params.set('docDateTo', docDateTo)
-      if (isRecurrentFilter) params.set('isRecurrent', 'true')
+      if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
+      if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
       if (sortBy !== 'dueDate' || sortDir !== 'asc') { params.set('sortBy', sortBy); params.set('sortDir', sortDir) }
       return api.get<{ total: number; items: Receivable[] }>(`/treasury/${selectedClientId}/receivables?${params}`)
     },
@@ -783,11 +766,20 @@ export default function ReceivablesPage() {
   const outrasCategorise = (r: Receivable) => {
     if (r.recurrenceId && !r.parentId) return 'programadas' as const
     if (r.recurrenceId && r.parentId && String(r.dueDate).slice(0, 10) > todayYmd) return 'futuras' as const
-    return 'atuais' as const
+    return isClosed(r.status) ? ('fechadas' as const) : ('abertas' as const)
   }
-  const outrasCount = { atuais: 0, futuras: 0, programadas: 0 }
+  const outrasCount = { fechadas: 0, futuras: 0, programadas: 0, abertas: 0 }
   for (const r of outrasAll) outrasCount[outrasCategorise(r)]++
-  const outrasRows = outrasAll.filter((r) => outrasCategorise(r) === outrasSubTab)
+  const outrasRows = (() => {
+    const filtered = outrasAll.filter((r) => outrasCategorise(r) === outrasSubTab)
+    if (sortBy === 'reference') {
+      return [...filtered].sort((a, b) => {
+        const cmp = refSortKey(a.reference).localeCompare(refSortKey(b.reference))
+        return sortDir === 'asc' ? cmp : -cmp
+      })
+    }
+    return filtered
+  })()
 
   async function onCategoryChange(categoryId: string) {
     setForm((f) => ({ ...f, categoryId }))
@@ -815,9 +807,9 @@ export default function ReceivablesPage() {
     } catch { /* ignora erros silenciosamente */ }
   }
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || isRecurrentFilter || isOverdueFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter)
   function clearFilters() {
-    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setIsRecurrentFilter(false); setIsOverdueFilter(false); setPage(1)
+    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setPage(1)
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -877,6 +869,12 @@ export default function ReceivablesPage() {
     if (dueDateTo && d.due_date && d.due_date > dueDateTo) return false
     if (docDateFrom && d.date && d.date < docDateFrom) return false
     if (docDateTo && d.date && d.date > docDateTo) return false
+    if (entitySearch) {
+      const q = entitySearch.toLowerCase()
+      const name = (d.customer_business_name ?? '').toLowerCase()
+      const ref = (d.document_no ?? '').toLowerCase()
+      if (!name.includes(q) && !ref.includes(q)) return false
+    }
     return true
   })
 
@@ -899,13 +897,49 @@ export default function ReceivablesPage() {
 
   const localForRows = (data?.items ?? []).filter((r) => !!r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
 
+  const normalizeTocStatus = (s: number): number => {
+    if (s === 1 || s === 5) return 0
+    if (s === 2) return 1
+    if (s === 3) return 2
+    if (s === 4) return 3
+    return -1
+  }
+  const localStatusOrder = (s: string): number => ['OPEN', 'PARTIAL', 'SETTLED', 'VOID'].indexOf(s)
+  const rowSortValue = (row: Row): number | string => {
+    if (row._src === 'local') {
+      const r = row.r
+      switch (sortBy) {
+        case 'reference': return refSortKey(r.reference)
+        case 'entityName': return (r.entityName ?? '').toLowerCase()
+        case 'dueDate': return new Date(r.dueDate).getTime()
+        case 'promisedPaymentDate': return r.promisedPaymentDate ? new Date(r.promisedPaymentDate).getTime() : Number.POSITIVE_INFINITY
+        case 'totalAmount': return Number(r.totalAmount)
+        case 'pendingAmount': return Number(r.pendingAmount)
+        case 'status': return localStatusOrder(r.status)
+      }
+    } else {
+      const d = row.d
+      switch (sortBy) {
+        case 'reference': return refSortKey(d.document_no)
+        case 'entityName': return (d.customer_business_name ?? '').toLowerCase()
+        case 'dueDate': return new Date(d.due_date ?? d.date).getTime()
+        case 'promisedPaymentDate': return Number.POSITIVE_INFINITY
+        case 'totalAmount': return Number(d.gross_total)
+        case 'pendingAmount': return Number(d.pending_total)
+        case 'status': return normalizeTocStatus(Number(d.status))
+      }
+    }
+    return 0
+  }
   const rows: Row[] = [
     ...localForRows.map((r) => ({ _src: 'local' as const, r })),
     ...tocOnly.map((d) => ({ _src: 'toc' as const, d })),
   ].sort((a, b) => {
-    const dateA = a._src === 'local' ? a.r.documentDate : a.d.date
-    const dateB = b._src === 'local' ? b.r.documentDate : b.d.date
-    return new Date(dateB).getTime() - new Date(dateA).getTime()
+    const va = rowSortValue(a), vb = rowSortValue(b)
+    let cmp = 0
+    if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb
+    else cmp = String(va).localeCompare(String(vb), 'pt')
+    return sortDir === 'asc' ? cmp : -cmp
   })
 
   // KPIs combinados: locais (endpoint /kpis) + TOConline ainda não importados
@@ -997,34 +1031,24 @@ export default function ReceivablesPage() {
                         <option value="SETTLED">Liquidado</option>
                         <option value="VOID">Anulado</option>
                       </select>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-gray-500 whitespace-nowrap">Data doc.</span>
-                        <input type="date" className="input text-sm py-1 w-36" value={docDateFrom} onChange={(e) => { setDocDateFrom(e.target.value); setPage(1) }} title="De" />
-                        <span className="text-gray-400 text-xs">–</span>
-                        <input type="date" className="input text-sm py-1 w-36" value={docDateTo} onChange={(e) => { setDocDateTo(e.target.value); setPage(1) }} title="Até" />
-                        {(docDateFrom || docDateTo) && (
-                          <button onClick={() => { setDocDateFrom(''); setDocDateTo(''); setPage(1) }} className="text-gray-400 hover:text-gray-600">
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-gray-500 whitespace-nowrap">Vencimento</span>
-                        <input type="date" className="input text-sm py-1 w-36" value={dueDateFrom} onChange={(e) => { setDueDateFrom(e.target.value); setPage(1) }} title="De" />
-                        <span className="text-gray-400 text-xs">–</span>
-                        <input type="date" className="input text-sm py-1 w-36" value={dueDateTo} onChange={(e) => { setDueDateTo(e.target.value); setPage(1) }} title="Até" />
-                        {(dueDateFrom || dueDateTo) && (
-                          <button onClick={() => { setDueDateFrom(''); setDueDateTo(''); setPage(1) }} className="text-gray-400 hover:text-gray-600">
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => { setIsRecurrentFilter((v) => !v); setPage(1) }}
-                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isRecurrentFilter ? 'bg-primary-50 border-primary-300 text-primary-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-                      >
-                        <Repeat2 className="w-3.5 h-3.5" /> Recorrentes
-                      </button>
+                      <DateRangePopover
+                        label="Data doc."
+                        startDate={docDateFrom}
+                        endDate={docDateTo}
+                        onChange={(s, e) => { setDocDateFrom(s); setDocDateTo(e); setPage(1) }}
+                      />
+                      <DateRangePopover
+                        label="Vencimento"
+                        startDate={dueDateFrom}
+                        endDate={dueDateTo}
+                        onChange={(s, e) => { setDueDateFrom(s); setDueDateTo(e); setPage(1) }}
+                      />
+                      <DateRangePopover
+                        label="Pagamento"
+                        startDate={paymentDateFrom}
+                        endDate={paymentDateTo}
+                        onChange={(s, e) => { setPaymentDateFrom(s); setPaymentDateTo(e); setPage(1) }}
+                      />
                       <button
                         onClick={() => { setIsOverdueFilter((v) => !v); setPage(1) }}
                         className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isOverdueFilter ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
@@ -1052,21 +1076,27 @@ export default function ReceivablesPage() {
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                            <th className="text-left px-5 py-3">Documento</th>
+                            <th onClick={() => toggleSort('reference')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
+                              Documento <SortIcon field="reference" />
+                            </th>
                             <th onClick={() => toggleSort('entityName')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Cliente <SortIcon field="entityName" />
                             </th>
                             <th onClick={() => toggleSort('dueDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Vencimento <SortIcon field="dueDate" />
                             </th>
-                            <th className="text-left px-5 py-3">Pagamento</th>
+                            <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
+                              Pagamento <SortIcon field="promisedPaymentDate" />
+                            </th>
                             <th onClick={() => toggleSort('totalAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Total <SortIcon field="totalAmount" />
                             </th>
                             <th onClick={() => toggleSort('pendingAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Pendente <SortIcon field="pendingAmount" />
                             </th>
-                            <th className="text-left px-5 py-3">Estado</th>
+                            <th onClick={() => toggleSort('status')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
+                              Estado <SortIcon field="status" />
+                            </th>
                             <th className="w-16 px-3 py-3" />
                           </tr>
                         </thead>
@@ -1075,7 +1105,7 @@ export default function ReceivablesPage() {
                             if (row._src === 'local') {
                               const r = row.r
                               return (
-                                <tr key={`l-${r.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab((r.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                                <tr key={`l-${r.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab((r.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                                   <td className="px-5 py-3">
                                     <div className="flex items-start gap-1.5">
                                       <span className="w-4 flex-shrink-0" />
@@ -1218,7 +1248,7 @@ export default function ReceivablesPage() {
                             return (
                               <Fragment key={key}>
                                 <tr
-                                  className="hover:bg-green-50 bg-green-50/30 group cursor-pointer"
+                                  className="hover:bg-primary-50 transition-colors bg-green-50/30 group cursor-pointer"
                                   onClick={() => {
                                     const s = Number(d.status)
                                     setPanelDoc({
@@ -1372,7 +1402,8 @@ export default function ReceivablesPage() {
                   <div className="flex items-center justify-between">
                     <div className="inline-flex rounded-lg border border-gray-200 bg-white overflow-hidden text-sm">
                       {([
-                        { key: 'atuais', label: 'Atuais' },
+                        { key: 'abertas', label: 'Abertas' },
+                        { key: 'fechadas', label: 'Fechadas' },
                         { key: 'futuras', label: 'Futuras' },
                         { key: 'programadas', label: 'Programadas' },
                       ] as const).map((t) => (
@@ -1388,17 +1419,70 @@ export default function ReceivablesPage() {
                     </button>
                   </div>
                   <div className="card">
+                    <div className="px-5 py-4 border-b border-gray-100 flex gap-3 items-center flex-wrap">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                        <input
+                          className="input pl-8 text-sm py-1 w-44"
+                          placeholder="Cliente ou referência..."
+                          value={entitySearch}
+                          onChange={(e) => { setEntitySearch(e.target.value); setPage(1) }}
+                        />
+                        {entitySearch && (
+                          <button onClick={() => { setEntitySearch(''); setPage(1) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
+                        <option value="">Todos os estados</option>
+                        <option value="OPEN,PARTIAL">Pendente</option>
+                        <option value="OPEN">Emitido / Em aberto</option>
+                        <option value="PARTIAL">Parcialmente liquidado</option>
+                        <option value="SETTLED">Liquidado</option>
+                        <option value="VOID">Anulado</option>
+                      </select>
+                      <DateRangePopover
+                        label="Data doc."
+                        startDate={docDateFrom}
+                        endDate={docDateTo}
+                        onChange={(s, e) => { setDocDateFrom(s); setDocDateTo(e); setPage(1) }}
+                      />
+                      <DateRangePopover
+                        label="Vencimento"
+                        startDate={dueDateFrom}
+                        endDate={dueDateTo}
+                        onChange={(s, e) => { setDueDateFrom(s); setDueDateTo(e); setPage(1) }}
+                      />
+                      <DateRangePopover
+                        label="Pagamento"
+                        startDate={paymentDateFrom}
+                        endDate={paymentDateTo}
+                        onChange={(s, e) => { setPaymentDateFrom(s); setPaymentDateTo(e); setPage(1) }}
+                      />
+                      <button
+                        onClick={() => { setIsOverdueFilter((v) => !v); setPage(1) }}
+                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isOverdueFilter ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" /> Vencidas
+                      </button>
+                      {hasFilters && (
+                        <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
+                          <X className="w-3.5 h-3.5" /> Limpar
+                        </button>
+                      )}
+                    </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                            <th className="text-left px-5 py-3">Documento</th>
-                            <th className="text-left px-5 py-3">Cliente</th>
+                            <th onClick={() => toggleSort('reference')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
+                            <th onClick={() => toggleSort('entityName')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Cliente <SortIcon field="entityName" /></th>
                             <th onClick={() => toggleSort('dueDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Vencimento <SortIcon field="dueDate" /></th>
-                            <th className="text-left px-5 py-3">Pagamento</th>
+                            <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Pagamento <SortIcon field="promisedPaymentDate" /></th>
                             <th onClick={() => toggleSort('totalAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Total <SortIcon field="totalAmount" /></th>
                             <th onClick={() => toggleSort('pendingAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
-                            <th className="text-left px-5 py-3">Estado</th>
+                            <th onClick={() => toggleSort('status')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                             <th className="w-16 px-3 py-3" />
                           </tr>
                         </thead>
@@ -1414,7 +1498,7 @@ export default function ReceivablesPage() {
                             const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
                             const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
                             return (
-                              <tr key={`o-${r.id}`} className="hover:bg-gray-50 group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab((r.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                              <tr key={`o-${r.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab((r.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                                 <td className="px-5 py-3">
                                   <div className="flex items-start gap-1.5">
                                     <span className="w-4 flex-shrink-0" />
@@ -1487,32 +1571,10 @@ export default function ReceivablesPage() {
                             )
                             }
 
-                            const sectionHeader = (label: string, count: number) => (
-                              <tr key={`hdr-${label}`} className="bg-gray-50/80">
-                                <td colSpan={8} className="px-5 py-1.5 text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
-                                  {label} <span className="ml-1 font-normal text-gray-400">({count})</span>
-                                </td>
-                              </tr>
-                            )
-
                             if (outrasRows.length === 0) {
                               return <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira.</td></tr>
                             }
 
-                            // No separador "Atuais", divide as linhas em "Em aberto" (OPEN/PARTIAL)
-                            // e "Liquidadas" (SETTLED/VOID) com cabeçalho de secção entre os grupos.
-                            if (outrasSubTab === 'atuais') {
-                              const openRows = outrasRows.filter((r) => !isClosed(r.status))
-                              const closedRows = outrasRows.filter((r) => isClosed(r.status))
-                              return (
-                                <>
-                                  {openRows.length > 0 && sectionHeader('Em aberto', openRows.length)}
-                                  {openRows.map(renderRow)}
-                                  {closedRows.length > 0 && sectionHeader('Liquidadas', closedRows.length)}
-                                  {closedRows.map(renderRow)}
-                                </>
-                              )
-                            }
                             return outrasRows.map(renderRow)
                           })()}
                         </tbody>
@@ -2300,18 +2362,27 @@ export default function ReceivablesPage() {
             {panelReceipts.length > 0 && (
               <div className="border-b border-gray-100 px-4 py-3 space-y-2">
                 <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">{panelReceipts.length} {panelReceipts.length === 1 ? 'recibo associado' : 'recibos associados'}</div>
-                {panelReceipts.map((rc) => (
-                  <button key={String(rc.id)}
-                    onClick={() => setDetailReceipt(rc)}
-                    className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-teal-50 hover:border-teal-200 transition-colors">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-xs text-gray-400">Recibo</span>
-                      <span className="text-xs font-semibold text-gray-700">{formatCurrency(rc.gross_total)}</span>
-                    </div>
-                    <div className="font-medium text-sm text-gray-900">{rc.document_no}</div>
-                    <div className="text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</div>
-                  </button>
-                ))}
+                {panelReceipts.map((rc) => {
+                  const receivedForDoc = rc._received_for_doc != null ? Number(rc._received_for_doc) : null
+                  const showSplit = receivedForDoc != null && receivedForDoc !== Number(rc.gross_total)
+                  return (
+                    <button key={String(rc.id)}
+                      onClick={() => setDetailReceipt(rc)}
+                      className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-xs text-gray-400">Recibo</span>
+                        <div className="text-right">
+                          <div className="text-xs font-semibold text-gray-700">{formatCurrency(receivedForDoc ?? rc.gross_total)}</div>
+                          {showSplit && (
+                            <div className="text-[10px] text-gray-400">de {formatCurrency(rc.gross_total)}</div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="font-medium text-sm text-gray-900">{rc.document_no}</div>
+                      <div className="text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</div>
+                    </button>
+                  )
+                })}
               </div>
             )}
 
