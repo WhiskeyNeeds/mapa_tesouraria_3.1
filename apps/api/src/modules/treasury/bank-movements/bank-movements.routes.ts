@@ -101,7 +101,8 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       source: Parameters<TreasuryBankMovementsService['importMovements']>[3]
     }
     const result = await svc.importMovements(clientId, body.bankAccountId, body.movements, body.source, request.user.sub)
-    return reply.status(201).send(result)
+    const [consistency] = await svc.checkBalanceConsistency(clientId, body.bankAccountId)
+    return reply.status(201).send({ ...result, gaps: consistency?.gaps ?? [] })
   })
 
   // File upload preview — parse and validate without importing
@@ -328,7 +329,12 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
       },
     })
 
-    return reply.status(201).send({ ...result, parsed: movements.length, bank })
+    // Verifica inconsistências de saldo na conta após a importação (mesma lógica que
+    // alimenta a coluna "Gap" na visualização dos movimentos). Devolve os gaps na
+    // resposta para o frontend poder mostrar um aviso pós-import.
+    const [consistency] = await svc.checkBalanceConsistency(clientId, bankAccountId)
+
+    return reply.status(201).send({ ...result, parsed: movements.length, bank, gaps: consistency?.gaps ?? [] })
   })
 
   // Unified account history: timeline + reconciliations + monthly summary

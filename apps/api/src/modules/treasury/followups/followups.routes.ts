@@ -33,6 +33,8 @@ export async function followupsRoutes(fastify: FastifyInstance) {
     const q = request.query as {
       receivableId?: string
       payableId?: string
+      tocCustomerId?: string
+      tocSupplierId?: string
       kind?: TreasuryFollowupKind
       status?: TreasuryFollowupStatus
       direction?: TreasuryFollowupDirection

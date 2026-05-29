@@ -6,12 +6,14 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel, tocStatusVariant } from '@/lib/utils'
+import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, Printer, Mail, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
+import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
 interface TocSalesDoc {
   id: number
@@ -624,6 +626,10 @@ export default function ReceivablesPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['receivables'] })
       qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
+      // Edição de programada propaga aos filhos futuros — refresh do dashboard
+      // (cashflow statement + cash positioning) para refletir os novos valores.
+      qc.invalidateQueries({ queryKey: ['dashboard-cashflow-statement'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
       setEditId(null)
       setEditRow(null)
       toast.success('Documento atualizado.')
@@ -771,6 +777,7 @@ export default function ReceivablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  const isClosed = (status: string) => status === 'SETTLED' || status === 'VOID'
   const outrasAll = (data?.items ?? []).filter((r) => !r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
   const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (r: Receivable) => {
@@ -1396,9 +1403,8 @@ export default function ReceivablesPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                          {outrasRows.length === 0 ? (
-                            <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira.</td></tr>
-                          ) : outrasRows.map((r) => {
+                          {(() => {
+                            const renderRow = (r: Receivable) => {
                             const isSplit = (r.children ?? []).some((c) => !c.recurrenceId)
                             const displayDate = isSplit && r.promisedPaymentDate ? r.promisedPaymentDate : r.dueDate
                             const now = Date.now()
@@ -1479,7 +1485,36 @@ export default function ReceivablesPage() {
                                 </td>
                               </tr>
                             )
-                          })}
+                            }
+
+                            const sectionHeader = (label: string, count: number) => (
+                              <tr key={`hdr-${label}`} className="bg-gray-50/80">
+                                <td colSpan={8} className="px-5 py-1.5 text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
+                                  {label} <span className="ml-1 font-normal text-gray-400">({count})</span>
+                                </td>
+                              </tr>
+                            )
+
+                            if (outrasRows.length === 0) {
+                              return <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira.</td></tr>
+                            }
+
+                            // No separador "Atuais", divide as linhas em "Em aberto" (OPEN/PARTIAL)
+                            // e "Liquidadas" (SETTLED/VOID) com cabeçalho de secção entre os grupos.
+                            if (outrasSubTab === 'atuais') {
+                              const openRows = outrasRows.filter((r) => !isClosed(r.status))
+                              const closedRows = outrasRows.filter((r) => isClosed(r.status))
+                              return (
+                                <>
+                                  {openRows.length > 0 && sectionHeader('Em aberto', openRows.length)}
+                                  {openRows.map(renderRow)}
+                                  {closedRows.length > 0 && sectionHeader('Liquidadas', closedRows.length)}
+                                  {closedRows.map(renderRow)}
+                                </>
+                              )
+                            }
+                            return outrasRows.map(renderRow)
+                          })()}
                         </tbody>
                       </table>
                     </div>
@@ -2234,7 +2269,17 @@ export default function ReceivablesPage() {
                 </div>
                 <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
               </div>
-              <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
+              <div className="flex items-center gap-3">
+                <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
+                {selectedClientId && (
+                  <InvoiceAttachmentsButton
+                    clientId={selectedClientId}
+                    direction="RECEIVABLE"
+                    docId={panelDoc.id}
+                    origin={panelDoc.origin}
+                  />
+                )}
+              </div>
               <div className="text-sm font-medium text-primary-700 mt-0.5">{panelDoc.entityName || '—'}</div>
               <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
               <div className="mt-2 flex items-center gap-2 flex-wrap">
@@ -2393,34 +2438,23 @@ export default function ReceivablesPage() {
                     <div className="rounded-xl border border-gray-200 overflow-hidden">
                       <button
                         onClick={() => {
+                          const buildInitialInstallments = (doc: { totalAmount: number | string; dueDate: string }, n: number) => {
+                            const amounts = distributeAmount(Number(doc.totalAmount), n)
+                            return amounts.map((amount, i) => {
+                              const d = new Date(doc.dueDate); d.setMonth(d.getMonth() + i)
+                              return { amount: formatInstallmentValue(amount, 'EUR'), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
+                            })
+                          }
                           if (panelDoc.origin === 'TOC') {
                             autoImportAndRun((doc) => {
-                              const n = splitCount
-                              const total = Number(doc.totalAmount)
-                              const tCents = Math.round(total * 100)
-                              const bCents = Math.floor(tCents / n)
-                              const rCents = tCents - bCents * n
-                              const inst = Array.from({ length: n }, (_, i) => {
-                                const dd = new Date(doc.dueDate); dd.setMonth(dd.getMonth() + i)
-                                return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), paymentDate: shiftToWorkday(dd.toISOString().slice(0, 10)) }
-                              })
-                              setSplitInstallments(inst)
+                              setSplitInstallments(buildInitialInstallments(doc, splitCount))
                               setSplitValueMode('EUR')
                               setPanelSection('split')
                             })
                             return
                           }
                           if (panelSection !== 'split') {
-                            const n = splitCount
-                            const total = Number(panelDoc.totalAmount)
-                            const tCents = Math.round(total * 100)
-                            const bCents = Math.floor(tCents / n)
-                            const rCents = tCents - bCents * n
-                            const inst = Array.from({ length: n }, (_, i) => {
-                              const d = new Date(panelDoc.dueDate); d.setMonth(d.getMonth() + i)
-                              return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
-                            })
-                            setSplitInstallments(inst)
+                            setSplitInstallments(buildInitialInstallments(panelDoc, splitCount))
                             setSplitValueMode('EUR')
                           }
                           setPanelSection(panelSection === 'split' ? null : 'split')
@@ -2446,13 +2480,12 @@ export default function ReceivablesPage() {
                                 onClick={() => {
                                   const n = Math.max(2, splitCount - 1)
                                   const total = Number(panelDoc.totalAmount)
-                                  const tCents = Math.round(total * 100); const bCents = Math.floor(tCents / n); const rCents = tCents - bCents * n
-                                  const bUnits = Math.floor(100000 / n); const rUnits = 100000 - bUnits * n
+                                  const values = splitValueMode === 'PCT' ? distributePct(n) : distributeAmount(total, n)
                                   setSplitCount(n)
                                   setSplitInstallments(Array.from({ length: n }, (_, i) => {
-                                    const d = new Date(splitInstallments[i]?.paymentDate || panelDoc.dueDate); if (!splitInstallments[i]?.paymentDate) d.setMonth(d.getMonth() + i)
-                                    const amount = splitValueMode === 'PCT' ? ((i < rUnits ? bUnits + 1 : bUnits) / 1000).toFixed(3) : ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2)
-                                    return { amount, paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
+                                    const d = new Date(splitInstallments[i]?.paymentDate || panelDoc.dueDate)
+                                    if (!splitInstallments[i]?.paymentDate) d.setMonth(d.getMonth() + i)
+                                    return { amount: formatInstallmentValue(values[i], splitValueMode), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
                                   }))
                                 }}
                                 className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
@@ -2462,15 +2495,15 @@ export default function ReceivablesPage() {
                                 onClick={() => {
                                   const n = splitCount + 1
                                   const total = Number(panelDoc.totalAmount)
-                                  const tCents = Math.round(total * 100); const bCents = Math.floor(tCents / n); const rCents = tCents - bCents * n
-                                  const bUnits = Math.floor(100000 / n); const rUnits = 100000 - bUnits * n
+                                  const values = splitValueMode === 'PCT' ? distributePct(n) : distributeAmount(total, n)
                                   setSplitCount(n)
                                   setSplitInstallments(Array.from({ length: n }, (_, i) => {
                                     const prevDate = splitInstallments[i - 1]?.paymentDate
-                                    const d = prevDate ? (() => { const dd = new Date(prevDate); dd.setMonth(dd.getMonth() + 1); return dd })() : (() => { const dd = new Date(panelDoc.dueDate); dd.setMonth(dd.getMonth() + i); return dd })()
+                                    const d = prevDate
+                                      ? (() => { const dd = new Date(prevDate); dd.setMonth(dd.getMonth() + 1); return dd })()
+                                      : (() => { const dd = new Date(panelDoc.dueDate); dd.setMonth(dd.getMonth() + i); return dd })()
                                     const existingDate = splitInstallments[i]?.paymentDate || shiftToWorkday(d.toISOString().slice(0, 10))
-                                    const amount = splitValueMode === 'PCT' ? ((i < rUnits ? bUnits + 1 : bUnits) / 1000).toFixed(3) : ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2)
-                                    return { amount, paymentDate: existingDate }
+                                    return { amount: formatInstallmentValue(values[i], splitValueMode), paymentDate: existingDate }
                                   }))
                                 }}
                                 className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
@@ -2486,7 +2519,9 @@ export default function ReceivablesPage() {
                                 onClick={() => {
                                   if (splitValueMode === 'PCT') {
                                     const total = Number(panelDoc.totalAmount)
-                                    setSplitInstallments(splitInstallments.map((x) => ({ ...x, amount: ((parseFloat(x.amount) || 0) * total / 100).toFixed(2) })))
+                                    const pcts = splitInstallments.map((x) => parseFloat(x.amount) || 0)
+                                    const eurs = convertPctToEur(pcts, total)
+                                    setSplitInstallments(splitInstallments.map((x, i) => ({ ...x, amount: formatInstallmentValue(eurs[i], 'EUR') })))
                                     setSplitValueMode('EUR')
                                   }
                                 }}
@@ -2496,7 +2531,9 @@ export default function ReceivablesPage() {
                                 onClick={() => {
                                   if (splitValueMode === 'EUR') {
                                     const total = Number(panelDoc.totalAmount)
-                                    setSplitInstallments(splitInstallments.map((x) => ({ ...x, amount: (total > 0 ? ((parseFloat(x.amount) || 0) / total * 100) : 0).toFixed(2) })))
+                                    const eurs = splitInstallments.map((x) => parseFloat(x.amount) || 0)
+                                    const pcts = convertEurToPct(eurs, total)
+                                    setSplitInstallments(splitInstallments.map((x, i) => ({ ...x, amount: formatInstallmentValue(pcts[i], 'PCT') })))
                                     setSplitValueMode('PCT')
                                   }
                                 }}
@@ -2565,8 +2602,19 @@ export default function ReceivablesPage() {
                           <button
                             onClick={() => {
                               const total = Number(panelDoc.totalAmount)
-                              const installments = splitInstallments.map((x) => ({
-                                amount: splitValueMode === 'EUR' ? parseFloat(x.amount) : parseFloat(x.amount) / 100 * total,
+                              const rawValues = splitInstallments.map((x) => parseFloat(x.amount) || 0)
+                              const finalEurs = splitValueMode === 'PCT'
+                                ? convertPctToEur(rawValues, total)
+                                : (() => {
+                                    const cents = rawValues.reduce((s, v) => s + Math.round(v * 100), 0)
+                                    const target = Math.round(total * 100)
+                                    if (cents === target) return rawValues
+                                    return rawValues.map((v, i) =>
+                                      i === rawValues.length - 1 ? (Math.round(v * 100) + (target - cents)) / 100 : v,
+                                    )
+                                  })()
+                              const installments = splitInstallments.map((x, i) => ({
+                                amount: finalEurs[i],
                                 promisedPaymentDate: x.paymentDate,
                               }))
                               splitReceivable.mutate({ id: panelDoc.id, installments })

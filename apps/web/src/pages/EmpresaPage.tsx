@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import {
   Search, Users, Truck, Package, Wrench, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2, Eye, Pencil,
+  ArrowUp, ArrowDown, ArrowUpDown, X, Plus, BarChart2, Trash2, Check, FilePlus2, Eye, Pencil, Mail,
 } from 'lucide-react'
 
 type Tab = 'clientes' | 'fornecedores' | 'produtos' | 'servicos'
@@ -969,6 +969,22 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
     staleTime: 60_000,
   })
 
+  // Emails enviados ao cliente via regras de cobrança automáticas (kind: EMAIL_SENT).
+  const { data: cliEmails = [] } = useQuery<Array<{
+    id: string
+    title: string
+    description: string | null
+    completedAt: string | null
+    createdAt: string
+    receivable: { id: string; reference: string | null; entityName: string | null; totalAmount: string } | null
+    payload: unknown
+  }>>({
+    queryKey: ['customer-emails', clientId, editRow?.id],
+    queryFn: () => api.get(`/treasury/${clientId}/followups?tocCustomerId=${String(editRow!.id)}&kind=EMAIL_SENT&direction=RECEIVABLE`),
+    enabled: tab === 'clientes' && !!editRow?.id,
+    staleTime: 30_000,
+  })
+
   const { data: fornDetail } = useQuery<TocRow>({
     queryKey: ['toc-supplier-detail', clientId, editRow?.id],
     queryFn: () => api.get(`/toconline/${clientId}/suppliers/${String(editRow!.id)}`),
@@ -976,27 +992,61 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
     staleTime: 60_000,
   })
 
+  // Réguas de cobrança disponíveis para este tenant + atribuição atual do cliente.
+  const { data: dunningTracks = [] } = useQuery<Array<{ id: string; name: string; isActive: boolean; isDefault: boolean }>>({
+    queryKey: ['dunning-tracks', clientId],
+    queryFn: () => api.get(`/treasury/${clientId}/dunning-tracks`),
+    enabled: tab === 'clientes' && !!editRow?.id,
+    staleTime: 60_000,
+  })
+
+  const { data: cliTrackAssignment } = useQuery<{ trackId: string } | null>({
+    queryKey: ['dunning-track-assignment', clientId, editRow?.id],
+    queryFn: () => api.get(`/treasury/${clientId}/dunning-tracks/assignments/${String(editRow!.id)}`),
+    enabled: tab === 'clientes' && !!editRow?.id,
+  })
+
+  const setDunningAssignment = useMutation({
+    mutationFn: ({ trackId }: { trackId: string | null }) =>
+      api.put(`/treasury/${clientId}/dunning-tracks/assignments/${String(editRow!.id)}`, { trackId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dunning-track-assignment', clientId, editRow?.id] })
+      qc.invalidateQueries({ queryKey: ['dunning-tracks', clientId] })
+    },
+  })
+
   const cliAddrPrefilled  = useRef(false)
   const fornAddrPrefilled = useRef(false)
 
   useEffect(() => {
     if (!cliDetail || !cli) return
-    const addr = (cliDetail as Record<string, unknown>)._address as Record<string, unknown> | null | undefined
-    if (!addr) return
-    cliAddrPrefilled.current = true
-    if (addr.address_detail) setCli_morada(String(addr.address_detail))
-    if (addr.postcode)       setCli_codPostal(String(addr.postcode))
-    if (addr.city)           setCli_localidade(String(addr.city))
+    const detail = cliDetail as Record<string, unknown>
+    const addr = detail._address as Record<string, unknown> | null | undefined
+    if (addr) {
+      cliAddrPrefilled.current = true
+      if (addr.address_detail) setCli_morada(String(addr.address_detail))
+      if (addr.postcode)       setCli_codPostal(String(addr.postcode))
+      if (addr.city)           setCli_localidade(String(addr.city))
+    }
+    // Email principal vem como `_mainEmail` (resolvido via /email_addresses) ou
+    // como `email` inline. Só preenche se o campo ainda estiver vazio para não
+    // sobrescrever edições em curso.
+    const resolvedEmail = (detail._mainEmail as string | undefined) ?? (detail.email as string | undefined)
+    if (resolvedEmail && !cli_email) setCli_email(String(resolvedEmail))
   }, [cliDetail]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!fornDetail || !forn) return
-    const addr = (fornDetail as Record<string, unknown>)._address as Record<string, unknown> | null | undefined
-    if (!addr) return
-    fornAddrPrefilled.current = true
-    if (addr.address_detail) setForn_morada(String(addr.address_detail))
-    if (addr.postcode)       setForn_codPostal(String(addr.postcode))
-    if (addr.city)           setForn_localidade(String(addr.city))
+    const detail = fornDetail as Record<string, unknown>
+    const addr = detail._address as Record<string, unknown> | null | undefined
+    if (addr) {
+      fornAddrPrefilled.current = true
+      if (addr.address_detail) setForn_morada(String(addr.address_detail))
+      if (addr.postcode)       setForn_codPostal(String(addr.postcode))
+      if (addr.city)           setForn_localidade(String(addr.city))
+    }
+    const resolvedEmail = (detail._mainEmail as string | undefined) ?? (detail.email as string | undefined)
+    if (resolvedEmail && !forn_email) setForn_email(String(resolvedEmail))
   }, [fornDetail]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1385,7 +1435,7 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
               </div>
 
               {sHdr('Observações')}
-              <div className="px-6 py-3 space-y-3 pb-4">
+              <div className="px-6 py-3 space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Observações para documento</label>
                   <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Observações para documento..." value={cli_obsDoc} onChange={e => setCli_obsDoc(e.target.value)} />
@@ -1395,6 +1445,64 @@ function NovoRegistoModal({ tab, clientId, onClose, editRow }: { tab: Tab; clien
                   <textarea className="input text-sm w-full resize-none" rows={2} placeholder="Observações internas..." value={cli_obsInt} onChange={e => setCli_obsInt(e.target.value)} />
                 </div>
               </div>
+
+              {editRow?.id && (
+                <>
+                  {sHdr('Régua de Cobrança')}
+                  <div className="px-6 py-3 pb-1">
+                    {dunningTracks.length === 0 ? (
+                      <p className="text-xs text-gray-400 italic">Sem réguas configuradas. Cria uma em Definições → Réguas de Cobrança.</p>
+                    ) : (
+                      <>
+                        <select
+                          className="input text-sm w-full"
+                          value={cliTrackAssignment?.trackId ?? ''}
+                          onChange={(e) => setDunningAssignment.mutate({ trackId: e.target.value || null })}
+                        >
+                          <option value="">— Usar régua default —</option>
+                          {dunningTracks.filter((t) => t.isActive).map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}{t.isDefault ? ' (default)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {cliTrackAssignment?.trackId
+                            ? 'Este cliente usa a régua selecionada para cobrança automática.'
+                            : 'Sem atribuição explícita — usa a régua marcada como default.'}
+                        </p>
+                      </>
+                    )}
+                  </div>
+
+                  {sHdr('Emails Enviados')}
+                  <div className="px-6 py-3 pb-4">
+                    {cliEmails.length === 0 ? (
+                      <p className="text-xs text-gray-400 italic">Sem emails enviados a este cliente.</p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {cliEmails.map((e) => {
+                          const when = e.completedAt ?? e.createdAt
+                          const dateStr = new Date(when).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' })
+                          const ref = e.receivable?.reference
+                          return (
+                            <li key={e.id} className="flex items-start gap-2 text-xs border border-gray-100 rounded-md px-3 py-2">
+                              <Mail className="w-3.5 h-3.5 text-gray-400 mt-0.5 flex-shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-gray-800 truncate" title={e.title}>{e.title}</div>
+                                <div className="text-gray-500 mt-0.5">
+                                  {dateStr}
+                                  {ref && <span> · Fatura {ref}</span>}
+                                </div>
+                              </div>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* VERSO — Informações Adicionais */}
@@ -2427,7 +2535,6 @@ function TabTable({
 
   const [analiticaItem,     setAnaliticaItem]     = useState<TocRow | null>(null)
   const [novaContaItem,     setNovaContaItem]     = useState<TocRow | null>(null)
-  const [novoRegisto,       setNovoRegisto]       = useState(false)
   const [detalheRow,        setDetalheRow]        = useState<TocRow | null>(null)
   const [editingRow,        setEditingRow]        = useState<TocRow | null>(null)
   const [deleteConfirm,     setDeleteConfirm]     = useState<TocRow | null>(null)
@@ -2594,12 +2701,12 @@ function TabTable({
           onClose={() => setNovaContaItem(null)}
         />
       )}
-      {(novoRegisto || editingRow) && (
+      {editingRow && (
         <NovoRegistoModal
           tab={tab}
           clientId={clientId}
           editRow={editingRow}
-          onClose={() => { setNovoRegisto(false); setEditingRow(null) }}
+          onClose={() => setEditingRow(null)}
         />
       )}
       {deleteConfirm && (
@@ -2712,13 +2819,6 @@ function TabTable({
         )}
 
         <div className="ml-auto flex items-center gap-3">
-          <button
-            onClick={() => setNovoRegisto(true)}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-primary-600 hover:bg-primary-700 rounded-lg px-3 py-1.5 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            {tab === 'clientes' ? 'Novo Cliente' : tab === 'fornecedores' ? 'Novo Fornecedor' : tab === 'produtos' ? 'Novo Produto' : 'Novo Serviço'}
-          </button>
           <span className="text-xs text-gray-400">
             {sorted.length !== rows.length ? `${sorted.length} de ${rows.length}` : sorted.length}{' '}
             registo{sorted.length !== 1 ? 's' : ''}

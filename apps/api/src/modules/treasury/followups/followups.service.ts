@@ -16,6 +16,7 @@ type DocLike = {
   entityName: string | null
   totalAmount: { toString(): string }
   dueDate: Date | null
+  promisedPaymentDate?: Date | null
   origin: 'TOCONLINE' | 'LOCAL'
   tocSalesDocId?: string | null
   tocPurchasesDocId?: string | null
@@ -32,6 +33,8 @@ export class FollowupsService {
   async list(clientId: string, filters: {
     receivableId?: string
     payableId?: string
+    tocCustomerId?: string
+    tocSupplierId?: string
     kind?: TreasuryFollowupKind
     status?: TreasuryFollowupStatus
     direction?: TreasuryFollowupDirection
@@ -41,6 +44,12 @@ export class FollowupsService {
         clientId,
         ...(filters.receivableId ? { receivableId: filters.receivableId } : {}),
         ...(filters.payableId ? { payableId: filters.payableId } : {}),
+        ...(filters.tocCustomerId
+          ? { receivable: { tocCustomerId: filters.tocCustomerId, deletedAt: null } }
+          : {}),
+        ...(filters.tocSupplierId
+          ? { payable: { tocSupplierId: filters.tocSupplierId, deletedAt: null } }
+          : {}),
         ...(filters.kind ? { kind: filters.kind } : {}),
         ...(filters.status ? { status: filters.status } : {}),
         ...(filters.direction ? { direction: filters.direction } : {}),
@@ -49,6 +58,8 @@ export class FollowupsService {
       include: {
         assignedTo: { select: { id: true, name: true, email: true } },
         createdBy: { select: { id: true, name: true, email: true } },
+        receivable: { select: { id: true, reference: true, entityName: true, totalAmount: true } },
+        payable: { select: { id: true, reference: true, entityName: true, totalAmount: true } },
       },
       take: 200,
     })
@@ -373,6 +384,7 @@ export class FollowupsService {
       reference: doc.reference,
       totalAmount: Number(doc.totalAmount.toString()),
       dueDate: doc.dueDate,
+      promisedPaymentDate: doc.promisedPaymentDate ?? null,
       iban,
       mbReference: null,
       mbEntity: null,

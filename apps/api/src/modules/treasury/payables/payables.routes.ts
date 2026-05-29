@@ -48,6 +48,11 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.getKpis(clientId))
   })
 
+  fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    return reply.send(await svc.applyRulesToExisting(clientId))
+  })
+
   fastify.get(`${prefix}/export.csv`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as { status?: string; origin?: TreasuryDocOrigin; entityName?: string; categoryId?: string; dueDateFrom?: string; dueDateTo?: string }
@@ -91,6 +96,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     }
 
     let tocPurchasesDocId = body.tocPurchasesDocId
+    let tocSupplierId = body.tocSupplierId
     let reference = body.reference
 
     if (body.tocLines && body.tocLines.length > 0) {
@@ -128,6 +134,14 @@ export async function payablesRoutes(fastify: FastifyInstance) {
       const docNo = String(attrs?.document_no ?? tocDoc?.document_no ?? '')
       if (docNo) reference = docNo
 
+      // Extrai o supplier.id do relationship (simétrico ao tocCustomerId).
+      const rels = dataObj?.relationships as Record<string, unknown> | undefined
+      const supplierRel = rels?.supplier as { data?: { id?: string | number } } | undefined
+      const supplierIdFromToc = supplierRel?.data?.id
+      if (supplierIdFromToc != null && !tocSupplierId) {
+        tocSupplierId = String(supplierIdFromToc)
+      }
+
       const grossTotal = Number(attrs?.gross_total ?? tocDoc?.gross_total)
       if (grossTotal > 0) body.totalAmount = grossTotal
     }
@@ -136,6 +150,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
       ...body,
       reference: reference || body.reference,
       tocPurchasesDocId,
+      tocSupplierId,
     }))
   })
 

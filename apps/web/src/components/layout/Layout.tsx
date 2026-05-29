@@ -138,27 +138,12 @@ export default function Layout() {
                 title={!sidebarOpen ? item.label : undefined}
                 onClick={() => { if (isMobile) setSidebarOpen(false) }}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group ${
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 group ${
                     isActive
-                      ? 'text-white'
-                      : 'text-slate-400 hover:text-white'
+                      ? 'text-white bg-white/10'
+                      : 'text-slate-400 hover:text-white hover:bg-white/5'
                   }`
                 }
-                style={({ isActive }) => ({
-                  background: isActive ? 'rgba(255,255,255,0.10)' : undefined,
-                })}
-                onMouseEnter={(e) => {
-                  const el = e.currentTarget
-                  if (!el.classList.contains('text-white') || el.style.background === '') {
-                    el.style.background = 'rgba(255,255,255,0.05)'
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  const el = e.currentTarget
-                  if (el.style.background === 'rgba(255,255,255,0.05)') {
-                    el.style.background = ''
-                  }
-                }}
               >
                 <item.icon className="w-4.5 h-4.5 flex-shrink-0 w-[18px] h-[18px]" />
                 {sidebarOpen && <span className="flex-1 truncate">{item.label}</span>}
@@ -171,10 +156,7 @@ export default function Layout() {
         <div className="px-2.5 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           <button
             onClick={logout}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white w-full transition-colors duration-150"
-            style={{ ':hover': { background: 'rgba(255,255,255,0.05)' } } as React.CSSProperties}
-            onMouseEnter={(e) => { (e.currentTarget.style.background = 'rgba(255,255,255,0.05)') }}
-            onMouseLeave={(e) => { (e.currentTarget.style.background = '') }}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-white/5 w-full transition-colors duration-150"
           >
             <LogOut className="w-[18px] h-[18px] flex-shrink-0" />
             {sidebarOpen && <span>Terminar sessão</span>}

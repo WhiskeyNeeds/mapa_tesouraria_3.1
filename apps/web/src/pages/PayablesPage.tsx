@@ -1,17 +1,18 @@
 import { Fragment, useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel, tocStatusVariant } from '@/lib/utils'
+import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, Printer, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
+import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
 interface TocPurchaseDoc {
   id: number
@@ -65,7 +66,6 @@ interface Payable {
   totalAmount: number; pendingAmount: number; paidAmount: number; status: string; origin: string
   description?: string | null
   tocPurchasesDocId?: string
-  tocSupplierId?: string | null
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   parentId?: string | null
@@ -73,12 +73,13 @@ interface Payable {
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
 }
 interface Category { id: string; name: string; type: string; launchToc: boolean }
+interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
 interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
 interface TocSupplier { id: string | number; business_name?: string; tax_registration_number?: string; [key: string]: unknown }
 
 const emptyForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  dueDate: '', totalAmount: '', currency: 'EUR', budgetId: '',
+  dueDate: '', totalAmount: '', currency: 'EUR', budgetId: '', budgetCategoryId: '',
 }
 const emptyRecurrence = {
   isRecurrent: false,
@@ -94,7 +95,7 @@ const emptyRecurrence = {
 const emptyTocLine = { description: '', quantity: '1', unit_price: '', tax_code: 'NOR' }
 const emptyOutrasForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
-  dueDate: '', totalAmount: '', budgetId: '',
+  dueDate: '', totalAmount: '', budgetId: '', budgetCategoryId: '',
 }
 const TAX_RATES: Record<string, number> = { NOR: 23, INT: 13, RED: 6, ISE: 0 }
 
@@ -242,7 +243,6 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
   const { data: payments = [], isLoading } = useQuery<TocPayment[]>({
     queryKey: ['toc-purchase-payments', clientId, tocDocId],
     queryFn: () => api.get(`/toconline/${clientId}/purchases/${tocDocId}/payments`),
-    staleTime: 5 * 60 * 1000,
   })
 
   if (isLoading) {
@@ -294,7 +294,6 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
 
 export default function PayablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
-  const navigate = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
   // Centralised guard for every <input type="date"> on this page: rejects weekend
@@ -347,8 +346,7 @@ export default function PayablesPage() {
   const [panelTocDoc, setPanelTocDoc] = useState<TocPurchaseDoc | null>(null)
   const [detailPayment, setDetailPayment] = useState<TocPayment | null>(null)
   const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
-  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'associateToc'>(null)
-  const [assocTocSearch, setAssocTocSearch] = useState('')
+  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split'>(null)
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
   const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
   const [splitCount, setSplitCount] = useState(2)
@@ -402,8 +400,11 @@ export default function PayablesPage() {
     enabled: !!selectedClientId,
   })
 
-  const [budgetSuggestion, setBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
-  const [outrasBudgetSuggestion, setOutrasBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
+  const { data: budgetCategories = [] } = useQuery<BudgetCategory[]>({
+    queryKey: ['budget-categories-expense', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/budget-categories?type=EXPENSE`),
+    enabled: !!selectedClientId,
+  })
 
   const { data: tocSuppliers = [] } = useQuery<TocSupplier[]>({
     queryKey: ['toc-suppliers', selectedClientId],
@@ -433,7 +434,6 @@ export default function PayablesPage() {
     queryKey: ['toc-purchase-payments', selectedClientId, panelTocDocId],
     queryFn: () => api.get(`/toconline/${selectedClientId}/purchases/${panelTocDocId}/payments`),
     enabled: !!selectedClientId && !!panelTocDocId,
-    staleTime: 5 * 60 * 1000,
   })
 
 
@@ -465,6 +465,7 @@ export default function PayablesPage() {
         totalAmount: parseFloat(form.totalAmount) || 0,
         entityNif: form.entityNif || undefined,
         budgetId: form.budgetId || undefined,
+        budgetCategoryId: form.budgetCategoryId || undefined,
       }
       if (recForm.isRecurrent) {
         body.recurrence = {
@@ -505,7 +506,6 @@ export default function PayablesPage() {
       setTaxExemptionCode('M07')
       setVatIncludedPrices(false)
       setRetentionPct('')
-      setBudgetSuggestion(null)
       toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Conta a pagar criada.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -587,19 +587,15 @@ export default function PayablesPage() {
   const updatePayable = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.patch(`/treasury/${selectedClientId}/payables/${id}`, data),
-    onSuccess: (_, { data }) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['payables'] })
       qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      // Edição de programada propaga aos filhos futuros — refresh do dashboard.
+      qc.invalidateQueries({ queryKey: ['dashboard-cashflow-statement'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
       setEditId(null)
       setEditRow(null)
-      if (data.tocPurchasesDocId) {
-        setPanelDoc(null)
-        setPanelTocDoc(null)
-        setPanelSection(null)
-        toast.success('Documento associado ao TOConline com sucesso.')
-      } else {
-        toast.success('Documento atualizado.')
-      }
+      toast.success('Documento atualizado.')
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -710,7 +706,6 @@ export default function PayablesPage() {
 
   const createOutras = useMutation({
     mutationFn: () => {
-      const effectiveDueDate = recForm.isRecurrent ? recForm.cycleStartDate : outrasForm.dueDate
       const computedDocDate = recForm.isRecurrent ? shiftToWorkday(recForm.cycleStartDate) : undefined
       const body: Record<string, unknown> = {
         categoryId: outrasForm.categoryId || undefined,
@@ -718,10 +713,11 @@ export default function PayablesPage() {
         entityNif: outrasForm.entityNif || undefined,
         reference: outrasForm.reference || undefined,
         description: outrasForm.description || undefined,
-        dueDate: effectiveDueDate,
+        dueDate: outrasForm.dueDate,
         ...(computedDocDate ? { documentDate: computedDocDate } : {}),
         totalAmount: parseFloat(outrasForm.totalAmount) || 0,
         budgetId: outrasForm.budgetId || undefined,
+        budgetCategoryId: outrasForm.budgetCategoryId || undefined,
       }
       if (recForm.isRecurrent) {
         body.recurrence = {
@@ -741,38 +737,10 @@ export default function PayablesPage() {
       setRecForm(emptyRecurrence)
       setOutrasContact(null)
       setOutrasContactSearch('')
-      setOutrasBudgetSuggestion(null)
       toast.success(recForm.isRecurrent ? 'Conta recorrente criada.' : 'Operação criada.')
     },
     onError: (e) => toast.error((e as Error).message),
   })
-
-  async function onCategoryChange(categoryId: string) {
-    setForm((f) => ({ ...f, categoryId }))
-    setTocCreate(false)
-    setBudgetSuggestion(null)
-    if (!categoryId || !selectedClientId) return
-    try {
-      const text = [form.entityName, form.description].filter(Boolean).join(' ')
-      const suggestion = await api.get<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(
-        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}&text=${encodeURIComponent(text)}`,
-      )
-      if (suggestion) setBudgetSuggestion(suggestion)
-    } catch { /* ignora erros silenciosamente */ }
-  }
-
-  async function onOutrasCategoryChange(categoryId: string) {
-    setOutrasForm((f) => ({ ...f, categoryId }))
-    setOutrasBudgetSuggestion(null)
-    if (!categoryId || !selectedClientId) return
-    try {
-      const text = [outrasForm.entityName, outrasForm.description].filter(Boolean).join(' ')
-      const suggestion = await api.get<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(
-        `/treasury/${selectedClientId}/budget-rules/suggest?categoryId=${categoryId}&text=${encodeURIComponent(text)}`,
-      )
-      if (suggestion) setOutrasBudgetSuggestion(suggestion)
-    } catch { /* ignora erros silenciosamente */ }
-  }
 
   const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || isRecurrentFilter || isOverdueFilter)
   function clearFilters() {
@@ -886,12 +854,12 @@ export default function PayablesPage() {
     }
   }, [kpis, tocOnly])
 
+  const isClosed = (status: string) => status === 'SETTLED' || status === 'VOID'
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
   const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (p: Payable) => {
-    const dueDateStr = String(p.dueDate).slice(0, 10)
-    if (p.recurrenceId && !p.parentId && dueDateStr > todayYmd) return 'programadas' as const
-    if (p.recurrenceId && p.parentId && dueDateStr > todayYmd) return 'futuras' as const
+    if (p.recurrenceId && !p.parentId) return 'programadas' as const
+    if (p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd) return 'futuras' as const
     return 'atuais' as const
   }
   const outrasCount = { atuais: 0, futuras: 0, programadas: 0 }
@@ -1061,18 +1029,7 @@ export default function PayablesPage() {
                               </div>
                             </div>
                           </td>
-                          <td className="px-5 py-3 text-gray-700">
-                            {p.tocSupplierId ? (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`) }}
-                                className="text-primary-600 hover:underline text-left"
-                              >
-                                {p.entityName}
-                              </button>
-                            ) : (
-                              p.entityName
-                            )}
-                          </td>
+                          <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
                           <td className="px-5 py-3 whitespace-nowrap">
                             {(() => {
                               const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
@@ -1357,75 +1314,19 @@ export default function PayablesPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                    {outrasSubTab === 'programadas' ? (
-                      <>
-                        <th className="text-left px-5 py-3">Designação</th>
-                        <th className="text-left px-5 py-3">Entidade</th>
-                        <th className="text-left px-5 py-3">Categoria</th>
-                        <th className="text-left px-5 py-3">Início</th>
-                        <th className="text-right px-5 py-3">Valor/ocorrência</th>
-                        <th className="w-16 px-3 py-3" />
-                      </>
-                    ) : (
-                      <>
-                        <th className="text-left px-5 py-3">Documento</th>
-                        <th className="text-left px-5 py-3">Fornecedor</th>
-                        <th className="text-left px-5 py-3">Vencimento</th>
-                        <th className="text-left px-5 py-3">Pagamento</th>
-                        <th className="text-right px-5 py-3">Total</th>
-                        <th className="text-right px-5 py-3">Pendente</th>
-                        <th className="text-left px-5 py-3">Estado</th>
-                        <th className="w-16 px-3 py-3" />
-                      </>
-                    )}
+                    <th className="text-left px-5 py-3">Documento</th>
+                    <th className="text-left px-5 py-3">Fornecedor</th>
+                    <th className="text-left px-5 py-3">Vencimento</th>
+                    <th className="text-left px-5 py-3">Pagamento</th>
+                    <th className="text-right px-5 py-3">Total</th>
+                    <th className="text-right px-5 py-3">Pendente</th>
+                    <th className="text-left px-5 py-3">Estado</th>
+                    <th className="w-16 px-3 py-3" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {outrasRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={outrasSubTab === 'programadas' ? 6 : 8} className="px-5 py-16 text-center text-sm text-gray-400">
-                        {outrasSubTab === 'programadas'
-                          ? 'Nenhuma recorrência definida. Cria uma operação recorrente usando o botão acima.'
-                          : 'Sem operações registadas. Usa o botão acima para registar a primeira operação.'}
-                      </td>
-                    </tr>
-                  ) : outrasRows.map((p) => {
-                    // Template rows (recurrence definitions) get a dedicated display
-                    if (outrasSubTab === 'programadas') {
-                      return (
-                        <tr key={`o-${p.id}`} className="hover:bg-gray-50 group">
-                          <td className="px-5 py-3">
-                            <div className="flex items-center gap-1.5">
-                              <Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" />
-                              <span className="font-medium text-gray-900">{p.reference || p.description || '—'}</span>
-                            </div>
-                            <div className="text-xs text-gray-400 pl-5">{p.description && p.reference ? p.description : ''}</div>
-                          </td>
-                          <td className="px-5 py-3 text-gray-700">
-                            {p.tocSupplierId ? (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`) }}
-                                className="text-primary-600 hover:underline text-left"
-                              >
-                                {p.entityName || '—'}
-                              </button>
-                            ) : (
-                              p.entityName || '—'
-                            )}
-                          </td>
-                          <td className="px-5 py-3 text-gray-500">{p.category?.name || '—'}</td>
-                          <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{formatDate(p.dueDate)}</td>
-                          <td className="px-5 py-3 text-right font-semibold text-gray-700">{formatCurrency(p.totalAmount)}</td>
-                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button title="Eliminar" onClick={() => setDeleteRow(p)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    }
+                  {(() => {
+                    const renderRow = (p: Payable) => {
                     const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
                     const displayDate = isSplit && p.promisedPaymentDate ? p.promisedPaymentDate : p.dueDate
                     const now = Date.now()
@@ -1456,18 +1357,7 @@ export default function PayablesPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-5 py-3 text-gray-700">
-                          {p.tocSupplierId ? (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`) }}
-                              className="text-primary-600 hover:underline text-left"
-                            >
-                              {p.entityName || '—'}
-                            </button>
-                          ) : (
-                            p.entityName || '—'
-                          )}
-                        </td>
+                        <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
                         <td className="px-5 py-3 whitespace-nowrap">
                           <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(displayDate)}</div>
                           {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
@@ -1532,7 +1422,36 @@ export default function PayablesPage() {
                         </td>
                       </tr>
                     )
-                  })}
+                    }
+
+                    const sectionHeader = (label: string, count: number) => (
+                      <tr key={`hdr-${label}`} className="bg-gray-50/80">
+                        <td colSpan={8} className="px-5 py-1.5 text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
+                          {label} <span className="ml-1 font-normal text-gray-400">({count})</span>
+                        </td>
+                      </tr>
+                    )
+
+                    if (outrasRows.length === 0) {
+                      return <tr><td colSpan={8} className="px-5 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
+                    }
+
+                    // No separador "Atuais", divide as linhas em "Em aberto" (OPEN/PARTIAL)
+                    // e "Liquidadas" (SETTLED/VOID) com cabeçalho de secção entre os grupos.
+                    if (outrasSubTab === 'atuais') {
+                      const openRows = outrasRows.filter((p) => !isClosed(p.status))
+                      const closedRows = outrasRows.filter((p) => isClosed(p.status))
+                      return (
+                        <>
+                          {openRows.length > 0 && sectionHeader('Em aberto', openRows.length)}
+                          {openRows.map(renderRow)}
+                          {closedRows.length > 0 && sectionHeader('Liquidadas', closedRows.length)}
+                          {closedRows.map(renderRow)}
+                        </>
+                      )
+                    }
+                    return outrasRows.map(renderRow)
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -1698,36 +1617,23 @@ export default function PayablesPage() {
         </div>
       </Modal>
 
-      <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setBudgetSuggestion(null) }} title="Nova Conta a Pagar" size="lg">
+      <Modal open={showNew} onClose={() => { setShowNew(false); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} title="Nova Conta a Pagar" size="lg">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <label className="label">Categoria</label>
-            <select className="input" value={form.categoryId} onChange={(e) => onCategoryChange(e.target.value)}>
+            <select className="input" value={form.categoryId} onChange={(e) => { setForm({ ...form, categoryId: e.target.value }); setTocCreate(false) }}>
               <option value="">Selecionar...</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
-          <div className="col-span-2">
-            {budgetSuggestion && !form.budgetId && (
-              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-xs font-semibold text-blue-700 mb-0.5">Sugestão de budget</p>
-                    <p className="text-sm font-medium text-gray-900">{budgetSuggestion.budgetName}</p>
-                    <p className="text-xs text-gray-500">Regra: {budgetSuggestion.ruleDescription}</p>
-                  </div>
-                  <button onClick={() => setBudgetSuggestion(null)} className="text-gray-400 hover:text-gray-600 text-xs">x</button>
-                </div>
-                <button
-                  onClick={() => { setForm((f) => ({ ...f, budgetId: budgetSuggestion.budgetId })); setBudgetSuggestion(null) }}
-                  className="mt-2 w-full text-xs bg-blue-600 text-white rounded py-1.5 hover:bg-blue-700"
-                >
-                  Aceitar — Budget "{budgetSuggestion.budgetName}"
-                </button>
-              </div>
-            )}
+          <div>
+            <label className="label">Categoria de Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <select className="input" value={form.budgetCategoryId} onChange={(e) => setForm({ ...form, budgetCategoryId: e.target.value })}>
+              <option value="">Sem categoria de budget</option>
+              {budgetCategories.map((bc) => <option key={bc.id} value={bc.id}>{bc.name}</option>)}
+            </select>
           </div>
-          <div className="col-span-2">
+          <div>
             <label className="label">Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
             <select className="input" value={form.budgetId} onChange={(e) => setForm({ ...form, budgetId: e.target.value })}>
               <option value="">Auto pela categoria</option>
@@ -1988,7 +1894,7 @@ export default function PayablesPage() {
           <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(create.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
-          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct(''); setBudgetSuggestion(null) }} className="btn-secondary flex-1">Cancelar</button>
+          <button onClick={() => { setShowNew(false); setRecForm(emptyRecurrence); setTocCreate(false); setTocDocType('FC'); setTocLines([{ ...emptyTocLine }]); setTaxExemptionCode('M07'); setVatIncludedPrices(false); setRetentionPct('') }} className="btn-secondary flex-1">Cancelar</button>
           <button
             onClick={() => create.mutate()}
             className="btn-primary flex-1"
@@ -2008,36 +1914,23 @@ export default function PayablesPage() {
         </div>
       </Modal>
 
-      <Modal open={showNewOutras} onClose={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch(''); setOutrasBudgetSuggestion(null) }} title="Nova Operação" size="lg">
+      <Modal open={showNewOutras} onClose={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch('') }} title="Nova Operação" size="lg">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <label className="label">Categoria</label>
-            <select className="input" value={outrasForm.categoryId} onChange={(e) => onOutrasCategoryChange(e.target.value)}>
+            <select className="input" value={outrasForm.categoryId} onChange={(e) => setOutrasForm({ ...outrasForm, categoryId: e.target.value })}>
               <option value="">Selecionar...</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
-          <div className="col-span-2">
-            {outrasBudgetSuggestion && !outrasForm.budgetId && (
-              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-xs font-semibold text-blue-700 mb-0.5">Sugestão de budget</p>
-                    <p className="text-sm font-medium text-gray-900">{outrasBudgetSuggestion.budgetName}</p>
-                    <p className="text-xs text-gray-500">Regra: {outrasBudgetSuggestion.ruleDescription}</p>
-                  </div>
-                  <button onClick={() => setOutrasBudgetSuggestion(null)} className="text-gray-400 hover:text-gray-600 text-xs">x</button>
-                </div>
-                <button
-                  onClick={() => { setOutrasForm((f) => ({ ...f, budgetId: outrasBudgetSuggestion.budgetId })); setOutrasBudgetSuggestion(null) }}
-                  className="mt-2 w-full text-xs bg-blue-600 text-white rounded py-1.5 hover:bg-blue-700"
-                >
-                  Aceitar — Budget "{outrasBudgetSuggestion.budgetName}"
-                </button>
-              </div>
-            )}
+          <div>
+            <label className="label">Categoria de Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
+            <select className="input" value={outrasForm.budgetCategoryId} onChange={(e) => setOutrasForm({ ...outrasForm, budgetCategoryId: e.target.value })}>
+              <option value="">Sem categoria de budget</option>
+              {budgetCategories.map((bc) => <option key={bc.id} value={bc.id}>{bc.name}</option>)}
+            </select>
           </div>
-          <div className="col-span-2">
+          <div>
             <label className="label">Budget <span className="text-gray-400 font-normal">(opcional)</span></label>
             <select className="input" value={outrasForm.budgetId} onChange={(e) => setOutrasForm({ ...outrasForm, budgetId: e.target.value })}>
               <option value="">Auto pela categoria</option>
@@ -2108,12 +2001,10 @@ export default function PayablesPage() {
             <label className="label">Valor (€) <span className="text-red-500">*</span></label>
             <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
           </div>
-          {!recForm.isRecurrent && (
-            <div>
-              <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
-              <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: pickWorkday(e.target.value, outrasForm.dueDate) })} />
-            </div>
-          )}
+          <div>
+            <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
+            <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: pickWorkday(e.target.value, outrasForm.dueDate) })} />
+          </div>
           <div className="col-span-2">
             <label className="label">Descrição</label>
             <input className="input" value={outrasForm.description} onChange={(e) => setOutrasForm({ ...outrasForm, description: e.target.value })} placeholder="Notas sobre a operação" />
@@ -2180,17 +2071,16 @@ export default function PayablesPage() {
           <p className="mt-3 text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(createOutras.error as Error).message}</p>
         )}
         <div className="flex gap-3 mt-6">
-          <button onClick={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch(''); setOutrasBudgetSuggestion(null) }} className="btn-secondary flex-1">Cancelar</button>
+          <button onClick={() => { setShowNewOutras(false); setOutrasForm(emptyOutrasForm); setRecForm(emptyRecurrence); setOutrasContact(null); setOutrasContactSearch('') }} className="btn-secondary flex-1">Cancelar</button>
           <button
             onClick={() => createOutras.mutate()}
             className="btn-primary flex-1"
             disabled={(() => {
-              if (createOutras.isPending || !outrasForm.totalAmount) return true
-              if (!recForm.isRecurrent && !outrasForm.dueDate) return true
+              if (createOutras.isPending || !outrasForm.totalAmount || !outrasForm.dueDate) return true
               if (recForm.isRecurrent && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
               if (recForm.isRecurrent && recForm.endType === 'date') {
                 if (!recForm.endDate) return true
-                if (recForm.endDate <= recForm.cycleStartDate) return true
+                if (recForm.endDate <= outrasForm.dueDate) return true
               }
               return false
             })()}
@@ -2227,7 +2117,17 @@ export default function PayablesPage() {
               </div>
               <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
             </div>
-            <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
+            <div className="flex items-center gap-3">
+              <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
+              {selectedClientId && (
+                <InvoiceAttachmentsButton
+                  clientId={selectedClientId}
+                  direction="PAYABLE"
+                  docId={panelDoc.id}
+                  origin={panelDoc.origin}
+                />
+              )}
+            </div>
             <div className="text-sm font-medium text-primary-700 mt-0.5">{panelDoc.entityName || '—'}</div>
             <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
             <div className="mt-2 flex items-center gap-2 flex-wrap">
@@ -2338,79 +2238,6 @@ export default function PayablesPage() {
                   )
                 })()}
 
-                {/* Associar a Fatura TOC */}
-                {isTocEnabled && !panelDoc.tocPurchasesDocId && !panelTocDoc && panelDoc.origin !== 'TOC' && (
-                  <div className="rounded-xl border border-gray-200 overflow-hidden">
-                    <button
-                      onClick={() => {
-                        setPanelSection(panelSection === 'associateToc' ? null : 'associateToc')
-                        setAssocTocSearch('')
-                      }}
-                      className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 hover:border-purple-200 text-left transition-colors group"
-                    >
-                      <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
-                        <ArrowDownToLine className="w-4 h-4 text-purple-700" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="font-medium text-gray-900 text-sm">Associar a documento TOC</div>
-                        <div className="text-xs text-gray-500">{tocOnly.length > 0 ? `${tocOnly.length} documento${tocOnly.length === 1 ? '' : 's'} disponível${tocOnly.length === 1 ? '' : 'eis'}` : 'Sem documentos por importar'}</div>
-                      </div>
-                    </button>
-                    {panelSection === 'associateToc' && (
-                      <div className="border-t border-gray-100 p-3 space-y-2">
-                        <input
-                          type="text"
-                          placeholder="Pesquisar por fornecedor ou nº doc..."
-                          className="input text-sm"
-                          value={assocTocSearch}
-                          onChange={(e) => setAssocTocSearch(e.target.value)}
-                        />
-                        <div className="max-h-52 overflow-y-auto space-y-1">
-                          {tocOnly
-                            .filter((d) => {
-                              const q = assocTocSearch.toLowerCase()
-                              return !q || (d.supplier_business_name ?? '').toLowerCase().includes(q) || (d.document_no ?? '').toLowerCase().includes(q)
-                            })
-                            .map((d) => (
-                              <button
-                                key={d.id}
-                                onClick={() => {
-                                  updatePayable.mutate({
-                                    id: panelDoc.id,
-                                    data: {
-                                      tocPurchasesDocId: String(d.id),
-                                      entityName: d.supplier_business_name ?? '',
-                                      entityNif: d.supplier_tax_registration_number ?? null,
-                                      reference: d.document_no,
-                                      documentDate: d.date,
-                                      ...(d.due_date ? { dueDate: d.due_date } : {}),
-                                      totalAmount: Number(d.gross_total),
-                                      tocSupplierId: d.supplier_id ? String(d.supplier_id) : null,
-                                    },
-                                  })
-                                }}
-                                disabled={updatePayable.isPending}
-                                className="w-full text-left rounded-lg border border-gray-200 px-3 py-2 hover:bg-purple-50 hover:border-purple-200 transition-colors disabled:opacity-50"
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-xs font-medium text-gray-700 truncate">{d.supplier_business_name || '—'}</span>
-                                  <span className="text-xs font-semibold text-gray-900 flex-shrink-0">{formatCurrency(d.gross_total)}</span>
-                                </div>
-                                <div className="text-xs text-gray-400 mt-0.5">{d.document_no} · {formatDate(d.date)}</div>
-                              </button>
-                            ))}
-                          {tocOnly.filter((d) => {
-                            const q = assocTocSearch.toLowerCase()
-                            return !q || (d.supplier_business_name ?? '').toLowerCase().includes(q) || (d.document_no ?? '').toLowerCase().includes(q)
-                          }).length === 0 && (
-                            <div className="text-xs text-gray-400 text-center py-3">Nenhum documento encontrado</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {/* Data prometida */}
                 <div className="rounded-xl border border-gray-200 overflow-hidden">
                   <button
@@ -2459,34 +2286,24 @@ export default function PayablesPage() {
                   <div className="rounded-xl border border-gray-200 overflow-hidden">
                     <button
                       onClick={() => {
+                        // Helper local: cria as parcelas iniciais com valores que somam exatamente o total.
+                        const buildInitialInstallments = (doc: { totalAmount: number | string; dueDate: string }, n: number) => {
+                          const amounts = distributeAmount(Number(doc.totalAmount), n)
+                          return amounts.map((amount, i) => {
+                            const d = new Date(doc.dueDate); d.setMonth(d.getMonth() + i)
+                            return { amount: formatInstallmentValue(amount, 'EUR'), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
+                          })
+                        }
                         if (panelDoc.origin === 'TOC') {
                           autoImportAndRun((doc) => {
-                            const n = splitCount
-                            const total = Number(doc.totalAmount)
-                            const tCents = Math.round(total * 100)
-                            const bCents = Math.floor(tCents / n)
-                            const rCents = tCents - bCents * n
-                            const inst = Array.from({ length: n }, (_, i) => {
-                              const dd = new Date(doc.dueDate); dd.setMonth(dd.getMonth() + i)
-                              return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), paymentDate: shiftToWorkday(dd.toISOString().slice(0, 10)) }
-                            })
-                            setSplitInstallments(inst)
+                            setSplitInstallments(buildInitialInstallments(doc, splitCount))
                             setSplitValueMode('EUR')
                             setPanelSection('split')
                           })
                           return
                         }
                         if (panelSection !== 'split') {
-                          const n = splitCount
-                          const total = Number(panelDoc.totalAmount)
-                          const tCents = Math.round(total * 100)
-                          const bCents = Math.floor(tCents / n)
-                          const rCents = tCents - bCents * n
-                          const inst = Array.from({ length: n }, (_, i) => {
-                            const d = new Date(panelDoc.dueDate); d.setMonth(d.getMonth() + i)
-                            return { amount: ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
-                          })
-                          setSplitInstallments(inst)
+                          setSplitInstallments(buildInitialInstallments(panelDoc, splitCount))
                           setSplitValueMode('EUR')
                         }
                         setPanelSection(panelSection === 'split' ? null : 'split')
@@ -2512,13 +2329,12 @@ export default function PayablesPage() {
                               onClick={() => {
                                 const n = Math.max(2, splitCount - 1)
                                 const total = Number(panelDoc.totalAmount)
-                                const tCents = Math.round(total * 100); const bCents = Math.floor(tCents / n); const rCents = tCents - bCents * n
-                                const bUnits = Math.floor(100000 / n); const rUnits = 100000 - bUnits * n
+                                const values = splitValueMode === 'PCT' ? distributePct(n) : distributeAmount(total, n)
                                 setSplitCount(n)
                                 setSplitInstallments(Array.from({ length: n }, (_, i) => {
-                                  const d = new Date(splitInstallments[i]?.paymentDate || panelDoc.dueDate); if (!splitInstallments[i]?.paymentDate) d.setMonth(d.getMonth() + i)
-                                  const amount = splitValueMode === 'PCT' ? ((i < rUnits ? bUnits + 1 : bUnits) / 1000).toFixed(3) : ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2)
-                                  return { amount, paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
+                                  const d = new Date(splitInstallments[i]?.paymentDate || panelDoc.dueDate)
+                                  if (!splitInstallments[i]?.paymentDate) d.setMonth(d.getMonth() + i)
+                                  return { amount: formatInstallmentValue(values[i], splitValueMode), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
                                 }))
                               }}
                               className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
@@ -2528,15 +2344,15 @@ export default function PayablesPage() {
                               onClick={() => {
                                 const n = splitCount + 1
                                 const total = Number(panelDoc.totalAmount)
-                                const tCents = Math.round(total * 100); const bCents = Math.floor(tCents / n); const rCents = tCents - bCents * n
-                                const bUnits = Math.floor(100000 / n); const rUnits = 100000 - bUnits * n
+                                const values = splitValueMode === 'PCT' ? distributePct(n) : distributeAmount(total, n)
                                 setSplitCount(n)
                                 setSplitInstallments(Array.from({ length: n }, (_, i) => {
                                   const prevDate = splitInstallments[i - 1]?.paymentDate
-                                  const d = prevDate ? (() => { const dd = new Date(prevDate); dd.setMonth(dd.getMonth() + 1); return dd })() : (() => { const dd = new Date(panelDoc.dueDate); dd.setMonth(dd.getMonth() + i); return dd })()
+                                  const d = prevDate
+                                    ? (() => { const dd = new Date(prevDate); dd.setMonth(dd.getMonth() + 1); return dd })()
+                                    : (() => { const dd = new Date(panelDoc.dueDate); dd.setMonth(dd.getMonth() + i); return dd })()
                                   const existingDate = splitInstallments[i]?.paymentDate || shiftToWorkday(d.toISOString().slice(0, 10))
-                                  const amount = splitValueMode === 'PCT' ? ((i < rUnits ? bUnits + 1 : bUnits) / 1000).toFixed(3) : ((i < rCents ? bCents + 1 : bCents) / 100).toFixed(2)
-                                  return { amount, paymentDate: existingDate }
+                                  return { amount: formatInstallmentValue(values[i], splitValueMode), paymentDate: existingDate }
                                 }))
                               }}
                               className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
@@ -2552,7 +2368,9 @@ export default function PayablesPage() {
                               onClick={() => {
                                 if (splitValueMode === 'PCT') {
                                   const total = Number(panelDoc.totalAmount)
-                                  setSplitInstallments(splitInstallments.map((x) => ({ ...x, amount: ((parseFloat(x.amount) || 0) * total / 100).toFixed(2) })))
+                                  const pcts = splitInstallments.map((x) => parseFloat(x.amount) || 0)
+                                  const eurs = convertPctToEur(pcts, total)
+                                  setSplitInstallments(splitInstallments.map((x, i) => ({ ...x, amount: formatInstallmentValue(eurs[i], 'EUR') })))
                                   setSplitValueMode('EUR')
                                 }
                               }}
@@ -2562,7 +2380,9 @@ export default function PayablesPage() {
                               onClick={() => {
                                 if (splitValueMode === 'EUR') {
                                   const total = Number(panelDoc.totalAmount)
-                                  setSplitInstallments(splitInstallments.map((x) => ({ ...x, amount: (total > 0 ? ((parseFloat(x.amount) || 0) / total * 100) : 0).toFixed(2) })))
+                                  const eurs = splitInstallments.map((x) => parseFloat(x.amount) || 0)
+                                  const pcts = convertEurToPct(eurs, total)
+                                  setSplitInstallments(splitInstallments.map((x, i) => ({ ...x, amount: formatInstallmentValue(pcts[i], 'PCT') })))
                                   setSplitValueMode('PCT')
                                 }
                               }}
@@ -2631,8 +2451,24 @@ export default function PayablesPage() {
                         <button
                           onClick={() => {
                             const total = Number(panelDoc.totalAmount)
-                            const installments = splitInstallments.map((x) => ({
-                              amount: splitValueMode === 'EUR' ? parseFloat(x.amount) : parseFloat(x.amount) / 100 * total,
+                            // Garante soma exata em € (em cêntimos) qualquer que seja o modo de input.
+                            // No modo PCT, converte preservando soma; no EUR, ajusta a última parcela
+                            // para absorver eventuais resíduos de edição manual.
+                            const rawValues = splitInstallments.map((x) => parseFloat(x.amount) || 0)
+                            const finalEurs = splitValueMode === 'PCT'
+                              ? convertPctToEur(rawValues, total)
+                              : (() => {
+                                  // closeAmountsTo é safe mesmo se rawValues já somar total
+                                  // (resíduo absorvido pela última parcela).
+                                  const cents = rawValues.reduce((s, v) => s + Math.round(v * 100), 0)
+                                  const target = Math.round(total * 100)
+                                  if (cents === target) return rawValues
+                                  return rawValues.map((v, i) =>
+                                    i === rawValues.length - 1 ? (Math.round(v * 100) + (target - cents)) / 100 : v,
+                                  )
+                                })()
+                            const installments = splitInstallments.map((x, i) => ({
+                              amount: finalEurs[i],
                               promisedPaymentDate: x.paymentDate,
                             }))
                             splitPayable.mutate({ id: panelDoc.id, installments })

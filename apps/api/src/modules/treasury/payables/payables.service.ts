@@ -357,6 +357,37 @@ export class TreasuryPayablesService {
 
     const updated = await this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
 
+    // Cascade para instâncias futuras geradas a partir desta programada.
+    // Simétrico ao receivables: replica campos relevantes nos filhos com
+    // dueDate >= hoje e status OPEN (sem pagamentos).
+    if (item.recurrenceId && !item.parentId) {
+      const childUpdate: Prisma.TreasuryPayableUpdateManyMutationInput = {}
+      if (data.entityName !== undefined)       childUpdate.entityName = data.entityName
+      if (data.description !== undefined)      childUpdate.description = data.description
+      if (data.totalAmount !== undefined) {
+        childUpdate.totalAmount = data.totalAmount
+        childUpdate.pendingAmount = data.totalAmount
+      }
+      if (data.categoryId !== undefined)       childUpdate.categoryId = data.categoryId
+      if (data.budgetCategoryId !== undefined) childUpdate.budgetCategoryId = data.budgetCategoryId
+      if (data.budgetId !== undefined)         childUpdate.budgetId = data.budgetId
+
+      if (Object.keys(childUpdate).length > 0) {
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        await this.prisma.treasuryPayable.updateMany({
+          where: {
+            clientId,
+            parentId: id,
+            deletedAt: null,
+            status: 'OPEN',
+            dueDate: { gte: today },
+          },
+          data: childUpdate,
+        })
+      }
+    }
+
     const changes = diffEntity(
       item as unknown as Record<string, unknown>,
       updated as unknown as Record<string, unknown>,
@@ -659,6 +690,85 @@ export class TreasuryPayablesService {
       where: { clientId, tocSupplierId, deletedAt: null },
       data: { deletedAt: new Date() },
     })
+  }
+
+  /**
+   * Aplica regras de classificação ativas + fallback de histórico de entidade
+   * a todas as faturas a pagar sem categoria. Devolve contagem de classificadas
+   * e ignoradas. Espelha o comportamento de bank-movements.applyRulesToExisting.
+   */
+  async applyRulesToExisting(clientId: string): Promise<{ classified: number; skipped: number }> {
+    const [rules, unclassified] = await Promise.all([
+      this.prisma.treasuryClassificationRule.findMany({
+        where: { clientId, isActive: true },
+        orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, direction: true, amountMin: true, amountMax: true, matchField: true, matchOp: true, matchValue: true, categoryId: true },
+      }),
+      this.prisma.treasuryPayable.findMany({
+        where: { clientId, deletedAt: null, categoryId: null },
+        select: { id: true, totalAmount: true, description: true, reference: true, entityName: true, tocSupplierId: true, budgetCategoryId: true },
+      }),
+    ])
+
+    if (unclassified.length === 0) return { classified: 0, skipped: 0 }
+
+    let classified = 0
+    const ruleHits = new Map<string, number>()
+
+    for (const inv of unclassified) {
+      let categoryId: string | undefined
+      let budgetCategoryId: string | undefined = inv.budgetCategoryId ?? undefined
+
+      const matched = matchClassificationRule(rules, {
+        amount: Number(inv.totalAmount),
+        type: 'EXPENSE',
+        description: inv.description ?? inv.reference ?? null,
+        counterpartName: inv.entityName ?? null,
+      })
+
+      if (matched) {
+        categoryId = matched.categoryId
+        ruleHits.set(matched.id, (ruleHits.get(matched.id) ?? 0) + 1)
+      } else if (inv.entityName || inv.tocSupplierId) {
+        const last = await this.prisma.treasuryPayable.findFirst({
+          where: {
+            clientId, deletedAt: null,
+            categoryId: { not: null },
+            id: { not: inv.id },
+            OR: [
+              ...(inv.tocSupplierId ? [{ tocSupplierId: inv.tocSupplierId }] : []),
+              ...(inv.entityName ? [{ entityName: inv.entityName }] : []),
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { categoryId: true, budgetCategoryId: true },
+        })
+        if (last?.categoryId) categoryId = last.categoryId
+        if (!budgetCategoryId && last?.budgetCategoryId) budgetCategoryId = last.budgetCategoryId
+      }
+
+      if (categoryId) {
+        await this.prisma.treasuryPayable.update({
+          where: { id: inv.id },
+          data: {
+            categoryId,
+            ...(budgetCategoryId && budgetCategoryId !== inv.budgetCategoryId ? { budgetCategoryId } : {}),
+          },
+        })
+        classified++
+      }
+    }
+
+    await Promise.all(
+      Array.from(ruleHits.entries()).map(([id, count]) =>
+        this.prisma.treasuryClassificationRule.update({
+          where: { id },
+          data: { hits: { increment: count }, lastHitAt: new Date() },
+        }),
+      ),
+    )
+
+    return { classified, skipped: unclassified.length - classified }
   }
 
   async getKpis(clientId: string) {

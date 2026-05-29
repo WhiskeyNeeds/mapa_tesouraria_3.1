@@ -9,6 +9,7 @@ export type FollowupVariables = {
   numero: string
   valor: string
   vencimento: string
+  pagamento_prometido: string
   dias_atraso: string
   iban: string
   referencia_mb: string
@@ -24,11 +25,13 @@ export function buildVariables(input: {
   reference?: string | null
   totalAmount: number | string
   dueDate: Date | string | null
+  promisedPaymentDate?: Date | string | null
   iban?: string | null
   mbReference?: string | null
   mbEntity?: string | null
 }): FollowupVariables {
   const due = input.dueDate ? new Date(input.dueDate) : null
+  const promised = input.promisedPaymentDate ? new Date(input.promisedPaymentDate) : null
   const today = new Date()
   const daysOverdue = due ? Math.max(0, Math.floor((today.getTime() - due.getTime()) / 86400000)) : 0
   const amountNum = typeof input.totalAmount === 'string' ? Number(input.totalAmount) : input.totalAmount
@@ -38,6 +41,7 @@ export function buildVariables(input: {
     numero: input.reference ?? '',
     valor: Number.isFinite(amountNum) ? PT_MONEY.format(amountNum) : '',
     vencimento: due ? PT_DATE.format(due) : '',
+    pagamento_prometido: promised ? PT_DATE.format(promised) : '',
     dias_atraso: String(daysOverdue),
     iban: input.iban ?? '',
     referencia_mb: input.mbReference ?? '',
@@ -59,6 +63,7 @@ export function variableHint(): { name: keyof FollowupVariables; label: string }
     { name: 'numero', label: 'Número do documento' },
     { name: 'valor', label: 'Valor total formatado' },
     { name: 'vencimento', label: 'Data de vencimento' },
+    { name: 'pagamento_prometido', label: 'Data prometida de pagamento' },
     { name: 'dias_atraso', label: 'Dias em atraso' },
     { name: 'iban', label: 'IBAN da conta bancária' },
     { name: 'referencia_mb', label: 'Referência Multibanco' },
