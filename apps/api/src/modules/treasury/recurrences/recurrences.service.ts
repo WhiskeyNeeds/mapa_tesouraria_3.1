@@ -117,6 +117,7 @@ export class TreasuryRecurrencesService {
       const root = isReceivable ? rec.receivables[0] : rec.payables[0]
       if (!root) continue
 
+      if (!root.dueDate) continue
       let nextDate = rec.nextRunAt ?? computeNextDate(root.dueDate, rec.frequency)
 
       while (nextDate <= horizon) {

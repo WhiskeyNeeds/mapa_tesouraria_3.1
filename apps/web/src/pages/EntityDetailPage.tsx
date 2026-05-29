@@ -1,6 +1,6 @@
 // apps/web/src/pages/EntityDetailPage.tsx
 import { Fragment, useState, useMemo, type ElementType } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, ChevronDown, RefreshCw, Hash, Mail, Phone, MapPin, Building2, FileText } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -159,6 +159,13 @@ function DocSubRows({ isSupplier, allSubDocs, subIds, isLoading }: {
 export default function EntityDetailPage({ entityType }: Props) {
   const { tocId } = useParams<{ tocId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  // Origem da navegação. Quando o user chega aqui a partir de Contas a Receber
+  // / a Pagar, queremos voltar para essa página (não para o índice de Empresa).
+  // Fallback para `/empresa` quando a página é aberta directamente (URL direto).
+  const backState = (location.state ?? {}) as { from?: string; fromLabel?: string }
+  const backTo = backState.from ?? '/empresa'
+  const backLabel = backState.fromLabel ?? (entityType === 'supplier' ? 'Fornecedores' : 'Clientes')
   const { selectedClientId: clientId } = useAuth()
   const qc = useQueryClient()
   const toast = useToast()
@@ -345,11 +352,11 @@ export default function EntityDetailPage({ entityType }: Props) {
       {/* Breadcrumb / Header */}
       <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-100 bg-white flex-shrink-0">
         <button
-          onClick={() => navigate('/empresa')}
+          onClick={() => navigate(backTo)}
           className="group flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-700 transition-colors"
         >
           <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
-          {isSupplier ? 'Fornecedores' : 'Clientes'}
+          {backLabel}
         </button>
 
         <span className="text-gray-200 select-none">/</span>

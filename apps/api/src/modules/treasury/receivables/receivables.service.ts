@@ -12,44 +12,54 @@ interface ReceivableListItem {
   reference: string | null
   entityName: string | null
   documentDate: Date | null
-  dueDate: Date
-  totalAmount: number | Prisma.Decimal
-  pendingAmount: number | Prisma.Decimal
-  receivedAmount: number | Prisma.Decimal
+  dueDate: Date | null
+  totalAmount: number | Prisma.Decimal | null
+  pendingAmount: number | Prisma.Decimal | null
+  receivedAmount: number | Prisma.Decimal | null
   status: TreasuryDocStatus
   origin: TreasuryDocOrigin
   tocSalesDocId: string | null
   tocCustomerId: string | null
   recurrenceId: string | null
   parentId: string | null
+  promisedPaymentDate: Date | null
   category: { id: string; name: string; color: string | null; launchToc: boolean } | null
   children: unknown[]
   _src: 'local' | 'toc'
   _tocRaw: Prisma.JsonValue | null
+  /** Status apresentado pelo TOC (quando o registo é/tem ligação TOC). null
+   *  para receivables puramente locais. Permite ao frontend mostrar "Liquidado
+   *  localmente" quando _statusLocal difere de _statusToc. */
+  _statusToc: TreasuryDocStatus | null
+  _statusDiffersFromToc: boolean
   [key: string]: unknown
 }
 
-function mapTocSalesToReceivable(d: TocSalesDocument, now: Date): ReceivableListItem | null {
-  const tocStatus = d.status ?? 0
-  // 0=rascunho, 4=anulado — excluímos. 1=emitido, 2=parcial, 3=liquidado,
-  // 5=vencido (emitido com due_date < hoje).
-  if (tocStatus === 0 || tocStatus === 4) return null
-  let mappedStatus: TreasuryDocStatus
-  if (tocStatus === 3) mappedStatus = 'SETTLED'
-  else if (tocStatus === 2) mappedStatus = 'PARTIAL'
-  else mappedStatus = 'OPEN'
+/** Mapeia status TOC (1/2/3/5) para o enum local. Devolve null para status que
+ *  não fazem sentido como receivable (0=rascunho, 4=anulado). */
+function mapTocStatus(tocStatus: number | null | undefined): TreasuryDocStatus | null {
+  if (tocStatus == null || tocStatus === 0 || tocStatus === 4) return null
+  if (tocStatus === 3) return 'SETTLED'
+  if (tocStatus === 2) return 'PARTIAL'
+  return 'OPEN' // 1 ou 5
+}
+
+/** Devolve apenas dados do TOC, para docs TOC sem registo `treasuryReceivable` ligado.
+ *  Usa ID prefixado `toc-{tocId}` para que ações on-demand consigam criar
+ *  o registo de ligação no momento. */
+function mapTocSalesToReceivable(d: TocSalesDocument): ReceivableListItem | null {
+  const mappedStatus = mapTocStatus(d.status)
+  if (mappedStatus == null) return null
   const gross = Number(d.grossTotal ?? 0)
   const pending = Number(d.pendingTotal ?? gross)
   const received = Math.max(0, gross - pending)
-  const dueDate = d.dueDate ? new Date(d.dueDate) : now
-  const documentDate = d.date ? new Date(d.date) : null
   const raw = (d.raw ?? {}) as Record<string, unknown>
   return {
     id: `toc-${d.tocId}`,
     reference: (raw.document_no as string) ?? null,
     entityName: (raw.customer_business_name as string) ?? null,
-    documentDate,
-    dueDate,
+    documentDate: d.date ? new Date(d.date) : null,
+    dueDate: d.dueDate ? new Date(d.dueDate) : null,
     totalAmount: gross,
     pendingAmount: pending,
     receivedAmount: received,
@@ -59,10 +69,114 @@ function mapTocSalesToReceivable(d: TocSalesDocument, now: Date): ReceivableList
     tocCustomerId: d.customerId != null ? String(d.customerId) : null,
     recurrenceId: null,
     parentId: null,
+    promisedPaymentDate: null,
     category: null,
     children: [],
     _src: 'toc',
     _tocRaw: d.raw,
+    _statusToc: mappedStatus,
+    _statusDiffersFromToc: false,
+  }
+}
+
+/** Combina status local + TOC. Regra: se o utilizador marcou explicitamente
+ *  como SETTLED/PARTIAL/VOID o estado local prevalece; OPEN no local segue o
+ *  TOC. Devolve também os valores derivados (received/pending) corretos. */
+function resolveStatusOverlay(
+  localStatus: TreasuryDocStatus,
+  localReceived: number | Prisma.Decimal | null | undefined,
+  tocStatus: TreasuryDocStatus,
+  tocGross: number,
+  tocPending: number,
+): { status: TreasuryDocStatus; received: number; pending: number; statusDiffers: boolean } {
+  // SETTLED/VOID locais → prevalecem
+  if (localStatus === 'SETTLED') {
+    return { status: 'SETTLED', received: tocGross, pending: 0, statusDiffers: tocStatus !== 'SETTLED' }
+  }
+  if (localStatus === 'VOID') {
+    return { status: 'VOID', received: 0, pending: 0, statusDiffers: true }
+  }
+  // PARTIAL local → received vem do local (escrito por partialPayment)
+  if (localStatus === 'PARTIAL') {
+    const received = Number(localReceived ?? 0)
+    return { status: 'PARTIAL', received, pending: Math.max(0, tocGross - received), statusDiffers: tocStatus !== 'PARTIAL' }
+  }
+  // OPEN local = padrão → segue o TOC
+  return {
+    status: tocStatus,
+    received: Math.max(0, tocGross - tocPending),
+    pending: tocPending,
+    statusDiffers: false,
+  }
+}
+
+type LocalReceivableRow = Prisma.TreasuryReceivableGetPayload<{
+  include: {
+    category: { select: { id: true; name: true; color: true; launchToc: true } }
+    children: true
+  }
+}>
+
+/** Overlay TOC: para um `treasuryReceivable` com `tocSalesDocId`, sobrepõe os
+ *  campos da fatura (dueDate, totalAmount, pendingAmount, status…) com os
+ *  valores actuais do `tocSalesDocument`. Anotações locais (categoryId,
+ *  budgetId, promisedPaymentDate, splits, recurrenceId) ficam do local. */
+function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocSalesDocument): ReceivableListItem | null {
+  if (!tocDoc) {
+    // Sem espelho TOC: registo manual ou ligação cujo doc TOC foi removido do
+    // sync. Devolve os campos do local tal como estão.
+    return {
+      id: local.id,
+      reference: local.reference,
+      entityName: local.entityName,
+      documentDate: local.documentDate,
+      dueDate: local.dueDate,
+      totalAmount: local.totalAmount,
+      pendingAmount: local.pendingAmount,
+      receivedAmount: local.receivedAmount,
+      status: local.status,
+      origin: local.origin,
+      tocSalesDocId: local.tocSalesDocId,
+      tocCustomerId: local.tocCustomerId,
+      recurrenceId: local.recurrenceId,
+      parentId: local.parentId,
+      promisedPaymentDate: local.promisedPaymentDate,
+      category: local.category,
+      children: local.children,
+      _src: local.tocSalesDocId ? 'toc' : 'local',
+      _tocRaw: null,
+      _statusToc: null,
+      _statusDiffersFromToc: false,
+    }
+  }
+  const tocMapped = mapTocStatus(tocDoc.status)
+  if (tocMapped == null) return null
+  const gross = Number(tocDoc.grossTotal ?? 0)
+  const tocPending = Number(tocDoc.pendingTotal ?? gross)
+  const merged = resolveStatusOverlay(local.status, local.receivedAmount, tocMapped, gross, tocPending)
+  const raw = (tocDoc.raw ?? {}) as Record<string, unknown>
+  return {
+    id: local.id,
+    reference: (raw.document_no as string) ?? local.reference,
+    entityName: (raw.customer_business_name as string) ?? local.entityName,
+    documentDate: tocDoc.date ? new Date(tocDoc.date) : local.documentDate,
+    dueDate: tocDoc.dueDate ? new Date(tocDoc.dueDate) : local.dueDate,
+    totalAmount: gross,
+    pendingAmount: merged.pending,
+    receivedAmount: merged.received,
+    status: merged.status,
+    origin: 'TOCONLINE',
+    tocSalesDocId: local.tocSalesDocId,
+    tocCustomerId: local.tocCustomerId ?? (tocDoc.customerId != null ? String(tocDoc.customerId) : null),
+    recurrenceId: local.recurrenceId,
+    parentId: local.parentId,
+    promisedPaymentDate: local.promisedPaymentDate,
+    category: local.category,
+    children: local.children,
+    _src: 'toc',
+    _tocRaw: tocDoc.raw,
+    _statusToc: tocMapped,
+    _statusDiffersFromToc: merged.statusDiffers,
   }
 }
 
@@ -105,33 +219,17 @@ export class TreasuryReceivablesService {
     const statusList: TreasuryDocStatus[] | undefined = overdue
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
-    const effectiveStatusFilter = statusList ? { status: { in: statusList } } : {}
 
-    const where: Prisma.TreasuryReceivableWhereInput = {
+    // Estratégia: filtros aplicados em memória depois do overlay TOC, porque
+    // para receivables ligados (tocSalesDocId != null) os campos da fatura
+    // vêm do tocSalesDocument — não estão no registo local. Só os filtros
+    // que actuam sobre anotações locais (categoryId, recurrenceId, parentId,
+    // promisedPaymentDate) podem ir directos a SQL.
+    const localWhere: Prisma.TreasuryReceivableWhereInput = {
       clientId,
       deletedAt: null,
       NOT: { parentId: { not: null }, recurrenceId: null },
-      ...effectiveStatusFilter,
-      ...(origin ? { origin } : {}),
       ...(categoryId ? { categoryId } : {}),
-      ...(tocCustomerId ? { tocCustomerId } : {}),
-      ...(entityName ? { OR: [
-        { entityName: { contains: entityName, mode: 'insensitive' } },
-        { reference: { contains: entityName, mode: 'insensitive' } },
-      ] } : {}),
-      ...(dueDateFrom || dueDateTo || overdue ? {
-        dueDate: {
-          ...(overdue ? { lt: new Date() } : {}),
-          ...(dueDateFrom ? { gte: new Date(dueDateFrom) } : {}),
-          ...(dueDateTo ? { lt: new Date(new Date(dueDateTo).getTime() + 86400000) } : {}),
-        },
-      } : {}),
-      ...(docDateFrom || docDateTo ? {
-        documentDate: {
-          ...(docDateFrom ? { gte: new Date(docDateFrom) } : {}),
-          ...(docDateTo ? { lt: new Date(new Date(docDateTo).getTime() + 86400000) } : {}),
-        },
-      } : {}),
       ...(paymentDateFrom || paymentDateTo ? {
         promisedPaymentDate: {
           ...(paymentDateFrom ? { gte: new Date(paymentDateFrom) } : {}),
@@ -141,75 +239,85 @@ export class TreasuryReceivablesService {
       ...(isRecurrent !== undefined ? { recurrenceId: isRecurrent ? { not: null } : null } : {}),
     }
 
-    const localItems = await this.prisma.treasuryReceivable.findMany({
-      where,
-      include: {
-        category: { select: { id: true, name: true, color: true, launchToc: true } },
-        children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
-      },
-    })
+    const [localRows, allTocDocs] = await Promise.all([
+      this.prisma.treasuryReceivable.findMany({
+        where: localWhere,
+        include: {
+          category: { select: { id: true, name: true, color: true, launchToc: true } },
+          children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
+        },
+      }),
+      // Filtros locais excluem todos os docs TOC porque não têm equivalente
+      // na fonte; nesse caso a lista TOC fica vazia.
+      (categoryId || isRecurrent !== undefined || paymentDateFrom || paymentDateTo)
+        ? Promise.resolve([] as TocSalesDocument[])
+        : this.prisma.tocSalesDocument.findMany({
+            where: {
+              clientId,
+              ...(tocCustomerId ? { customerId: Number(tocCustomerId) } : {}),
+            },
+          }),
+    ])
 
-    // Docs TOC ainda não materializados localmente — vêm das tabelas espelho
-    // sincronizadas pelo TocScheduler. Excluímos os que já têm receivable
-    // correspondente (via tocSalesDocId). Filtros locais (categoryId,
-    // isRecurrent) excluem todos os TOC docs porque estes campos não existem
-    // na fonte; nesse caso a lista TOC fica vazia.
-    const importedTocIds = new Set(localItems.map((r) => r.tocSalesDocId).filter((s): s is string => !!s))
-    const tocCandidates = (categoryId || isRecurrent !== undefined || origin === 'LOCAL')
-      ? []
-      : await this.prisma.tocSalesDocument.findMany({
-          where: {
-            clientId,
-            ...(tocCustomerId ? { customerId: Number(tocCustomerId) } : {}),
-            ...(dueDateFrom || dueDateTo ? {
-              dueDate: {
-                ...(dueDateFrom ? { gte: dueDateFrom } : {}),
-                ...(dueDateTo ? { lte: dueDateTo } : {}),
-              },
-            } : {}),
-          },
-        })
+    // Mapa tocId → tocSalesDocument para overlay rápido
+    const tocById = new Map(allTocDocs.map((d) => [d.tocId, d]))
 
+    // 1. Receivables locais com overlay TOC quando ligados
+    const localWithOverlay: ReceivableListItem[] = []
+    for (const r of localRows) {
+      const tocId = r.tocSalesDocId ? Number(r.tocSalesDocId) : null
+      const tocDoc = tocId != null ? tocById.get(tocId) : undefined
+      const overlaid = overlayLocalWithToc(r, tocDoc)
+      if (overlaid) localWithOverlay.push(overlaid)
+    }
+
+    // 2. Docs TOC SEM registo local — entram com id `toc-{tocId}`
+    const importedTocIds = new Set(localRows.map((r) => r.tocSalesDocId).filter((s): s is string => !!s))
     const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
-    const now = new Date()
-    const tocMapped = tocCandidates
-      .filter((d) => !importedTocIds.has(String(d.tocId)))
-      .filter((d) => {
+    const tocPureMapped: ReceivableListItem[] = []
+    if (origin !== 'LOCAL') {
+      for (const d of allTocDocs) {
+        if (importedTocIds.has(String(d.tocId))) continue
         const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
-        return SALES_INVOICE_TYPES.has(docType)
-      })
-      .map((d) => mapTocSalesToReceivable(d, now))
-      .filter((r) => r !== null)
-      .filter((r) => {
-        if (!statusList) return true
-        return statusList.includes(r!.status)
-      })
-      .filter((r) => {
-        if (!entityName) return true
-        const q = entityName.toLowerCase()
-        return (r!.entityName ?? '').toLowerCase().includes(q) || (r!.reference ?? '').toLowerCase().includes(q)
-      })
-      .filter((r) => {
-        if (!overdue) return true
-        return r!.dueDate < now
-      })
-      .filter((r) => {
-        if (!docDateFrom && !docDateTo) return true
-        if (!r!.documentDate) return false
-        if (docDateFrom && r!.documentDate < new Date(docDateFrom)) return false
-        if (docDateTo && r!.documentDate >= new Date(new Date(docDateTo).getTime() + 86400000)) return false
-        return true
-      }) as ReceivableListItem[]
+        if (!SALES_INVOICE_TYPES.has(docType)) continue
+        const item = mapTocSalesToReceivable(d)
+        if (item) tocPureMapped.push(item)
+      }
+    }
 
-    const allItems: ReceivableListItem[] = [
-      ...localItems.map((r) => ({ ...r, _src: 'local' as const, _tocRaw: null })),
-      ...tocMapped,
-    ]
+    // 3. Aplicar filtros de status / texto / datas / overdue em memória
+    const now = new Date()
+    const docDateFromTs = docDateFrom ? new Date(docDateFrom).getTime() : null
+    const docDateToTs = docDateTo ? new Date(new Date(docDateTo).getTime() + 86400000).getTime() : null
+    const dueDateFromTs = dueDateFrom ? new Date(dueDateFrom).getTime() : null
+    const dueDateToTs = dueDateTo ? new Date(new Date(dueDateTo).getTime() + 86400000).getTime() : null
+    const entityQuery = entityName?.toLowerCase()
 
-    const sortKey = sortBy as string
+    const matches = (item: ReceivableListItem) => {
+      if (statusList && !statusList.includes(item.status)) return false
+      if (origin && item.origin !== origin) return false
+      if (entityQuery) {
+        const en = (item.entityName ?? '').toLowerCase()
+        const rf = (item.reference ?? '').toLowerCase()
+        if (!en.includes(entityQuery) && !rf.includes(entityQuery)) return false
+      }
+      if (tocCustomerId && item.tocCustomerId !== tocCustomerId) return false
+      if (overdue && (item.dueDate == null || item.dueDate >= now)) return false
+      if (dueDateFromTs != null && (item.dueDate == null || item.dueDate.getTime() < dueDateFromTs)) return false
+      if (dueDateToTs != null && (item.dueDate == null || item.dueDate.getTime() >= dueDateToTs)) return false
+      if (docDateFromTs != null && (item.documentDate == null || item.documentDate.getTime() < docDateFromTs)) return false
+      if (docDateToTs != null && (item.documentDate == null || item.documentDate.getTime() >= docDateToTs)) return false
+      return true
+    }
+
+    const allItems = [...localWithOverlay, ...tocPureMapped].filter(matches)
+
+    // 4. Ordenação em memória
+    const sortKey = sortBy as keyof ReceivableListItem
     allItems.sort((a, b) => {
-      const va = a[sortKey] as Date | number | string | null | undefined
-      const vb = b[sortKey] as Date | number | string | null | undefined
+      const rawA = a[sortKey], rawB = b[sortKey]
+      const va = rawA instanceof Date ? rawA.getTime() : rawA
+      const vb = rawB instanceof Date ? rawB.getTime() : rawB
       if (va == null && vb == null) return 0
       if (va == null) return sortDir === 'asc' ? 1 : -1
       if (vb == null) return sortDir === 'asc' ? -1 : 1
@@ -224,7 +332,68 @@ export class TreasuryReceivablesService {
     return { total, page, limit, items }
   }
 
+  /**
+   * Resolve um id de receivable, suportando 2 formatos:
+   *  - cuid local → devolve directo
+   *  - `toc-{tocId}` → procura registo de ligação local com esse tocSalesDocId;
+   *    se não existe, faz upsert mínimo (createdById obrigatório). Os campos
+   *    da fatura ficam null e são lidos do espelho `tocSalesDocument` (overlay).
+   * Devolve sempre o cuid local pronto para usar em writes/reads subsequentes.
+   */
+  private async resolveLocalReceivableId(clientId: string, userId: string, id: string): Promise<string> {
+    if (!id.startsWith('toc-')) return id
+    const tocSalesDocId = id.slice(4)
+    const existing = await this.prisma.treasuryReceivable.findFirst({
+      where: { clientId, tocSalesDocId, deletedAt: null },
+      select: { id: true },
+    })
+    if (existing) return existing.id
+    const created = await this.prisma.treasuryReceivable.create({
+      data: {
+        clientId,
+        createdById: userId,
+        tocSalesDocId,
+        currency: 'EUR',
+        status: 'OPEN',
+        origin: 'TOCONLINE',
+      },
+      select: { id: true },
+    })
+    return created.id
+  }
+
+  /** Bloqueia mutações que alteram dados da fatura em docs com tocSalesDocId.
+   *  Status/pendingAmount/totalAmount/dueDate vêm do TOC — alterá-los seria
+   *  divergir do espelho. Categoria/budget/promisedPaymentDate/splits são
+   *  anotações locais e continuam permitidos. */
+  private assertEditableInvoiceFields(item: { tocSalesDocId: string | null }, action: string) {
+    if (item.tocSalesDocId) {
+      throw httpError(409, `Acção "${action}" não permitida em documentos do TOConline — os valores da fatura são geridos no TOConline`)
+    }
+  }
+
   async getById(clientId: string, id: string) {
+    if (id.startsWith('toc-')) {
+      const tocSalesDocId = id.slice(4)
+      const tocIdNum = Number(tocSalesDocId)
+      const existing = await this.prisma.treasuryReceivable.findFirst({
+        where: { clientId, tocSalesDocId, deletedAt: null },
+        include: {
+          category: true,
+          recurrence: true,
+          reconciliationLinks: { include: { reconciliation: true } },
+          children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
+        },
+      })
+      const tocDoc = !isNaN(tocIdNum)
+        ? await this.prisma.tocSalesDocument.findUnique({
+            where: { clientId_tocId: { clientId, tocId: tocIdNum } },
+          })
+        : null
+      if (!existing && !tocDoc) throw httpError(404, 'Receivable not found')
+      if (existing) return { ...existing, _tocOverlay: tocDoc ?? null }
+      throw httpError(404, 'Receivable não tem registo de ligação ainda — chame primeiro resolveLocalReceivableId')
+    }
     const item = await this.prisma.treasuryReceivable.findFirst({
       where: { id, clientId, deletedAt: null },
       include: {
@@ -235,7 +404,16 @@ export class TreasuryReceivablesService {
       },
     })
     if (!item) throw httpError(404, 'Receivable not found')
-    return item
+    if (item.tocSalesDocId) {
+      const tocIdNum = Number(item.tocSalesDocId)
+      if (!isNaN(tocIdNum)) {
+        const tocDoc = await this.prisma.tocSalesDocument.findUnique({
+          where: { clientId_tocId: { clientId, tocId: tocIdNum } },
+        })
+        return { ...item, _tocOverlay: tocDoc }
+      }
+    }
+    return { ...item, _tocOverlay: null as Awaited<ReturnType<PrismaClient['tocSalesDocument']['findUnique']>> }
   }
 
   async create(clientId: string, userId: string, data: {
@@ -384,8 +562,8 @@ export class TreasuryReceivablesService {
         snapshot: {
           reference: created.reference,
           entityName: created.entityName,
-          totalAmount: Number(created.totalAmount.toString()),
-          dueDate: created.dueDate.toISOString(),
+          totalAmount: created.totalAmount != null ? Number(created.totalAmount.toString()) : null,
+          dueDate: created.dueDate?.toISOString() ?? null,
           categoryId: created.categoryId,
           recurrenceId: created.recurrenceId,
         },
@@ -415,16 +593,24 @@ export class TreasuryReceivablesService {
     status: TreasuryDocStatus
     tocCustomerId: string | null
   }>) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    const isTocLinked = !!item.tocSalesDocId
 
     const updateData: Prisma.TreasuryReceivableUpdateInput = {}
-    if (data.entityName   !== undefined) updateData.entityName   = data.entityName
-    if (data.description  !== undefined) updateData.description  = data.description
-    if (data.reference    !== undefined) updateData.reference    = data.reference
-    if (data.dueDate)                    updateData.dueDate      = new Date(data.dueDate)
-    if (data.documentDate)               updateData.documentDate = new Date(data.documentDate)
-    if (data.status)                     updateData.status       = data.status
-    if (data.tocCustomerId !== undefined) updateData.tocCustomerId = data.tocCustomerId
+    if (!isTocLinked) {
+      // Campos da fatura — só editáveis em receivables manuais.
+      if (data.entityName   !== undefined) updateData.entityName   = data.entityName
+      if (data.description  !== undefined) updateData.description  = data.description
+      if (data.reference    !== undefined) updateData.reference    = data.reference
+      if (data.dueDate)                    updateData.dueDate      = new Date(data.dueDate)
+      if (data.documentDate)               updateData.documentDate = new Date(data.documentDate)
+      if (data.status)                     updateData.status       = data.status
+      if (data.tocCustomerId !== undefined) updateData.tocCustomerId = data.tocCustomerId
+    } else {
+      // Em docs TOC: description pode ser nota local. Tudo o resto vem do TOC.
+      if (data.description !== undefined) updateData.description = data.description
+    }
     if (data.promisedPaymentDate !== undefined) {
       updateData.promisedPaymentDate = data.promisedPaymentDate ? new Date(data.promisedPaymentDate) : null
     }
@@ -453,6 +639,7 @@ export class TreasuryReceivablesService {
     }
 
     if (data.totalAmount !== undefined) {
+      if (isTocLinked) throw httpError(409, 'O valor da fatura é gerido no TOConline')
       if (item.status !== 'OPEN') throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
       updateData.totalAmount = data.totalAmount
       updateData.pendingAmount = data.totalAmount
@@ -541,20 +728,28 @@ export class TreasuryReceivablesService {
   }
 
   async settle(clientId: string, userId: string, id: string) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided receivable')
     if (item.recurrenceId && item.parentId) {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-      if (item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
+      if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
     }
 
     const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status !== 'SETTLED' && c.status !== 'VOID')
 
+    // Para docs TOC, totalAmount é null no local — o "received" será calculado
+    // dinamicamente no overlay a partir do tocSalesDocument.
     const result = await this.prisma.$transaction(async (tx) => {
       const parent = await tx.treasuryReceivable.update({
         where: { id },
-        data: { status: 'SETTLED', pendingAmount: 0, receivedAmount: item.totalAmount, promisedPaymentDate: null },
+        data: {
+          status: 'SETTLED',
+          pendingAmount: item.tocSalesDocId ? null : 0,
+          receivedAmount: item.tocSalesDocId ? null : item.totalAmount,
+          promisedPaymentDate: null,
+        },
       })
       // Cascade: settling a parent settles all its non-recurring open/partial children at once.
       if (splitChildren.length > 0) {
@@ -581,6 +776,7 @@ export class TreasuryReceivablesService {
   }
 
   async unsettle(clientId: string, userId: string, id: string) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
     if (item.status !== 'SETTLED') throw httpError(409, 'Apenas documentos liquidados podem ser revertidos')
 
@@ -589,7 +785,11 @@ export class TreasuryReceivablesService {
     const result = await this.prisma.$transaction(async (tx) => {
       const parent = await tx.treasuryReceivable.update({
         where: { id },
-        data: { status: 'OPEN', pendingAmount: item.totalAmount, receivedAmount: 0 },
+        data: {
+          status: 'OPEN',
+          pendingAmount: item.tocSalesDocId ? null : item.totalAmount,
+          receivedAmount: item.tocSalesDocId ? null : 0,
+        },
       })
       // Cascade: reverting the parent reverts every SETTLED non-recurring child.
       if (settledChildren.length > 0) {
@@ -615,12 +815,18 @@ export class TreasuryReceivablesService {
   }
 
   async partialPayment(clientId: string, userId: string, id: string, amount: number) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided receivable')
     if (amount <= 0) throw httpError(400, 'Amount must be positive')
+    // Para docs TOC, totalAmount está no espelho. Recuperar do overlay.
+    const tocOverlay = (item as { _tocOverlay?: { grossTotal: unknown } | null })._tocOverlay
+    const baseTotal = item.totalAmount != null
+      ? Number(item.totalAmount)
+      : tocOverlay?.grossTotal != null ? Number(tocOverlay.grossTotal as Prisma.Decimal | number) : 0
     const newReceived = Number(item.receivedAmount ?? 0) + amount
-    const newPending = Math.max(0, Number(item.totalAmount) - newReceived)
+    const newPending = Math.max(0, baseTotal - newReceived)
     const newStatus = newPending < 0.005 ? 'SETTLED' : 'PARTIAL'
     const result = await this.prisma.treasuryReceivable.update({
       where: { id },
@@ -637,6 +843,7 @@ export class TreasuryReceivablesService {
   }
 
   async void(clientId: string, userId: string, id: string) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
     if (item.status === 'SETTLED') throw httpError(409, 'Cannot void a settled receivable')
     const result = await this.prisma.treasuryReceivable.update({ where: { id }, data: { status: 'VOID' } })
@@ -650,6 +857,25 @@ export class TreasuryReceivablesService {
   }
 
   async delete(clientId: string, userId: string, id: string) {
+    // Para docs TOC: se for prefixed e ainda não há ligação local, não há nada
+    // para apagar (o doc TOC continua a existir no espelho). Devolve no-op.
+    if (id.startsWith('toc-')) {
+      const tocSalesDocId = id.slice(4)
+      const existing = await this.prisma.treasuryReceivable.findFirst({
+        where: { clientId, tocSalesDocId, deletedAt: null },
+        select: { id: true },
+      })
+      if (!existing) {
+        await audit(this.prisma, {
+          clientId, userId,
+          action: 'receivable.delete',
+          entityType: 'Receivable', entityId: id,
+          payload: { reference: null, totalAmount: null, tocOnly: true },
+        })
+        return null
+      }
+      id = existing.id
+    }
     const item = await this.getById(clientId, id)
     // Cascade total when the deleted item is the recurrence root: soft-delete every
     // sibling instance (past and future) and deactivate the recurrence so nothing
@@ -679,12 +905,13 @@ export class TreasuryReceivablesService {
       clientId, userId,
       action: 'receivable.delete',
       entityType: 'Receivable', entityId: id,
-      payload: { reference: item.reference, totalAmount: Number(item.totalAmount.toString()) },
+      payload: { reference: item.reference, totalAmount: item.totalAmount != null ? Number(item.totalAmount.toString()) : null },
     })
     return result
   }
 
   async setPromisedDate(clientId: string, userId: string, id: string, date: string | null) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
     const newDate = date ? new Date(date) : null
     const result = await this.prisma.treasuryReceivable.update({
@@ -704,6 +931,7 @@ export class TreasuryReceivablesService {
   }
 
   async split(clientId: string, userId: string, id: string, installments: Array<{ promisedPaymentDate: string; amount: number; description?: string }>) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
     if (item.status !== 'OPEN') throw httpError(409, 'Só é possível dividir documentos em aberto')
     if (item.parentId) throw httpError(409, 'Não é possível dividir uma parcela')
@@ -777,6 +1005,7 @@ export class TreasuryReceivablesService {
   }
 
   async unsplit(clientId: string, userId: string, id: string) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
     const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
     if (splitChildren.length === 0) throw httpError(409, 'Este documento não tem parcelas para desfazer')
@@ -884,22 +1113,32 @@ export class TreasuryReceivablesService {
 
   async getKpis(clientId: string) {
     const now = new Date()
-    // "Abertas": emitted but not settled. Excludes recurrence templates (parentless
-    // with recurrenceId) and future recurrence instances (dueDate > now).
+    // Após overlay TOC, os receivables com tocSalesDocId são "anotações" sobre
+    // docs TOC — os dados da fatura vivem no espelho tocSalesDocument. KPIs:
+    //   - locais SEM tocLink (puramente locais: manuais, splits, recurrences)
+    //     vão ao treasuryReceivable
+    //   - locais COM tocLink E TOC docs puros vão ao tocSalesDocument
+    // Evita-se assim a dupla contagem que existia quando o local copiava os
+    // valores do TOC.
     const abertasClause: Prisma.TreasuryReceivableWhereInput = {
       OR: [
         { recurrenceId: null },
         { AND: [{ parentId: { not: null } }, { dueDate: { lte: now } }] },
       ],
     }
-    const [totalOpen, overdue, settledMonth] = await Promise.all([
+    const localOnlyClause: Prisma.TreasuryReceivableWhereInput = {
+      clientId, deletedAt: null,
+      tocSalesDocId: null,
+      ...abertasClause,
+    }
+    const [totalOpenLocal, overdueLocal, settledMonth] = await Promise.all([
       this.prisma.treasuryReceivable.aggregate({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, ...abertasClause },
+        where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] } },
         _sum: { pendingAmount: true },
         _count: true,
       }),
       this.prisma.treasuryReceivable.count({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now }, ...abertasClause },
+        where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
       }),
       this.prisma.treasuryReceivable.aggregate({
         where: {
@@ -910,23 +1149,17 @@ export class TreasuryReceivablesService {
       }),
     ])
 
-    // Aging buckets
-    const buckets = await Promise.all([30, 60, 90].map(async (days, i) => {
-      const from = i === 0 ? new Date(0) : new Date(Date.now() - days * 86400000)
-      const to = new Date(Date.now() - (i === 0 ? 0 : (i === 1 ? 31 : (i === 2 ? 61 : 91))) * 86400000)
+    // Aging buckets — só locais sem tocLink (TOC ainda não tem aging info por bucket)
+    const buckets = await Promise.all([30, 60, 90].map(async (_days, i) => {
+      const from = i === 0 ? new Date(0) : new Date(Date.now() - [30, 60, 90][i] * 86400000)
+      const to = new Date(Date.now() - (i === 0 ? 0 : (i === 1 ? 31 : 61)) * 86400000)
       return this.prisma.treasuryReceivable.count({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now, gte: from, lte: to }, ...abertasClause },
+        where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now, gte: from, lte: to } },
       })
     }))
 
-    // KPIs do TOC: docs sincronizados ainda não importados como receivable.
-    // Status 1/2/5 (emitido, parcial, vencido) e tipos FT/FS/FR — mesmo critério
-    // do auto-import. countOverdue extra é detectado via status==5 OU dueDate<hoje.
-    const localTocIds = await this.prisma.treasuryReceivable.findMany({
-      where: { clientId, deletedAt: null, tocSalesDocId: { not: null } },
-      select: { tocSalesDocId: true },
-    })
-    const importedTocIds = new Set(localTocIds.map((r) => r.tocSalesDocId).filter((s): s is string => !!s))
+    // KPIs do TOC: TODOS os tocSalesDocument com status 1/2/5 e tipos FT/FS/FR.
+    // Inclui os que têm receivable anotado (porque já não há dupla contagem).
     const todayStr = now.toISOString().slice(0, 10)
     const tocDocs = await this.prisma.tocSalesDocument.findMany({
       where: { clientId, status: { in: [1, 2, 5] } },
@@ -937,7 +1170,6 @@ export class TreasuryReceivablesService {
     let tocOpenCount = 0
     let tocOverdue = 0
     for (const d of tocDocs) {
-      if (importedTocIds.has(String(d.tocId))) continue
       const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
       if (!SALES_INVOICE_TYPES.has(docType)) continue
       const pending = Number(d.pendingTotal ?? d.grossTotal ?? 0)
@@ -949,9 +1181,9 @@ export class TreasuryReceivablesService {
     }
 
     return {
-      totalPending: Number(totalOpen._sum?.pendingAmount ?? 0) + tocTotalPending,
-      countOpen: totalOpen._count + tocOpenCount,
-      countOverdue: overdue + tocOverdue,
+      totalPending: Number(totalOpenLocal._sum?.pendingAmount ?? 0) + tocTotalPending,
+      countOpen: totalOpenLocal._count + tocOpenCount,
+      countOverdue: overdueLocal + tocOverdue,
       settledThisMonth: Number(settledMonth._sum?.totalAmount ?? 0),
       aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
     }

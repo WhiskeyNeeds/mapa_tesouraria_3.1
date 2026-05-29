@@ -146,17 +146,17 @@ model User {
   userRoles   UserRole[]
   userClients UserClient[]
 
-  treasuryReceivablesCreated      TreasuryReceivable[]     @relation("ReceivablesCreated")
-  treasuryPayablesCreated         TreasuryPayable[]        @relation("PayablesCreated")
+  treasuryReceivablesCreated      TreasuryReceivable[]        @relation("ReceivablesCreated")
+  treasuryPayablesCreated         TreasuryPayable[]           @relation("PayablesCreated")
   treasuryBankImportsCreated      TreasuryBankImport[]
-  treasuryReconciliationsCreated  TreasuryReconciliation[] @relation("ReconciliationsCreated")
-  treasuryReconciliationsReversed TreasuryReconciliation[] @relation("ReconciliationsReversed")
+  treasuryReconciliationsCreated  TreasuryReconciliation[]    @relation("ReconciliationsCreated")
+  treasuryReconciliationsReversed TreasuryReconciliation[]    @relation("ReconciliationsReversed")
   treasuryAuditLogs               TreasuryAuditLog[]
-  treasuryFollowupsCreated        TreasuryFollowup[]       @relation("FollowupsCreated")
-  treasuryFollowupsAssigned       TreasuryFollowup[]       @relation("FollowupsAssigned")
+  treasuryFollowupsCreated        TreasuryFollowup[]          @relation("FollowupsCreated")
+  treasuryFollowupsAssigned       TreasuryFollowup[]          @relation("FollowupsAssigned")
   treasuryInvoiceAttachments      TreasuryInvoiceAttachment[]
-  treasuryEmailTemplatesCreated   TreasuryEmailTemplate[]  @relation("EmailTemplatesCreated")
-  treasuryBudgetsCreated          TreasuryBudget[]         @relation("BudgetsCreated")
+  treasuryEmailTemplatesCreated   TreasuryEmailTemplate[]     @relation("EmailTemplatesCreated")
+  treasuryBudgetsCreated          TreasuryBudget[]            @relation("BudgetsCreated")
 
   @@index([email])
   @@index([isActive])
@@ -204,28 +204,28 @@ model Client {
   userClients     UserClient[]
   toconlineConfig ToconlineConfig?
 
-  treasuryCategories          TreasuryCategory[]
-  treasuryBankAccounts        TreasuryBankAccount[]
-  treasuryBankImports         TreasuryBankImport[]
-  treasuryBankMovements       TreasuryBankMovement[]
-  treasuryReceivables         TreasuryReceivable[]
-  treasuryPayables            TreasuryPayable[]
-  treasuryRecurrences         TreasuryRecurrence[]
-  treasuryReconciliations     TreasuryReconciliation[]
-  treasuryClassificationRules TreasuryClassificationRule[]
-  treasurySettings            TreasurySettings?
-  treasuryAuditLogs           TreasuryAuditLog[]
-  treasuryEmailTemplates      TreasuryEmailTemplate[]
-  treasuryFollowups           TreasuryFollowup[]
-  treasuryInvoiceAttachments  TreasuryInvoiceAttachment[]
-  treasuryBudgets             TreasuryBudget[]
-  treasuryBudgetRules         TreasuryBudgetRule[]
-  treasuryEntityConfigs       TreasuryEntityConfig[]
-  treasuryBudgetCategories    TreasuryBudgetCategory[]
-  treasuryDunningRules        TreasuryDunningRule[]
-  treasuryDunningTracks       TreasuryDunningTrack[]
+  treasuryCategories              TreasuryCategory[]
+  treasuryBankAccounts            TreasuryBankAccount[]
+  treasuryBankImports             TreasuryBankImport[]
+  treasuryBankMovements           TreasuryBankMovement[]
+  treasuryReceivables             TreasuryReceivable[]
+  treasuryPayables                TreasuryPayable[]
+  treasuryRecurrences             TreasuryRecurrence[]
+  treasuryReconciliations         TreasuryReconciliation[]
+  treasuryClassificationRules     TreasuryClassificationRule[]
+  treasurySettings                TreasurySettings?
+  treasuryAuditLogs               TreasuryAuditLog[]
+  treasuryEmailTemplates          TreasuryEmailTemplate[]
+  treasuryFollowups               TreasuryFollowup[]
+  treasuryInvoiceAttachments      TreasuryInvoiceAttachment[]
+  treasuryBudgets                 TreasuryBudget[]
+  treasuryBudgetRules             TreasuryBudgetRule[]
+  treasuryEntityConfigs           TreasuryEntityConfig[]
+  treasuryBudgetCategories        TreasuryBudgetCategory[]
+  treasuryDunningRules            TreasuryDunningRule[]
+  treasuryDunningTracks           TreasuryDunningTrack[]
   treasuryDunningTrackAssignments TreasuryDunningTrackAssignment[]
-  productAnalytics            ProductAnalytic[]
+  productAnalytics                ProductAnalytic[]
 
   @@index([isActive])
   @@index([nif])
@@ -439,15 +439,20 @@ model TreasuryReceivable {
   entityNif     String? @db.VarChar(20)
   tocCustomerId String?
 
-  reference    String?  @db.VarChar(80)
-  description  String?  @db.VarChar(500)
+  reference    String?   @db.VarChar(80)
+  description  String?   @db.VarChar(500)
   documentDate DateTime?
-  dueDate      DateTime
+  // dueDate, totalAmount, pendingAmount, receivedAmount são nullable porque
+  // receivables ligados a tocSalesDocId leem estes valores do espelho TOC
+  // (tocSalesDocument) — fica null no registo local para evitar duplicação
+  // e desincronização. Receivables manuais (sem tocSalesDocId) preenchem
+  // estes campos normalmente.
+  dueDate      DateTime?
 
-  currency       String  @default("EUR") @db.VarChar(3)
-  totalAmount    Decimal @db.Decimal(18, 2)
-  receivedAmount Decimal @default(0) @db.Decimal(18, 2)
-  pendingAmount  Decimal @db.Decimal(18, 2)
+  currency       String   @default("EUR") @db.VarChar(3)
+  totalAmount    Decimal? @db.Decimal(18, 2)
+  receivedAmount Decimal? @db.Decimal(18, 2)
+  pendingAmount  Decimal? @db.Decimal(18, 2)
 
   status TreasuryDocStatus @default(OPEN)
   origin TreasuryDocOrigin
@@ -498,15 +503,20 @@ model TreasuryPayable {
   entityNif     String? @db.VarChar(20)
   tocSupplierId String?
 
-  reference    String?  @db.VarChar(80)
-  description  String?  @db.VarChar(500)
+  reference    String?   @db.VarChar(80)
+  description  String?   @db.VarChar(500)
   documentDate DateTime?
-  dueDate      DateTime
+  // dueDate, totalAmount, pendingAmount, paidAmount são nullable porque
+  // payables ligados a tocPurchasesDocId leem estes valores do espelho TOC
+  // (tocPurchaseDocument) — fica null no registo local para evitar duplicação
+  // e desincronização. Payables manuais (sem tocPurchasesDocId) preenchem
+  // estes campos normalmente.
+  dueDate      DateTime?
 
-  currency      String  @default("EUR") @db.VarChar(3)
-  totalAmount   Decimal @db.Decimal(18, 2)
-  paidAmount    Decimal @default(0) @db.Decimal(18, 2)
-  pendingAmount Decimal @db.Decimal(18, 2)
+  currency      String   @default("EUR") @db.VarChar(3)
+  totalAmount   Decimal? @db.Decimal(18, 2)
+  paidAmount    Decimal? @db.Decimal(18, 2)
+  pendingAmount Decimal? @db.Decimal(18, 2)
 
   status TreasuryDocStatus @default(OPEN)
   origin TreasuryDocOrigin
@@ -702,11 +712,11 @@ model TreasurySettings {
   lastFullSyncAt          DateTime?
 
   // Follow-up plan: controla que ações ficam disponíveis no painel "Follow-ups".
-  followupEnableEmail      Boolean @default(true)
-  followupEnableCallTask   Boolean @default(true)
-  followupEnableLogCall    Boolean @default(true)
-  followupEnableNote       Boolean @default(true)
-  followupEnablePdfUpload  Boolean @default(true)
+  followupEnableEmail     Boolean @default(true)
+  followupEnableCallTask  Boolean @default(true)
+  followupEnableLogCall   Boolean @default(true)
+  followupEnableNote      Boolean @default(true)
+  followupEnablePdfUpload Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -772,10 +782,10 @@ model TreasuryFollowup {
   receivableId String?
   payableId    String?
 
-  status     TreasuryFollowupStatus    @default(DONE)
+  status     TreasuryFollowupStatus     @default(DONE)
   importance TreasuryFollowupImportance @default(NORMAL)
 
-  title       String?  @db.VarChar(300)
+  title       String? @db.VarChar(300)
   description String?
   payload     Json?
 
@@ -831,13 +841,13 @@ model TreasuryBudget {
   id       String @id @default(cuid())
   clientId String
 
-  name        String  @db.VarChar(200)
+  name        String               @db.VarChar(200)
   description String?
   type        TreasuryCategoryType
   status      TreasuryBudgetStatus @default(ACTIVE)
 
-  totalAmount Decimal  @db.Decimal(18, 2)
-  currency    String   @default("EUR") @db.VarChar(3)
+  totalAmount Decimal @db.Decimal(18, 2)
+  currency    String  @default("EUR") @db.VarChar(3)
 
   startDate DateTime
   endDate   DateTime
@@ -880,7 +890,7 @@ model TreasuryBudgetRule {
 }
 
 model TreasuryEntityConfig {
-  id                String            @id @default(cuid())
+  id                String  @id @default(cuid())
   clientId          String
   entityType        String
   tocEntityId       String
@@ -900,9 +910,9 @@ model TreasuryEntityConfig {
 // Categorias específicas para budgets — entidade independente das categorias de movimentos.
 // Aplica-se apenas a faturas (Receivables/Payables) que são imputadas a budgets.
 model TreasuryBudgetCategory {
-  id       String @id @default(cuid())
+  id       String               @id @default(cuid())
   clientId String
-  name     String @db.VarChar(120)
+  name     String               @db.VarChar(120)
   type     TreasuryCategoryType
 
   color      String? @db.VarChar(7)
@@ -991,8 +1001,8 @@ model TreasuryDunningRule {
   emailTemplateId String?
 
   /// Filtros opcionais que restringem a quais faturas a regra se aplica.
-  minAmount  Decimal?  @db.Decimal(18, 2)
-  maxAmount  Decimal?  @db.Decimal(18, 2)
+  minAmount  Decimal? @db.Decimal(18, 2)
+  maxAmount  Decimal? @db.Decimal(18, 2)
   categoryId String?
 
   isActive  Boolean @default(true)
@@ -1005,10 +1015,10 @@ model TreasuryDunningRule {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  client        Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  track         TreasuryDunningTrack      @relation(fields: [trackId], references: [id], onDelete: Cascade)
-  emailTemplate TreasuryEmailTemplate?    @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
-  category      TreasuryCategory?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  client        Client                     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  track         TreasuryDunningTrack       @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  emailTemplate TreasuryEmailTemplate?     @relation(fields: [emailTemplateId], references: [id], onDelete: SetNull)
+  category      TreasuryCategory?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   executions    TreasuryDunningExecution[]
 
   @@index([trackId, isActive, offsetDays])
@@ -1020,7 +1030,7 @@ model TreasuryDunningRule {
 /// Histórico de execução: garante idempotência (uma regra só dispara uma vez
 /// por fatura) e fornece auditoria do que foi enviado.
 model TreasuryDunningExecution {
-  id           String   @id @default(cuid())
+  id           String  @id @default(cuid())
   clientId     String
   ruleId       String
   receivableId String?
@@ -1028,7 +1038,7 @@ model TreasuryDunningExecution {
 
   scheduledAt  DateTime
   executedAt   DateTime?
-  status       String   @db.VarChar(20) // PENDING | SENT | FAILED | SKIPPED
+  status       String    @db.VarChar(20) // PENDING | SENT | FAILED | SKIPPED
   errorMessage String?
 
   createdAt DateTime @default(now())
@@ -1048,15 +1058,15 @@ model TreasuryDunningExecution {
 // ─── TOConline Mirror ────────────────────────────────────────────────────────
 
 model TocCustomer {
-  id        String   @id @default(cuid())
-  clientId  String
-  tocId     Int
-  name      String
-  nif       String?
-  email     String?
-  phone     String?
-  raw       Json
-  syncedAt  DateTime @default(now())
+  id       String   @id @default(cuid())
+  clientId String
+  tocId    Int
+  name     String
+  nif      String?
+  email    String?
+  phone    String?
+  raw      Json
+  syncedAt DateTime @default(now())
 
   @@unique([clientId, tocId])
   @@index([clientId])
@@ -1064,15 +1074,15 @@ model TocCustomer {
 }
 
 model TocSupplier {
-  id        String   @id @default(cuid())
-  clientId  String
-  tocId     Int
-  name      String
-  nif       String?
-  email     String?
-  phone     String?
-  raw       Json
-  syncedAt  DateTime @default(now())
+  id       String   @id @default(cuid())
+  clientId String
+  tocId    Int
+  name     String
+  nif      String?
+  email    String?
+  phone    String?
+  raw      Json
+  syncedAt DateTime @default(now())
 
   @@unique([clientId, tocId])
   @@index([clientId])
@@ -1080,14 +1090,14 @@ model TocSupplier {
 }
 
 model TocProduct {
-  id         String   @id @default(cuid())
-  clientId   String
-  tocId      Int
-  name       String
-  unitPrice  Decimal? @db.Decimal(18, 4)
-  taxRate    Decimal? @db.Decimal(5, 2)
-  raw        Json
-  syncedAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  clientId  String
+  tocId     Int
+  name      String
+  unitPrice Decimal? @db.Decimal(18, 4)
+  taxRate   Decimal? @db.Decimal(5, 2)
+  raw       Json
+  syncedAt  DateTime @default(now())
 
   @@unique([clientId, tocId])
   @@index([clientId])
@@ -1095,14 +1105,14 @@ model TocProduct {
 }
 
 model TocService {
-  id         String   @id @default(cuid())
-  clientId   String
-  tocId      Int
-  name       String
-  unitPrice  Decimal? @db.Decimal(18, 4)
-  taxRate    Decimal? @db.Decimal(5, 2)
-  raw        Json
-  syncedAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  clientId  String
+  tocId     Int
+  name      String
+  unitPrice Decimal? @db.Decimal(18, 4)
+  taxRate   Decimal? @db.Decimal(5, 2)
+  raw       Json
+  syncedAt  DateTime @default(now())
 
   @@unique([clientId, tocId])
   @@index([clientId])

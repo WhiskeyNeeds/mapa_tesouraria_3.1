@@ -193,7 +193,7 @@ export class TreasuryDunningRulesService {
         receivableId: string
         reference: string | null
         entityName: string | null
-        totalAmount: string
+        totalAmount: string | null
         promisedPaymentDate: string | null
       }>
     }> = []
@@ -336,7 +336,7 @@ export class TreasuryDunningRulesService {
             receivableId: inv.id,
             reference: inv.reference,
             entityName: inv.entityName,
-            totalAmount: inv.totalAmount.toString(),
+            totalAmount: inv.totalAmount?.toString() ?? null,
             promisedPaymentDate: inv.promisedPaymentDate ? inv.promisedPaymentDate.toISOString() : null,
           })
         } catch (err) {

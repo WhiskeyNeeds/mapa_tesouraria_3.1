@@ -1,17 +1,18 @@
 import { Fragment, useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel, tocStatusVariant } from '@/lib/utils'
+import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel } from '@/lib/utils'
 import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import DateRangePopover from '@/components/ui/DateRangePopover'
-import { Plus, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
+import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -68,6 +69,7 @@ interface Payable {
   totalAmount: number; pendingAmount: number; paidAmount: number; status: string; origin: string
   description?: string | null
   tocPurchasesDocId?: string
+  tocSupplierId?: string | null
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   parentId?: string | null
@@ -75,6 +77,8 @@ interface Payable {
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
   _src?: 'local' | 'toc'
   _tocRaw?: TocPurchaseDoc | null
+  _statusToc?: string | null
+  _statusDiffersFromToc?: boolean
 }
 interface Category { id: string; name: string; type: string }
 interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
@@ -102,7 +106,7 @@ const emptyOutrasForm = {
 }
 
 
-type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc }
+type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc; item: Payable }
 
 function PaymentDetailModal({
   open, onClose, payment, clientId, entityName, onInvoiceClick,
@@ -278,6 +282,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
 
 export default function PayablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const toast = useToast()
   // Centralised guard for every <input type="date"> on this page: rejects weekend
@@ -311,8 +316,6 @@ export default function PayablesPage() {
   const [partialId, setPartialId] = useState<string | null>(null)
   const [partialAmount, setPartialAmount] = useState('')
   const [partialMax, setPartialMax] = useState(0)
-  const [importTocDoc, setImportTocDoc] = useState<TocPurchaseDoc | null>(null)
-  const [importTocCatId, setImportTocCatId] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras'>('fornecedores')
   const [outrasSubTab, setOutrasSubTab] = useState<'fechadas' | 'futuras' | 'programadas' | 'abertas'>('abertas')
@@ -578,64 +581,7 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const importFromToc = useMutation({
-    mutationFn: () => {
-      if (!importTocDoc) return Promise.reject(new Error('No document'))
-      const d = importTocDoc
-      return api.post(`/treasury/${selectedClientId}/payables`, {
-        ...(importTocCatId ? { categoryId: importTocCatId } : {}),
-        entityName: d.supplier_business_name,
-        entityNif: d.supplier_tax_registration_number ?? undefined,
-        tocSupplierId: d.supplier_id ? String(d.supplier_id) : undefined,
-        tocPurchasesDocId: String(d.id),
-        reference: d.document_no,
-        documentDate: d.date,
-        dueDate: d.due_date ?? d.date,
-        totalAmount: d.gross_total,
-        currency: d.currency_iso_code ?? 'EUR',
-      })
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['payables'] })
-      qc.invalidateQueries({ queryKey: ['payables-kpis'] })
-      setImportTocDoc(null)
-      setImportTocCatId('')
-      toast.success('Documento importado do TOConline.')
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
 
-  const [isAutoImporting, setIsAutoImporting] = useState(false)
-
-  const autoImportAndRun = async (action: (localDoc: Payable) => void) => {
-    if (!panelDoc || !panelTocDoc || !selectedClientId) return
-    setIsAutoImporting(true)
-    try {
-      const d = panelTocDoc
-      const localDoc = await api.post<Payable>(`/treasury/${selectedClientId}/payables`, {
-        entityName: d.supplier_business_name,
-        entityNif: d.supplier_tax_registration_number ?? undefined,
-        tocSupplierId: d.supplier_id ? String(d.supplier_id) : undefined,
-        tocPurchasesDocId: String(d.id),
-        reference: d.document_no,
-        documentDate: d.date,
-        dueDate: d.due_date ?? d.date,
-        totalAmount: d.gross_total,
-        currency: d.currency_iso_code ?? 'EUR',
-      })
-      qc.invalidateQueries({ queryKey: ['payables'] })
-      qc.invalidateQueries({ queryKey: ['payables-kpis'] })
-      qc.invalidateQueries({ queryKey: ['toc-purchases', selectedClientId] })
-      setPanelDoc(localDoc)
-      setPanelTocDoc(null)
-      toast.success('Documento importado do TOConline.')
-      action(localDoc)
-    } catch (e) {
-      toast.error((e as Error).message)
-    } finally {
-      setIsAutoImporting(false)
-    }
-  }
 
   const createOutras = useMutation({
     mutationFn: () => {
@@ -718,7 +664,7 @@ export default function PayablesPage() {
   // e `_tocRaw` quando origem TOC. Ordenação principal e paginação são feitas
   // no servidor; aqui só convertemos para o shape `Row` da UI.
   const rows: Row[] = (data?.items ?? []).map((p) => {
-    if (p._src === 'toc' && p._tocRaw) return { _src: 'toc' as const, d: p._tocRaw }
+    if (p._src === 'toc' && p._tocRaw) return { _src: 'toc' as const, d: p._tocRaw, item: p }
     return { _src: 'local' as const, p }
   })
 
@@ -906,7 +852,18 @@ export default function PayablesPage() {
                               </div>
                             </div>
                           </td>
-                          <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
+                          <td className="px-5 py-3 text-gray-700">
+                            {p.tocSupplierId ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`, { state: { from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' } }) }}
+                                className="text-primary-600 hover:underline text-left"
+                              >
+                                {p.entityName}
+                              </button>
+                            ) : (
+                              p.entityName
+                            )}
+                          </td>
                           <td className="px-5 py-3 whitespace-nowrap">
                             {(() => {
                               const isSplit = (p.children ?? []).some((c) => !c.recurrenceId)
@@ -934,7 +891,12 @@ export default function PayablesPage() {
                               <div className="text-xs text-gray-400">pago: {formatCurrency(Number(p.paidAmount))}</div>
                             )}
                           </td>
-                          <td className="px-5 py-3"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status)}</Badge></td>
+                          <td className="px-5 py-3">
+                            <Badge variant={statusVariant(p.status)}>{statusLabel(p.status)}</Badge>
+                            {p._statusDiffersFromToc && (
+                              <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${p._statusToc ?? '—'}`}>(Local)</span>
+                            )}
+                          </td>
                           <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
@@ -1016,25 +978,13 @@ export default function PayablesPage() {
                     return (
                       <Fragment key={key}>
                         <tr
-                          className="hover:bg-primary-50 transition-colors bg-blue-50/30 group cursor-pointer"
+                          className="hover:bg-primary-50 transition-colors group cursor-pointer"
                           onClick={() => {
-                            const s = Number(d.status)
-                            setPanelDoc({
-                              id: String(d.id),
-                              reference: String(d.document_no ?? ''),
-                              entityName: String(d.supplier_business_name ?? ''),
-                              documentDate: String(d.date ?? ''),
-                              dueDate: String(d.due_date ?? d.date ?? ''),
-                              totalAmount: Number(d.gross_total),
-                              pendingAmount: Number(d.pending_total),
-                              paidAmount: Number(d.gross_total) - Number(d.pending_total),
-                              status: s === 3 ? 'SETTLED' : s === 2 ? 'PARTIAL' : s === 4 ? 'VOID' : 'OPEN',
-                              origin: 'TOC',
-                            })
+                            setPanelDoc(row.item)
                             setPanelTocDoc(d)
                             setPanelTab('details')
                             setPanelSection(null)
-                            setPanelPromisedDate('')
+                            setPanelPromisedDate(row.item.promisedPaymentDate?.slice(0, 10) ?? '')
                             setSplitCount(2)
                             setSplitValueMode('EUR')
                           }}
@@ -1059,24 +1009,31 @@ export default function PayablesPage() {
                               </div>
                             </div>
                           </td>
-                          <td className="px-5 py-3 text-gray-700">{supplier}</td>
+                          <td className="px-5 py-3 text-gray-700">
+                            {d.supplier_id != null ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${d.supplier_id}`, { state: { from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' } }) }}
+                                className="text-primary-600 hover:underline text-left"
+                              >
+                                {supplier}
+                              </button>
+                            ) : (
+                              supplier
+                            )}
+                          </td>
                           <td className={`px-5 py-3 whitespace-nowrap ${dueDate && new Date(dueDate) < new Date() && Number(d.status) !== 3 && Number(d.status) !== 4 ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
                             {dueDate ? formatDate(dueDate) : '—'}
                           </td>
                           <td className="px-5 py-3 text-gray-500 whitespace-nowrap">{dueDate ? formatDate(dueDate) : '—'}</td>
                           <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
                           <td className="px-5 py-3 text-right font-semibold text-red-700">{formatCurrency(pending)}</td>
-                          <td className="px-5 py-3"><Badge variant={tocStatusVariant(d.status)}>{tocStatusLabel(d.status)}</Badge></td>
-                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              onClick={() => { setImportTocDoc(d); setImportTocCatId('') }}
-                              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-lg border border-blue-200 transition-all whitespace-nowrap"
-                              title="Importar para local"
-                            >
-                              <ArrowDownToLine className="w-3 h-3" />
-                              Importar
-                            </button>
+                          <td className="px-5 py-3">
+                            <Badge variant={statusVariant(row.item.status)}>{statusLabel(row.item.status)}</Badge>
+                            {row.item._statusDiffersFromToc && (
+                              <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${row.item._statusToc ?? '—'}`}>(Local)</span>
+                            )}
                           </td>
+                          <td className="px-3 py-3" />
                         </tr>
                         {isExpanded && (
                           <>
@@ -1288,7 +1245,18 @@ export default function PayablesPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-5 py-3 text-gray-700">{p.entityName}</td>
+                        <td className="px-5 py-3 text-gray-700">
+                          {p.tocSupplierId ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`, { state: { from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' } }) }}
+                              className="text-primary-600 hover:underline text-left"
+                            >
+                              {p.entityName}
+                            </button>
+                          ) : (
+                            p.entityName
+                          )}
+                        </td>
                         <td className="px-5 py-3 whitespace-nowrap">
                           <div className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(displayDate)}</div>
                           {overdue && daysOverdue > 0 && <div className="text-xs text-red-400">{daysOverdue} dias</div>}
@@ -1494,35 +1462,6 @@ export default function PayablesPage() {
               {deletePayable.isPending ? 'A eliminar...' : 'Eliminar'}
             </button>
           </div>
-        </div>
-      </Modal>
-
-      <Modal open={!!importTocDoc} onClose={() => setImportTocDoc(null)} title="Importar do TOConline">
-        <div className="space-y-4">
-          <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm space-y-1.5">
-            <div className="flex justify-between"><span className="text-gray-500">Documento</span><span className="font-medium">{importTocDoc?.document_no}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Fornecedor</span><span>{importTocDoc?.supplier_business_name}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Vencimento</span><span>{importTocDoc?.due_date ? formatDate(importTocDoc.due_date) : '—'}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Valor</span><span className="font-semibold text-red-700">{formatCurrency(importTocDoc?.gross_total ?? 0)}</span></div>
-          </div>
-          <div>
-            <label className="label">Categoria local <span className="text-gray-400 font-normal">(opcional)</span></label>
-            <select className="input" value={importTocCatId} onChange={(e) => setImportTocCatId(e.target.value)} autoFocus>
-              <option value="">Sem categoria</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-          <div className="flex gap-3 pt-2">
-            <button onClick={() => setImportTocDoc(null)} className="btn-secondary flex-1">Cancelar</button>
-            <button
-              onClick={() => importFromToc.mutate()}
-              className="btn-primary flex-1"
-              disabled={importFromToc.isPending}
-            >
-              {importFromToc.isPending ? 'A importar...' : 'Importar'}
-            </button>
-          </div>
-          {importFromToc.isError && <p className="text-sm text-red-600">{(importFromToc.error as Error).message}</p>}
         </div>
       </Modal>
 
@@ -1884,10 +1823,21 @@ export default function PayablesPage() {
                 />
               )}
             </div>
-            <div className="text-sm font-medium text-primary-700 mt-0.5">{panelDoc.entityName || '—'}</div>
+            <div className="text-sm font-medium mt-0.5">
+              {panelDoc.tocSupplierId ? (
+                <button onClick={() => navigate(`/empresa/fornecedores/${panelDoc.tocSupplierId}`, { state: { from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' } })} className="text-primary-700 hover:underline text-left">
+                  {panelDoc.entityName || '—'}
+                </button>
+              ) : (
+                <span className="text-primary-700">{panelDoc.entityName || '—'}</span>
+              )}
+            </div>
             <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
             <div className="mt-2 flex items-center gap-2 flex-wrap">
               <Badge variant={statusVariant(panelDoc.status)}>{statusLabel(panelDoc.status)}</Badge>
+              {panelDoc._statusDiffersFromToc && (
+                <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${panelDoc._statusToc ?? '—'}`}>(Local)</span>
+              )}
               {panelDoc.promisedPaymentDate && (
                 <span className="text-xs text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3" />{formatDate(panelDoc.promisedPaymentDate)}</span>
               )}
@@ -1942,16 +1892,6 @@ export default function PayablesPage() {
           <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {panelTab === 'details' && (
               <>
-                {/* Banner informativo para documentos TOConline */}
-                {panelDoc.origin === 'TOC' && (
-                  <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl">
-                    <ArrowDownToLine className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                    <div className="flex-1 min-w-0 text-xs text-blue-700">
-                      Documento TOConline — será importado automaticamente ao usar uma acção.
-                    </div>
-                  </div>
-                )}
-
                 {/* Nota de liquidado localmente */}
                 {panelDoc.status === 'SETTLED' && (
                   <div className="flex items-center gap-3 p-3.5 bg-green-50 border border-green-200 rounded-xl">
@@ -1966,8 +1906,7 @@ export default function PayablesPage() {
                     </div>
                     <button
                       onClick={() => unsettlePayable.mutate(panelDoc.id)}
-                      disabled={unsettlePayable.isPending || panelDoc.origin === 'TOC'}
-                      title={panelDoc.origin === 'TOC' ? 'Importe este documento para usar esta funcionalidade' : undefined}
+                      disabled={unsettlePayable.isPending}
                       className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-green-700 disabled:hover:border-green-200 disabled:hover:bg-transparent"
                     >
                       {unsettlePayable.isPending ? '...' : 'Anular'}
@@ -1982,13 +1921,9 @@ export default function PayablesPage() {
                     <button
                       onClick={() => {
                         if (isFutureRec) return
-                        if (panelDoc.origin === 'TOC') {
-                          autoImportAndRun((doc) => settlePayable.mutate(doc.id))
-                        } else {
-                          settlePayable.mutate(panelDoc.id)
-                        }
+                        settlePayable.mutate(panelDoc.id)
                       }}
-                      disabled={settlePayable.isPending || isAutoImporting || isFutureRec}
+                      disabled={settlePayable.isPending || isFutureRec}
                       title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : undefined}
                       className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                     >
@@ -2006,15 +1941,8 @@ export default function PayablesPage() {
                 {/* Data prometida */}
                 <div className="rounded-xl border border-gray-200 overflow-hidden">
                   <button
-                    onClick={() => {
-                      if (panelDoc.origin === 'TOC') {
-                        autoImportAndRun(() => setPanelSection(panelSection === 'promised' ? null : 'promised'))
-                      } else {
-                        setPanelSection(panelSection === 'promised' ? null : 'promised')
-                      }
-                    }}
-                    disabled={isAutoImporting}
-                    className="w-full flex items-center gap-3 p-3.5 hover:bg-blue-50 hover:border-blue-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
+                    onClick={() => setPanelSection(panelSection === 'promised' ? null : 'promised')}
+                    className="w-full flex items-center gap-3 p-3.5 hover:bg-blue-50 hover:border-blue-200 text-left transition-colors group"
                   >
                     <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200 transition-colors">
                       <Clock className="w-4 h-4 text-blue-700" />
@@ -2059,21 +1987,12 @@ export default function PayablesPage() {
                             return { amount: formatInstallmentValue(amount, 'EUR'), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
                           })
                         }
-                        if (panelDoc.origin === 'TOC') {
-                          autoImportAndRun((doc) => {
-                            setSplitInstallments(buildInitialInstallments(doc, splitCount))
-                            setSplitValueMode('EUR')
-                            setPanelSection('split')
-                          })
-                          return
-                        }
                         if (panelSection !== 'split') {
                           setSplitInstallments(buildInitialInstallments(panelDoc, splitCount))
                           setSplitValueMode('EUR')
                         }
                         setPanelSection(panelSection === 'split' ? null : 'split')
                       }}
-                      disabled={isAutoImporting}
                       className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
@@ -2332,22 +2251,9 @@ export default function PayablesPage() {
         entityName={panelDoc?.entityName ?? ''}
         onInvoiceClick={(payableId) => {
           const match = (data?.items ?? []).find((p) => p._tocRaw && String(p._tocRaw.id) === String(payableId))
-          const tocDoc = match?._tocRaw
-          if (!tocDoc) return
-          const s = Number(tocDoc.status)
-          setPanelDoc({
-            id: String(tocDoc.id),
-            reference: String(tocDoc.document_no ?? ''),
-            entityName: String(tocDoc.supplier_business_name ?? ''),
-            documentDate: String(tocDoc.date ?? ''),
-            dueDate: String(tocDoc.due_date ?? tocDoc.date ?? ''),
-            totalAmount: Number(tocDoc.gross_total),
-            pendingAmount: Number(tocDoc.pending_total),
-            paidAmount: Number(tocDoc.gross_total) - Number(tocDoc.pending_total),
-            status: s === 3 ? 'SETTLED' : s === 2 ? 'PARTIAL' : s === 4 ? 'VOID' : 'OPEN',
-            origin: 'TOC',
-          })
-          setPanelTocDoc(tocDoc)
+          if (!match || !match._tocRaw) return
+          setPanelDoc(match)
+          setPanelTocDoc(match._tocRaw)
           setPanelTab('details')
           setPanelSection(null)
           setDetailPayment(null)

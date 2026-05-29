@@ -37,25 +37,65 @@ export class TreasuryDashboardService {
     return result
   }
 
+  /**
+   * Devolve TODOS os docs TOC pendentes (sales=FT/FS/FR ou purchase=FC/DSP)
+   * que estão em status 1/2/5. Inclui os que têm receivable/payable como
+   * anotação local — esses já não duplicam dados de fatura no local (overlay).
+   * Shape comum: entityName, reference, dueDate, pendingAmount.
+   */
+  private async fetchPendingTocDocs(clientId: string, direction: 'receivable' | 'payable') {
+    const isReceivable = direction === 'receivable'
+    const ELIGIBLE_TYPES = isReceivable
+      ? new Set(['ft', 'fs', 'fr'])
+      : new Set(['fc', 'dsp'])
+
+    const docs = isReceivable
+      ? await this.prisma.tocSalesDocument.findMany({
+          where: { clientId, status: { in: [1, 2, 5] } },
+          select: { tocId: true, dueDate: true, pendingTotal: true, grossTotal: true, raw: true },
+        })
+      : await this.prisma.tocPurchaseDocument.findMany({
+          where: { clientId, status: { in: [1, 2, 5] } },
+          select: { tocId: true, dueDate: true, pendingTotal: true, grossTotal: true, raw: true },
+        })
+
+    const result: Array<{ entityName: string; reference: string; dueDate: Date; pendingAmount: number }> = []
+    for (const d of docs) {
+      const raw = (d.raw ?? {}) as Record<string, unknown>
+      const docType = String(raw.document_type ?? '').toLowerCase()
+      if (!ELIGIBLE_TYPES.has(docType)) continue
+      const pending = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (pending <= 0) continue
+      if (!d.dueDate) continue
+      const entityName = String(raw[isReceivable ? 'customer_business_name' : 'supplier_business_name'] ?? '—')
+      const reference = String(raw.document_no ?? '')
+      result.push({ entityName, reference, dueDate: new Date(d.dueDate), pendingAmount: pending })
+    }
+    return result
+  }
+
   async getOverview(clientId: string, days = 30) {
     await this.recurrencesSvc.processForClient(clientId, 30)
 
     const now = new Date()
     const from = new Date(Date.now() - days * 86400000)
 
-    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements, settings] = await Promise.all([
+    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements, settings, tocReceivables, tocPayables] = await Promise.all([
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
         select: { id: true, name: true, bankName: true, currency: true, ibanLast4: true, minBalance: true },
       }),
       this.fetchAccountBalances(clientId),
+      // Após overlay TOC, evita-se dupla contagem excluindo aqui os receivables
+      // com tocSalesDocId (esses passam a ser contados via tocSalesDocument
+      // em fetchPendingTocDocs).
       this.prisma.treasuryReceivable.aggregate({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocSalesDocId: null },
         _sum: { pendingAmount: true },
         _count: true,
       }),
       this.prisma.treasuryPayable.aggregate({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocPurchasesDocId: null },
         _sum: { pendingAmount: true },
         _count: true,
       }),
@@ -71,11 +111,15 @@ export class TreasuryDashboardService {
         take: 10,
       }),
       this.prisma.treasurySettings.findUnique({ where: { clientId } }),
+      this.fetchPendingTocDocs(clientId, 'receivable'),
+      this.fetchPendingTocDocs(clientId, 'payable'),
     ])
 
     const totalBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
-    const toReceive = Number(receivableKpis._sum.pendingAmount ?? 0)
-    const toPay = Number(payableKpis._sum.pendingAmount ?? 0)
+    const tocReceivablesPending = tocReceivables.reduce((s, d) => s + d.pendingAmount, 0)
+    const tocPayablesPending = tocPayables.reduce((s, d) => s + d.pendingAmount, 0)
+    const toReceive = Number(receivableKpis._sum.pendingAmount ?? 0) + tocReceivablesPending
+    const toPay = Number(payableKpis._sum.pendingAmount ?? 0) + tocPayablesPending
     const cashAvailable = totalBalance - toPay
 
     // Build daily chart data
@@ -91,48 +135,93 @@ export class TreasuryDashboardService {
       runningBalance -= Number(m.amount)
     }
 
-    // Overdue
-    const overdueReceivables = await this.prisma.treasuryReceivable.count({
-      where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
-    })
-    const overduePayables = await this.prisma.treasuryPayable.count({
-      where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
-    })
+    // Overdue (locais sem tocLink + TOC: status 5 OU dueDate < now)
+    const tocOverdueReceivables = tocReceivables.filter((d) => d.dueDate < now).length
+    const tocOverduePayables = tocPayables.filter((d) => d.dueDate < now).length
+    const [overdueReceivablesLocal, overduePayablesLocal] = await Promise.all([
+      this.prisma.treasuryReceivable.count({
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now }, tocSalesDocId: null },
+      }),
+      this.prisma.treasuryPayable.count({
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now }, tocPurchasesDocId: null },
+      }),
+    ])
+    const overdueReceivables = overdueReceivablesLocal + tocOverdueReceivables
+    const overduePayables = overduePayablesLocal + tocOverduePayables
 
     const nextDays = new Date(Date.now() + 14 * 86400000)
 
-    // Top entities and upcoming dues
-    const [topReceivableEntities, topPayableEntities, upcomingReceivables, upcomingPayables] = await Promise.all([
+    // Top entities (locais sem tocLink + TOC, agregados por entityName)
+    // Upcoming dues nos próximos 14 dias (idem; tocLink já vem em tocReceivables/tocPayables)
+    const [topReceivableEntitiesLocal, topPayableEntitiesLocal, upcomingReceivablesLocal, upcomingPayablesLocal] = await Promise.all([
       this.prisma.treasuryReceivable.groupBy({
         by: ['entityName'],
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocSalesDocId: null },
         _sum: { pendingAmount: true },
-        orderBy: { _sum: { pendingAmount: 'desc' } },
-        take: 5,
       }),
       this.prisma.treasuryPayable.groupBy({
         by: ['entityName'],
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocPurchasesDocId: null },
         _sum: { pendingAmount: true },
-        orderBy: { _sum: { pendingAmount: 'desc' } },
-        take: 5,
       }),
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lte: nextDays } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lte: nextDays }, tocSalesDocId: null },
         select: { entityName: true, reference: true, dueDate: true, pendingAmount: true },
-        orderBy: { dueDate: 'asc' },
-        take: 5,
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lte: nextDays } },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lte: nextDays }, tocPurchasesDocId: null },
         select: { entityName: true, reference: true, dueDate: true, pendingAmount: true },
-        orderBy: { dueDate: 'asc' },
-        take: 5,
       }),
     ])
 
+    const aggregateByEntity = (
+      local: Array<{ entityName: string | null; _sum: { pendingAmount: unknown } }>,
+      toc: Array<{ entityName: string; pendingAmount: number }>,
+    ) => {
+      const map = new Map<string, number>()
+      for (const e of local) {
+        const key = e.entityName ?? '—'
+        map.set(key, (map.get(key) ?? 0) + Number(e._sum.pendingAmount ?? 0))
+      }
+      for (const d of toc) {
+        map.set(d.entityName, (map.get(d.entityName) ?? 0) + d.pendingAmount)
+      }
+      return [...map.entries()]
+        .map(([name, amount]) => ({ name, amount }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 5)
+    }
+    const topClients = aggregateByEntity(topReceivableEntitiesLocal, tocReceivables)
+    const topSuppliers = aggregateByEntity(topPayableEntitiesLocal, tocPayables)
+
+    const mergeUpcoming = (
+      local: Array<{ entityName: string | null; reference: string | null; dueDate: Date | null; pendingAmount: unknown }>,
+      toc: Array<{ entityName: string; reference: string; dueDate: Date; pendingAmount: number }>,
+    ) => {
+      const all: Array<{ entityName: string; reference: string; dueDate: Date; pendingAmount: number }> = []
+      for (const r of local) {
+        if (!r.dueDate) continue
+        all.push({
+          entityName: r.entityName ?? '—',
+          reference: r.reference ?? '',
+          dueDate: r.dueDate,
+          pendingAmount: Number(r.pendingAmount ?? 0),
+        })
+      }
+      for (const d of toc) if (d.dueDate <= nextDays) all.push(d)
+      return all
+        .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
+        .slice(0, 5)
+        .map((d) => ({ entityName: d.entityName, reference: d.reference, dueDate: d.dueDate.toISOString().slice(0, 10), pendingAmount: d.pendingAmount }))
+    }
+
     return {
-      kpis: { totalBalance, cashAvailable, toReceive, toPay, countReceivablesOpen: receivableKpis._count, countPayablesOpen: payableKpis._count, overdueReceivables, overduePayables },
+      kpis: {
+        totalBalance, cashAvailable, toReceive, toPay,
+        countReceivablesOpen: receivableKpis._count + tocReceivables.length,
+        countPayablesOpen: payableKpis._count + tocPayables.length,
+        overdueReceivables, overduePayables,
+      },
       bankAccounts: bankAccounts.map((a) => {
         const currentBalance = balances.get(a.id) ?? 0
         const lowBalanceEnabled = settings?.lowBalanceEnabled ?? true
@@ -150,11 +239,11 @@ export class TreasuryDashboardService {
         bankAccount: m.bankAccount ? { name: m.bankAccount.name } : null,
         category: m.category ? { name: m.category.name, color: m.category.color } : null,
       })),
-      topClients: topReceivableEntities.map((e) => ({ name: e.entityName, amount: Number(e._sum.pendingAmount ?? 0) })),
-      topSuppliers: topPayableEntities.map((e) => ({ name: e.entityName, amount: Number(e._sum.pendingAmount ?? 0) })),
+      topClients,
+      topSuppliers,
       upcomingDues: {
-        receivables: upcomingReceivables.map((r) => ({ entityName: r.entityName, reference: r.reference, dueDate: r.dueDate.toISOString().slice(0, 10), pendingAmount: Number(r.pendingAmount) })),
-        payables: upcomingPayables.map((p) => ({ entityName: p.entityName, reference: p.reference, dueDate: p.dueDate.toISOString().slice(0, 10), pendingAmount: Number(p.pendingAmount) })),
+        receivables: mergeUpcoming(upcomingReceivablesLocal, tocReceivables),
+        payables: mergeUpcoming(upcomingPayablesLocal, tocPayables),
       },
     }
   }
@@ -217,10 +306,10 @@ export class TreasuryDashboardService {
 
       const monthlyDelta = new Array(12).fill(0)
       for (const r of pendingRec) {
-        if (r.dueDate.getFullYear() === year) monthlyDelta[r.dueDate.getMonth()] += Number(r.pendingAmount)
+        if (r.dueDate && r.dueDate.getFullYear() === year) monthlyDelta[r.dueDate.getMonth()] += Number(r.pendingAmount ?? 0)
       }
       for (const p of pendingPay) {
-        if (p.dueDate.getFullYear() === year) monthlyDelta[p.dueDate.getMonth()] -= Number(p.pendingAmount)
+        if (p.dueDate && p.dueDate.getFullYear() === year) monthlyDelta[p.dueDate.getMonth()] -= Number(p.pendingAmount ?? 0)
       }
 
       const lastRealMonthIdx = year === now.getFullYear() ? now.getMonth() : 11
@@ -384,16 +473,16 @@ export class TreasuryDashboardService {
     const importedPurchTocIds = new Set(pendingPay.map(p => p.tocPurchasesDocId).filter((s): s is string => !!s))
 
     for (const r of pendingRec) {
-      if (r.dueDate.getFullYear() !== year) continue
+      if (!r.dueDate || r.dueDate.getFullYear() !== year) continue
       const idx = r.dueDate.getMonth()
-      const amt = Number(r.pendingAmount)
+      const amt = Number(r.pendingAmount ?? 0)
       if (r.recurrenceId) monthlyProgrammedIncome[idx] += amt
       else monthlyOpenIncome[idx] += amt
     }
     for (const p of pendingPay) {
-      if (p.dueDate.getFullYear() !== year) continue
+      if (!p.dueDate || p.dueDate.getFullYear() !== year) continue
       const idx = p.dueDate.getMonth()
-      const amt = Number(p.pendingAmount)
+      const amt = Number(p.pendingAmount ?? 0)
       if (p.recurrenceId) monthlyProgrammedExpense[idx] += amt
       else monthlyOpenExpense[idx] += amt
     }
@@ -676,14 +765,14 @@ export class TreasuryDashboardService {
       } else {
         // Forecast from pending docs
         for (const r of pendingReceivables) {
-          if (r.dueDate < wk.start || r.dueDate > wk.end) continue
-          const amt = Number(r.pendingAmount)
+          if (!r.dueDate || r.dueDate < wk.start || r.dueDate > wk.end) continue
+          const amt = Number(r.pendingAmount ?? 0)
           income += amt
           if (r.categoryId) catIncome.set(r.categoryId, (catIncome.get(r.categoryId) ?? 0) + amt)
         }
         for (const p of pendingPayables) {
-          if (p.dueDate < wk.start || p.dueDate > wk.end) continue
-          const amt = Number(p.pendingAmount)
+          if (!p.dueDate || p.dueDate < wk.start || p.dueDate > wk.end) continue
+          const amt = Number(p.pendingAmount ?? 0)
           expense += amt
           if (p.categoryId) catExpense.set(p.categoryId, (p.categoryId ? (catExpense.get(p.categoryId) ?? 0) + amt : amt))
         }
@@ -766,11 +855,11 @@ export class TreasuryDashboardService {
       const date = new Date(Date.now() + d * 86400000)
       const dateStr = date.toISOString().slice(0, 10)
       const income = pendingReceivables
-        .filter((r) => r.dueDate.toISOString().slice(0, 10) === dateStr)
-        .reduce((s, r) => s + Number(r.pendingAmount), 0)
+        .filter((r) => r.dueDate?.toISOString().slice(0, 10) === dateStr)
+        .reduce((s, r) => s + Number(r.pendingAmount ?? 0), 0)
       const expense = pendingPayables
-        .filter((p) => p.dueDate.toISOString().slice(0, 10) === dateStr)
-        .reduce((s, p) => s + Number(p.pendingAmount), 0)
+        .filter((p) => p.dueDate?.toISOString().slice(0, 10) === dateStr)
+        .reduce((s, p) => s + Number(p.pendingAmount ?? 0), 0)
 
       balance = balance + income - expense
       dailyForecast.push({ date: dateStr, balance, income, expense })
