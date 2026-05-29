@@ -54,12 +54,6 @@ function fmtPrice(v: unknown): string {
   return v != null && v !== '' && !isNaN(Number(v)) ? Number(v).toFixed(2) + ' €' : '—'
 }
 
-function fmtInativo(v: unknown): string {
-  if (v === false || v === 0 || v === '0') return 'Sim'
-  if (v === true  || v === 1 || v === '1') return 'Não'
-  return '—'
-}
-
 function fmtBool(v: unknown): string {
   if (v === true  || v === 1 || v === '1' || v === 'true')  return 'Sim'
   if (v === false || v === 0 || v === '0' || v === 'false') return 'Não'
@@ -83,36 +77,28 @@ interface ColDef {
   sortKey?: string
   numeric?: boolean
   className?: string
+  headerClassName?: string
   format?: (val: unknown) => string
   /** special render handled by caller */
-  special?: 'analitica' | 'nova-conta'
+  special?: 'analitica' | 'nova-conta' | 'stat-open' | 'stat-pending' | 'stat-active'
 }
 
 const COLUMNS: Record<Tab, ColDef[]> = {
   clientes: [
-    { header: 'NIF',                  keys: ['tax_registration_number'],  sortKey: 'tax_registration_number', className: 'font-mono text-xs' },
-    { header: 'Último Aviso Enviado', keys: ['last_notice_sent_at'],      sortKey: 'last_notice_sent_at',     format: fmtDate, className: 'text-xs text-gray-500' },
-    { header: 'Nome',                 keys: ['business_name'],            sortKey: 'business_name' },
-    { header: 'Sub-Conta',            keys: ['sub_account'],              sortKey: 'sub_account',             className: 'text-xs font-mono text-gray-500' },
-    // not_final_customer = Sujeito Passivo (não consumidor final)
-    { header: 'S.P.',                 keys: ['not_final_customer'],       sortKey: 'not_final_customer',      format: fmtBool, className: 'text-xs text-center text-gray-500' },
-    // cashed_vat = Regime de IVA de Caixa
-    { header: 'RIC',                  keys: ['cashed_vat'],               sortKey: 'cashed_vat',              format: fmtBool, className: 'text-xs text-center text-gray-500' },
-    { header: 'Inactivo?',            keys: ['active'],                   sortKey: 'active',                  format: fmtInativo, className: 'text-xs text-center' },
-    { header: '',                     keys: [],                           special: 'nova-conta' as const },
+    { header: 'NIF',               keys: ['tax_registration_number'], sortKey: 'tax_registration_number', className: 'font-mono text-xs' },
+    { header: 'Nome',              keys: ['business_name'],           sortKey: 'business_name' },
+    { header: 'Faturas em aberto', keys: [], headerClassName: 'text-right', special: 'stat-open'    as const },
+    { header: 'Valor em dívida',   keys: [], headerClassName: 'text-right', special: 'stat-pending' as const },
+    { header: 'Ativo',             keys: [], headerClassName: 'text-center', special: 'stat-active'  as const },
+    { header: '',                  keys: [],                          special: 'nova-conta'   as const },
   ],
   fornecedores: [
-    { header: 'NIF',       keys: ['tax_registration_number'],  sortKey: 'tax_registration_number', className: 'font-mono text-xs' },
-    { header: 'Nome',      keys: ['business_name'],            sortKey: 'business_name' },
-    { header: 'Sub-conta', keys: ['sub_account'],              sortKey: 'sub_account',             className: 'text-xs font-mono text-gray-500' },
-    // is_taxable = Sujeito Passivo
-    { header: 'S.P.',      keys: ['is_taxable'],               sortKey: 'is_taxable',              format: fmtBool, className: 'text-xs text-center text-gray-500' },
-    // self_billing = Auto-faturação
-    { header: 'A.F.',      keys: ['self_billing'],             sortKey: 'self_billing',            format: fmtBool, className: 'text-xs text-center text-gray-500' },
-    // is_independent_worker = sujeito a Modelo 10
-    { header: 'Modelo 10', keys: ['is_independent_worker'],    sortKey: 'is_independent_worker',   format: fmtBool, className: 'text-xs text-center text-gray-500' },
-    { header: 'Inactivo?', keys: ['active'],                   sortKey: 'active',                  format: fmtInativo, className: 'text-xs text-center' },
-    { header: '',          keys: [],                           special: 'nova-conta' as const },
+    { header: 'NIF',               keys: ['tax_registration_number'], sortKey: 'tax_registration_number', className: 'font-mono text-xs' },
+    { header: 'Nome',              keys: ['business_name'],           sortKey: 'business_name' },
+    { header: 'Faturas em aberto', keys: [], headerClassName: 'text-right', special: 'stat-open'    as const },
+    { header: 'Valor em dívida',   keys: [], headerClassName: 'text-right', special: 'stat-pending' as const },
+    { header: 'Ativo',             keys: [], headerClassName: 'text-center', special: 'stat-active'  as const },
+    { header: '',                  keys: [],                          special: 'nova-conta'   as const },
   ],
   produtos: [
     { header: 'Código',               keys: ['item_code'],                sortKey: 'item_code',            className: 'font-mono text-xs text-gray-500' },
@@ -2511,6 +2497,15 @@ function isInativo(row: TocRow): boolean {
 
 // â"€â"€ tab table â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
+interface EntityStat {
+  tocId: number
+  openCount: number
+  pendingAmount: number
+}
+
+const formatCurrency = (v: number) =>
+  new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(v)
+
 function TabTable({
   rows, loading, error, tab, search, clientId,
 }: {
@@ -2589,6 +2584,23 @@ function TabTable({
     staleTime: 60_000,
   })
   const analyticsMap = new Map(analytics.map(a => [a.itemId, a.entries[0] ?? null]))
+
+  const { data: customerStats = [] } = useQuery<EntityStat[]>({
+    queryKey: ['toc-customer-stats', clientId],
+    queryFn: () => api.get(`/toconline/${clientId}/customer-stats`),
+    enabled: isEntity && tab === 'clientes',
+    staleTime: 2 * 60 * 1000,
+  })
+
+  const { data: supplierStats = [] } = useQuery<EntityStat[]>({
+    queryKey: ['toc-supplier-stats', clientId],
+    queryFn: () => api.get(`/toconline/${clientId}/supplier-stats`),
+    enabled: isEntity && tab === 'fornecedores',
+    staleTime: 2 * 60 * 1000,
+  })
+
+  const customerStatsMap = new Map(customerStats.map(s => [s.tocId, s]))
+  const supplierStatsMap = new Map(supplierStats.map(s => [s.tocId, s]))
 
   useEffect(() => {
     setSortField(isEntity ? 'business_name' : 'item_description')
@@ -2837,9 +2849,9 @@ function TabTable({
               <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                 {cols.map((c) => (
                   <th
-                    key={c.header}
+                    key={c.header || (c.special ?? '')}
                     onClick={() => c.sortKey && handleSort(c.sortKey, c.numeric)}
-                    className={`text-left px-5 py-3 whitespace-nowrap font-medium ${c.sortKey ? 'cursor-pointer hover:text-gray-700 select-none' : ''}`}
+                    className={`px-5 py-3 whitespace-nowrap font-medium ${c.headerClassName ?? 'text-left'} ${c.sortKey ? 'cursor-pointer hover:text-gray-700 select-none' : ''}`}
                   >
                     {c.header}
                     {c.sortKey && <SortIcon field={c.sortKey} sortField={sortField} sortDir={sortDir} />}
@@ -2902,6 +2914,34 @@ function TabTable({
                             <FilePlus2 className="w-3 h-3" />
                             {label}
                           </button>
+                        </td>
+                      )
+                    }
+                    if (c.special === 'stat-open') {
+                      const statsMap = tab === 'clientes' ? customerStatsMap : supplierStatsMap
+                      const stat = statsMap.get(Number(row.id))
+                      return (
+                        <td key="stat-open" className="px-5 py-3 text-sm text-gray-700 text-right">
+                          {stat ? String(stat.openCount) : '—'}
+                        </td>
+                      )
+                    }
+                    if (c.special === 'stat-pending') {
+                      const statsMap = tab === 'clientes' ? customerStatsMap : supplierStatsMap
+                      const stat = statsMap.get(Number(row.id))
+                      return (
+                        <td key="stat-pending" className="px-5 py-3 text-sm text-gray-800 font-semibold text-right">
+                          {stat ? formatCurrency(stat.pendingAmount) : '—'}
+                        </td>
+                      )
+                    }
+                    if (c.special === 'stat-active') {
+                      const isActive = row.active !== false && row.active !== 0 && row.active !== '0'
+                      return (
+                        <td key="stat-active" className="px-5 py-3 text-sm text-center">
+                          <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium ${isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {isActive ? 'Ativo' : 'Inativo'}
+                          </span>
                         </td>
                       )
                     }
