@@ -407,6 +407,67 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.send([...map.entries()].map(([tocId, s]) => ({ tocId, ...s })))
   })
 
+  fastify.get('/toconline/:clientId/entity-local-docs', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { entityType, tocEntityId } = request.query as { entityType?: string; tocEntityId?: string }
+    if (!entityType || !tocEntityId) return reply.status(400).send({ error: 'entityType and tocEntityId required' })
+
+    const tocIdStr = String(tocEntityId)
+    const tocIdNum = Number(tocEntityId)
+
+    if (entityType === 'customer') {
+      const docs = await fastify.prisma.treasuryReceivable.findMany({
+        where: {
+          clientId,
+          origin: 'LOCAL',
+          tocSalesDocId: null,
+          tocCustomerId: tocIdStr,
+          status: { notIn: ['SETTLED', 'VOID'] },
+        },
+        orderBy: { dueDate: 'desc' },
+      })
+      return reply.send(docs.map(d => ({
+        id: `local-${d.id}`,
+        document_no: d.reference ?? '—',
+        document_type: 'LOCAL',
+        status: d.status === 'PARTIAL' ? 2 : 1,
+        date: d.documentDate?.toISOString().slice(0, 10) ?? d.dueDate.toISOString().slice(0, 10),
+        due_date: d.dueDate.toISOString().slice(0, 10),
+        gross_total: Number(d.totalAmount),
+        pending_total: Number(d.pendingAmount),
+        customer_id: tocIdNum,
+        receipts_ids: [],
+        _local: true,
+        _description: d.description ?? null,
+      })))
+    } else {
+      const docs = await fastify.prisma.treasuryPayable.findMany({
+        where: {
+          clientId,
+          origin: 'LOCAL',
+          tocPurchasesDocId: null,
+          tocSupplierId: tocIdStr,
+          status: { notIn: ['SETTLED', 'VOID'] },
+        },
+        orderBy: { dueDate: 'desc' },
+      })
+      return reply.send(docs.map(d => ({
+        id: `local-${d.id}`,
+        document_no: d.reference ?? '—',
+        document_type: 'LOCAL',
+        status: d.status === 'PARTIAL' ? 2 : 1,
+        date: d.documentDate?.toISOString().slice(0, 10) ?? d.dueDate.toISOString().slice(0, 10),
+        due_date: d.dueDate.toISOString().slice(0, 10),
+        gross_total: Number(d.totalAmount),
+        pending_total: Number(d.pendingAmount),
+        supplier_id: tocIdNum,
+        payments_ids: [],
+        _local: true,
+        _description: d.description ?? null,
+      })))
+    }
+  })
+
   fastify.post('/toconline/:clientId/sync', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const result = await (fastify as any).tocScheduler.triggerSync(clientId)
