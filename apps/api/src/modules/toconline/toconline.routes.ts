@@ -352,10 +352,10 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
       _sum: { pendingTotal: true },
     })
 
-    // Faturas criadas localmente na tesouraria (origin = LOCAL)
+    // Faturas criadas localmente na tesouraria (origin = LOCAL, sem ligação a doc TOConline)
     const localRows = await fastify.prisma.treasuryReceivable.groupBy({
       by: ['tocCustomerId'],
-      where: { clientId, origin: 'LOCAL', status: { notIn: ['SETTLED', 'VOID'] }, tocCustomerId: { not: null } },
+      where: { clientId, origin: 'LOCAL', tocSalesDocId: null, status: { notIn: ['SETTLED', 'VOID'] }, tocCustomerId: { not: null } },
       _count: { id: true },
       _sum: { pendingAmount: true },
     })
@@ -385,10 +385,10 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
       _sum: { pendingTotal: true },
     })
 
-    // Faturas criadas localmente
+    // Faturas criadas localmente (sem ligação a doc TOConline)
     const localRows = await fastify.prisma.treasuryPayable.groupBy({
       by: ['tocSupplierId'],
-      where: { clientId, origin: 'LOCAL', status: { notIn: ['SETTLED', 'VOID'] }, tocSupplierId: { not: null } },
+      where: { clientId, origin: 'LOCAL', tocPurchasesDocId: null, status: { notIn: ['SETTLED', 'VOID'] }, tocSupplierId: { not: null } },
       _count: { id: true },
       _sum: { pendingAmount: true },
     })
