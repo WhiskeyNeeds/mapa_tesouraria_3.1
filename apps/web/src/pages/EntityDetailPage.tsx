@@ -22,7 +22,9 @@ interface EntityConfig {
 }
 
 interface TocDoc {
-  id: number
+  id: number | string
+  _local?: boolean
+  _description?: string | null
   document_no: string
   document_type: string
   status: number   // 0=rascunho, 1=finalizado, 2=parcial, 3=liquidado, 4=anulado, 5=aberto (compras)
@@ -208,6 +210,16 @@ export default function EntityDetailPage({ entityType }: Props) {
     staleTime: 2 * 60 * 1000,
   })
 
+  const localDocsQuery = useQuery<TocDoc[]>({
+    queryKey: isSupplier
+      ? ['toc-supplier-local-docs', clientId, tocId]
+      : ['toc-customer-local-docs', clientId, tocId],
+    queryFn: () =>
+      api.get(`/toconline/${clientId}/entity-local-docs?entityType=${typeParam}&tocEntityId=${tocId}`),
+    enabled: !!clientId && !!tocId,
+    staleTime: 2 * 60 * 1000,
+  })
+
   const configQuery = useQuery<EntityConfig | null>({
     queryKey: ['entity-config', clientId, typeParam, tocId],
     queryFn: () =>
@@ -279,9 +291,12 @@ export default function EntityDetailPage({ entityType }: Props) {
   const entityAddress = String(entity.address ?? entity.billing_address ?? '—')
 
   const entityIdNum = Number(tocId)
-  const allDocs = (docsQuery.data ?? []).filter((d) =>
-    isSupplier ? d.supplier_id === entityIdNum : d.customer_id === entityIdNum,
-  )
+  const allDocs = [
+    ...(docsQuery.data ?? []).filter((d) =>
+      isSupplier ? d.supplier_id === entityIdNum : d.customer_id === entityIdNum,
+    ),
+    ...(localDocsQuery.data ?? []),
+  ]
   const currentDocs = allDocs.filter((d) => (d.status === 1 || d.status === 2 || d.status === 5) && Number(d.pending_total ?? d.gross_total ?? 0) > 0)
   const historyDocs = allDocs.filter((d) => d.status === 3 || d.status === 4 || ((d.status === 1 || d.status === 5) && Number(d.pending_total ?? d.gross_total ?? 0) === 0))
 
@@ -448,7 +463,7 @@ export default function EntityDetailPage({ entityType }: Props) {
                         )}>
                           <td className="px-5 py-3">
                             <div className="flex items-start gap-1.5">
-                              {expandCount > 0 ? (
+                              {expandCount > 0 && !doc._local ? (
                                 <button
                                   onClick={() => toggleExpand(key)}
                                   className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
@@ -463,8 +478,13 @@ export default function EntityDetailPage({ entityType }: Props) {
                                 <span className="w-4 flex-shrink-0" />
                               )}
                               <div>
-                                <div className="font-semibold text-gray-800">
+                                <div className="font-semibold text-gray-800 flex items-center gap-1.5 flex-wrap">
                                   {doc.document_no || `${doc.document_type} (rascunho)`}
+                                  {doc._local && (
+                                    <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-100 text-violet-700">
+                                      Local
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-xs text-gray-400">
                                   {doc.date ? formatDate(doc.date) : '—'}
@@ -496,7 +516,7 @@ export default function EntityDetailPage({ entityType }: Props) {
                             </Badge>
                           </td>
                         </tr>
-                        {isExpanded && (
+                        {isExpanded && !doc._local && (
                           allSubDocsQuery.data && 'syncing' in (allSubDocsQuery.data as object)
                             ? (
                               <tr>
