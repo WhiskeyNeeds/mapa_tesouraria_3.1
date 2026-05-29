@@ -363,7 +363,7 @@ export default function ReceivablesPage() {
     enabled: !!selectedClientId,
   })
 
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['receivables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), limit: '25' })
@@ -399,14 +399,6 @@ export default function ReceivablesPage() {
 
   const [budgetSuggestion, setBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
   const [outrasBudgetSuggestion, setOutrasBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
-
-  const { data: tocDocs } = useQuery<TocSalesDoc[]>({
-    queryKey: ['toc-sales', selectedClientId],
-    queryFn: () => api.get(`/toconline/${selectedClientId}/sales`),
-    enabled: !!selectedClientId && isTocEnabled,
-    retry: false,
-    throwOnError: false,
-  })
 
   const { data: panelDocDetail } = useQuery<Receivable>({
     queryKey: ['receivable-detail', selectedClientId, panelDoc?.id],
@@ -801,112 +793,25 @@ export default function ReceivablesPage() {
     URL.revokeObjectURL(url)
   }
 
-  // IDs já importados do TOConline
-  const importedIds = new Set(
-    (data?.items ?? []).map((r) => r.tocSalesDocId).filter(Boolean) as string[]
-  )
-
-  // Apenas faturas de venda (FT, FS, FR); sem rascunhos (0) nem anulados (4)
-  const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
-  const tocOnly = (tocDocs ?? []).filter((d) => {
-    if (importedIds.has(String(d.id))) return false
-    const t = (d.document_type ?? '').toLowerCase()
-    if (!SALES_INVOICE_TYPES.has(t)) return false
-    const s = Number(d.status)
-    if (s === 0 || s === 4) return false
-    if (isOverdueFilter) {
-      if (s !== 1 && s !== 2 && s !== 5) return false
-      if (!d.due_date || new Date(d.due_date) >= new Date()) return false
-    } else if (statusFilter) {
-      if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
-      if (statusFilter === 'OPEN,PARTIAL' && s !== 1 && s !== 2 && s !== 5) return false
-      if (statusFilter === 'PARTIAL' && s !== 2) return false
-      if (statusFilter === 'SETTLED' && s !== 3) return false
-      if (statusFilter === 'VOID') return false
-    }
-    if (dueDateFrom && d.due_date && d.due_date < dueDateFrom) return false
-    if (dueDateTo && d.due_date && d.due_date > dueDateTo) return false
-    if (docDateFrom && d.date && d.date < docDateFrom) return false
-    if (docDateTo && d.date && d.date > docDateTo) return false
-    if (entitySearch) {
-      const q = entitySearch.toLowerCase()
-      const name = (d.customer_business_name ?? '').toLowerCase()
-      const ref = (d.document_no ?? '').toLowerCase()
-      if (!name.includes(q) && !ref.includes(q)) return false
-    }
-    return true
-  })
-
-  // NCs (notas de crédito) ainda não estão na lista unificada; o map fica vazio
-  // por agora. A expansão de NCs dentro das faturas pode ser reativada quando
-  // o backend incluir NCs no payload de receivables.
+  // NCs (notas de crédito) podem ser reactivadas quando o backend as incluir
+  // no payload de receivables; por agora o map fica vazio.
   const tocNcMap = useMemo(() => new Map<string, TocSalesDoc[]>(), [])
 
-  const localForRows = (data?.items ?? []).filter((r) => !!r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
-
-  const normalizeTocStatus = (s: number): number => {
-    if (s === 1 || s === 5) return 0
-    if (s === 2) return 1
-    if (s === 3) return 2
-    if (s === 4) return 3
-    return -1
-  }
-  const localStatusOrder = (s: string): number => ['OPEN', 'PARTIAL', 'SETTLED', 'VOID'].indexOf(s)
-  const rowSortValue = (row: Row): number | string => {
-    if (row._src === 'local') {
-      const r = row.r
-      switch (sortBy) {
-        case 'reference': return refSortKey(r.reference)
-        case 'entityName': return (r.entityName ?? '').toLowerCase()
-        case 'dueDate': return new Date(r.dueDate).getTime()
-        case 'promisedPaymentDate': return r.promisedPaymentDate ? new Date(r.promisedPaymentDate).getTime() : Number.POSITIVE_INFINITY
-        case 'totalAmount': return Number(r.totalAmount)
-        case 'pendingAmount': return Number(r.pendingAmount)
-        case 'status': return localStatusOrder(r.status)
-      }
-    } else {
-      const d = row.d
-      switch (sortBy) {
-        case 'reference': return refSortKey(d.document_no)
-        case 'entityName': return (d.customer_business_name ?? '').toLowerCase()
-        case 'dueDate': return new Date(d.due_date ?? d.date).getTime()
-        case 'promisedPaymentDate': return Number.POSITIVE_INFINITY
-        case 'totalAmount': return Number(d.gross_total)
-        case 'pendingAmount': return Number(d.pending_total)
-        case 'status': return normalizeTocStatus(Number(d.status))
-      }
-    }
-    return 0
-  }
-  const rows: Row[] = [
-    ...localForRows.map((r) => ({ _src: 'local' as const, r })),
-    ...tocOnly.map((d) => ({ _src: 'toc' as const, d })),
-  ].sort((a, b) => {
-    const va = rowSortValue(a), vb = rowSortValue(b)
-    let cmp = 0
-    if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb
-    else cmp = String(va).localeCompare(String(vb), 'pt')
-    return sortDir === 'asc' ? cmp : -cmp
+  // A lista vem unificada do backend: cada item traz `_src: 'local' | 'toc'`
+  // e `_tocRaw` quando origem TOC. A ordenação principal e a paginação são
+  // feitas no servidor; aqui só convertemos para o shape `Row` da UI.
+  const rows: Row[] = (data?.items ?? []).map((r) => {
+    if (r._src === 'toc' && r._tocRaw) return { _src: 'toc' as const, d: r._tocRaw }
+    return { _src: 'local' as const, r }
   })
 
-  // KPIs combinados: locais (endpoint /kpis) + TOConline ainda não importados
-  // Docs TOConline liquidados (status=3) ficam visíveis na lista mas não contam nos KPIs
-  const combinedKpis = useMemo(() => {
-    if (!kpis) return null
-    const now = new Date()
-    const tocPending = (pendingToc => pendingToc.reduce((s, d) => s + Number(d.pending_total ?? d.gross_total ?? 0), 0))(tocOnly.filter(d => Number(d.status) !== 3))
-    const tocOpenCount = tocOnly.filter(d => Number(d.status) !== 3).length
-    const tocOverdue = tocOnly.filter((d) => Number(d.status) !== 3 && d.due_date && new Date(d.due_date) < now).length
-    const totalOpen = kpis.countOpen + tocOpenCount
-    const totalOverdue = kpis.countOverdue + tocOverdue
-    return {
-      totalPending: kpis.totalPending + tocPending,
-      countOpen: totalOpen - totalOverdue,
-      countOverdue: totalOverdue,
-      settledThisMonth: kpis.settledThisMonth,
-      aging: kpis.aging,
-    }
-  }, [kpis, tocOnly])
+  // KPIs vêm do endpoint /kpis, que já agrega locais + TOC pendentes.
+  // Subtraímos `countOverdue` ao `countOpen` para mostrar como "Em aberto"
+  // (não-overdue) e "Vencidas" separadamente, mantendo a UX existente.
+  const combinedKpis = kpis ? {
+    ...kpis,
+    countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
+  } : null
 
   return (
     <>
@@ -1008,7 +913,7 @@ export default function ReceivablesPage() {
                         </button>
                       )}
                       <span className="text-sm text-gray-400 ml-auto">
-                        {data?.total ?? 0} documentos
+                        {data == null && isLoading ? 'A carregar…' : `${data?.total ?? 0} documentos`}
                       </span>
                       <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                         <Download className="w-4 h-4" />
@@ -1289,7 +1194,7 @@ export default function ReceivablesPage() {
                             )
                           })}
                           {rows.length === 0 && (
-                            <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">Sem documentos</td></tr>
+                            <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
                           )}
                         </tbody>
                         {rows.length > 0 && (() => {
@@ -2568,7 +2473,8 @@ export default function ReceivablesPage() {
             clientId={selectedClientId ?? ''}
             entityName={panelDoc?.entityName ?? ''}
             onInvoiceClick={(receivableId) => {
-              const tocDoc = (tocDocs ?? []).find((d) => String(d.id) === String(receivableId))
+              const match = (data?.items ?? []).find((r) => r._tocRaw && String(r._tocRaw.id) === String(receivableId))
+              const tocDoc = match?._tocRaw
               if (!tocDoc) return
               const s = Number(tocDoc.status)
               setPanelDoc({

@@ -919,10 +919,39 @@ export class TreasuryReceivablesService {
       })
     }))
 
+    // KPIs do TOC: docs sincronizados ainda não importados como receivable.
+    // Status 1/2/5 (emitido, parcial, vencido) e tipos FT/FS/FR — mesmo critério
+    // do auto-import. countOverdue extra é detectado via status==5 OU dueDate<hoje.
+    const localTocIds = await this.prisma.treasuryReceivable.findMany({
+      where: { clientId, deletedAt: null, tocSalesDocId: { not: null } },
+      select: { tocSalesDocId: true },
+    })
+    const importedTocIds = new Set(localTocIds.map((r) => r.tocSalesDocId).filter((s): s is string => !!s))
+    const todayStr = now.toISOString().slice(0, 10)
+    const tocDocs = await this.prisma.tocSalesDocument.findMany({
+      where: { clientId, status: { in: [1, 2, 5] } },
+      select: { tocId: true, dueDate: true, status: true, pendingTotal: true, grossTotal: true, raw: true },
+    })
+    const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
+    let tocTotalPending = 0
+    let tocOpenCount = 0
+    let tocOverdue = 0
+    for (const d of tocDocs) {
+      if (importedTocIds.has(String(d.tocId))) continue
+      const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (!SALES_INVOICE_TYPES.has(docType)) continue
+      const pending = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (pending <= 0) continue
+      tocTotalPending += pending
+      tocOpenCount += 1
+      const isOverdue = d.status === 5 || (d.dueDate != null && d.dueDate < todayStr)
+      if (isOverdue) tocOverdue += 1
+    }
+
     return {
-      totalPending: Number(totalOpen._sum?.pendingAmount ?? 0),
-      countOpen: totalOpen._count,
-      countOverdue: overdue,
+      totalPending: Number(totalOpen._sum?.pendingAmount ?? 0) + tocTotalPending,
+      countOpen: totalOpen._count + tocOpenCount,
+      countOverdue: overdue + tocOverdue,
       settledThisMonth: Number(settledMonth._sum?.totalAmount ?? 0),
       aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
     }

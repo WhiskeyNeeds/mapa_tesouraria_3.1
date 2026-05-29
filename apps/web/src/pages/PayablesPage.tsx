@@ -346,7 +346,7 @@ export default function PayablesPage() {
     enabled: !!selectedClientId,
   })
 
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['payables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), limit: '25' })
@@ -389,14 +389,6 @@ export default function PayablesPage() {
   const { data: tocSuppliers = [] } = useQuery<TocSupplier[]>({
     queryKey: ['toc-suppliers', selectedClientId],
     queryFn: () => api.get(`/toconline/${selectedClientId}/suppliers`),
-    enabled: !!selectedClientId && isTocEnabled,
-    retry: false,
-    throwOnError: false,
-  })
-
-  const { data: tocDocs } = useQuery<TocPurchaseDoc[]>({
-    queryKey: ['toc-purchases', selectedClientId],
-    queryFn: () => api.get(`/toconline/${selectedClientId}/purchases`),
     enabled: !!selectedClientId && isTocEnabled,
     retry: false,
     throwOnError: false,
@@ -718,124 +710,25 @@ export default function PayablesPage() {
     URL.revokeObjectURL(url)
   }
 
-  // IDs já importados do TOConline
-  const importedIds = new Set(
-    (data?.items ?? []).map((p) => p.tocPurchasesDocId).filter(Boolean) as string[]
-  )
+  // NCFs (notas de crédito de compra) podem ser reactivadas quando o backend
+  // as incluir no payload de payables; por agora o map fica vazio.
+  const tocNcMap = useMemo(() => new Map<string, TocPurchaseDoc[]>(), [])
 
-  // Apenas faturas de compra (FC, DSP, NDF); sem rascunhos (0) nem anulados (4)
-  const PURCHASE_INVOICE_TYPES = new Set(['fc', 'dsp', 'ndf'])
-  const tocOnly = (tocDocs ?? []).filter((d) => {
-    if (importedIds.has(String(d.id))) return false
-    const t = (d.document_type ?? '').toLowerCase()
-    if (!PURCHASE_INVOICE_TYPES.has(t)) return false
-    const s = Number(d.status)
-    if (s === 0 || s === 4) return false
-    if (isOverdueFilter) {
-      if (s !== 1 && s !== 2 && s !== 5) return false
-      if (!d.due_date || new Date(d.due_date) >= new Date()) return false
-    } else if (statusFilter) {
-      if (statusFilter === 'OPEN' && s !== 1 && s !== 5) return false
-      if (statusFilter === 'OPEN,PARTIAL' && s !== 1 && s !== 2 && s !== 5) return false
-      if (statusFilter === 'PARTIAL' && s !== 2) return false
-      if (statusFilter === 'SETTLED' && s !== 3) return false
-      if (statusFilter === 'VOID') return false
-    }
-    if (dueDateFrom && d.due_date && d.due_date < dueDateFrom) return false
-    if (dueDateTo && d.due_date && d.due_date > dueDateTo) return false
-    if (docDateFrom && d.date && d.date < docDateFrom) return false
-    if (docDateTo && d.date && d.date > docDateTo) return false
-    if (entitySearch) {
-      const q = entitySearch.toLowerCase()
-      const name = (d.supplier_business_name ?? '').toLowerCase()
-      const ref = (d.document_no ?? '').toLowerCase()
-      if (!name.includes(q) && !ref.includes(q)) return false
-    }
-    return true
+  // A lista vem unificada do backend: cada item traz `_src: 'local' | 'toc'`
+  // e `_tocRaw` quando origem TOC. Ordenação principal e paginação são feitas
+  // no servidor; aqui só convertemos para o shape `Row` da UI.
+  const rows: Row[] = (data?.items ?? []).map((p) => {
+    if (p._src === 'toc' && p._tocRaw) return { _src: 'toc' as const, d: p._tocRaw }
+    return { _src: 'local' as const, p }
   })
 
-  // Mapa NCF → faturas-pai (para mostrar notas de crédito dentro da fatura associada)
-  const tocNcMap = useMemo(() => {
-    const map = new Map<string, TocPurchaseDoc[]>()
-    for (const d of tocDocs ?? []) {
-      if ((d.document_type ?? '').toLowerCase() !== 'ncf') continue
-      const pids = Array.isArray(d.parent_documents_ids)
-        ? (d.parent_documents_ids as unknown[])
-        : d.parent_documents_ids != null ? [d.parent_documents_ids] : []
-      for (const pid of pids) {
-        const key = String(pid)
-        if (!map.has(key)) map.set(key, [])
-        map.get(key)!.push(d)
-      }
-    }
-    return map
-  }, [tocDocs])
-
-  const localForRows = (data?.items ?? []).filter((p) => !!p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
-
-  const normalizeTocStatus = (s: number): number => {
-    if (s === 1 || s === 5) return 0
-    if (s === 2) return 1
-    if (s === 3) return 2
-    if (s === 4) return 3
-    return -1
-  }
-  const localStatusOrder = (s: string): number => ['OPEN', 'PARTIAL', 'SETTLED', 'VOID'].indexOf(s)
-  const rowSortValue = (row: Row): number | string => {
-    if (row._src === 'local') {
-      const p = row.p
-      switch (sortBy) {
-        case 'reference': return refSortKey(p.reference)
-        case 'entityName': return (p.entityName ?? '').toLowerCase()
-        case 'dueDate': return new Date(p.dueDate).getTime()
-        case 'promisedPaymentDate': return p.promisedPaymentDate ? new Date(p.promisedPaymentDate).getTime() : Number.POSITIVE_INFINITY
-        case 'totalAmount': return Number(p.totalAmount)
-        case 'pendingAmount': return Number(p.pendingAmount)
-        case 'status': return localStatusOrder(p.status)
-      }
-    } else {
-      const d = row.d
-      switch (sortBy) {
-        case 'reference': return refSortKey(d.document_no)
-        case 'entityName': return (d.supplier_business_name ?? '').toLowerCase()
-        case 'dueDate': return new Date(d.due_date ?? d.date).getTime()
-        case 'promisedPaymentDate': return Number.POSITIVE_INFINITY
-        case 'totalAmount': return Number(d.gross_total)
-        case 'pendingAmount': return Number(d.pending_total)
-        case 'status': return normalizeTocStatus(Number(d.status))
-      }
-    }
-    return 0
-  }
-  const rows: Row[] = [
-    ...localForRows.map((p) => ({ _src: 'local' as const, p })),
-    ...tocOnly.map((d) => ({ _src: 'toc' as const, d })),
-  ].sort((a, b) => {
-    const va = rowSortValue(a), vb = rowSortValue(b)
-    let cmp = 0
-    if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb
-    else cmp = String(va).localeCompare(String(vb), 'pt')
-    return sortDir === 'asc' ? cmp : -cmp
-  })
-
-  // KPIs combinados: locais (endpoint /kpis) + TOConline ainda não importados
-  // Docs TOConline liquidados (status=3) ficam visíveis na lista mas não contam nos KPIs
-  const combinedKpis = useMemo(() => {
-    if (!kpis) return null
-    const now = new Date()
-    const tocPending = (pendingToc => pendingToc.reduce((s, d) => s + Number(d.pending_total ?? d.gross_total ?? 0), 0))(tocOnly.filter(d => Number(d.status) !== 3))
-    const tocOpenCount = tocOnly.filter(d => Number(d.status) !== 3).length
-    const tocOverdue = tocOnly.filter((d) => Number(d.status) !== 3 && d.due_date && new Date(d.due_date) < now).length
-    const totalOpen = kpis.countOpen + tocOpenCount
-    const totalOverdue = kpis.countOverdue + tocOverdue
-    return {
-      totalPending: kpis.totalPending + tocPending,
-      countOpen: totalOpen - totalOverdue,
-      countOverdue: totalOverdue,
-      paidThisMonth: kpis.paidThisMonth,
-      aging: kpis.aging,
-    }
-  }, [kpis, tocOnly])
+  // KPIs vêm do endpoint /kpis, que já agrega locais + TOC pendentes.
+  // Subtraímos `countOverdue` ao `countOpen` para manter a UX existente
+  // (cards "Em aberto" e "Vencidas" como números separados).
+  const combinedKpis = kpis ? {
+    ...kpis,
+    countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
+  } : null
 
   const isClosed = (status: string) => status === 'SETTLED' || status === 'VOID'
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
@@ -951,7 +844,7 @@ export default function PayablesPage() {
                 </button>
               )}
               <span className="text-sm text-gray-400 ml-auto">
-                {data?.total ?? 0} documentos
+                {data == null && isLoading ? 'A carregar…' : `${data?.total ?? 0} documentos`}
               </span>
               <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                 <Download className="w-4 h-4" />
@@ -1221,7 +1114,7 @@ export default function PayablesPage() {
                     )
                   })}
                   {rows.length === 0 && (
-                    <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">Sem documentos</td></tr>
+                    <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
                   )}
                 </tbody>
                 {rows.length > 0 && (() => {
@@ -2438,7 +2331,8 @@ export default function PayablesPage() {
         clientId={selectedClientId ?? ''}
         entityName={panelDoc?.entityName ?? ''}
         onInvoiceClick={(payableId) => {
-          const tocDoc = (tocDocs ?? []).find((d) => String(d.id) === String(payableId))
+          const match = (data?.items ?? []).find((p) => p._tocRaw && String(p._tocRaw.id) === String(payableId))
+          const tocDoc = match?._tocRaw
           if (!tocDoc) return
           const s = Number(tocDoc.status)
           setPanelDoc({

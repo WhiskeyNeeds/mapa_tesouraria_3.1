@@ -932,10 +932,38 @@ export class TreasuryPayablesService {
       })
     }))
 
+    // KPIs do TOC: docs sincronizados ainda não importados como payable.
+    // Status 1/2/5 (emitido, parcial, vencido) e tipos FC/DSP.
+    const localTocIds = await this.prisma.treasuryPayable.findMany({
+      where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } },
+      select: { tocPurchasesDocId: true },
+    })
+    const importedTocIds = new Set(localTocIds.map((p) => p.tocPurchasesDocId).filter((s): s is string => !!s))
+    const todayStr = now.toISOString().slice(0, 10)
+    const tocDocs = await this.prisma.tocPurchaseDocument.findMany({
+      where: { clientId, status: { in: [1, 2, 5] } },
+      select: { tocId: true, dueDate: true, status: true, pendingTotal: true, grossTotal: true, raw: true },
+    })
+    const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
+    let tocTotalPending = 0
+    let tocOpenCount = 0
+    let tocOverdue = 0
+    for (const d of tocDocs) {
+      if (importedTocIds.has(String(d.tocId))) continue
+      const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (!PURCH_INVOICE_TYPES.has(docType)) continue
+      const pending = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (pending <= 0) continue
+      tocTotalPending += pending
+      tocOpenCount += 1
+      const isOverdue = d.status === 5 || (d.dueDate != null && d.dueDate < todayStr)
+      if (isOverdue) tocOverdue += 1
+    }
+
     return {
-      totalPending: Number(totalOpen._sum?.pendingAmount ?? 0),
-      countOpen: totalOpen._count,
-      countOverdue: overdue,
+      totalPending: Number(totalOpen._sum?.pendingAmount ?? 0) + tocTotalPending,
+      countOpen: totalOpen._count + tocOpenCount,
+      countOverdue: overdue + tocOverdue,
       paidThisMonth: Number(paidMonth._sum?.totalAmount ?? 0),
       aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
     }
