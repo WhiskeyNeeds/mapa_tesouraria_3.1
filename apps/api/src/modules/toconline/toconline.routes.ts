@@ -341,6 +341,36 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     return reply.send({ _meta: { durationMs: Date.now() - t0, path, params: params ?? {} }, data })
   })
 
+  fastify.get('/toconline/:clientId/customer-stats', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const rows = await fastify.prisma.treasuryReceivable.groupBy({
+      by: ['tocCustomerId'],
+      where: { clientId, status: { notIn: ['SETTLED', 'VOID'] }, tocCustomerId: { not: null } },
+      _count: { id: true },
+      _sum: { pendingAmount: true },
+    })
+    return reply.send(rows.map(r => ({
+      tocId: Number(r.tocCustomerId),
+      openCount: r._count.id,
+      pendingAmount: Number(r._sum.pendingAmount ?? 0),
+    })))
+  })
+
+  fastify.get('/toconline/:clientId/supplier-stats', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const rows = await fastify.prisma.treasuryPayable.groupBy({
+      by: ['tocSupplierId'],
+      where: { clientId, status: { notIn: ['SETTLED', 'VOID'] }, tocSupplierId: { not: null } },
+      _count: { id: true },
+      _sum: { pendingAmount: true },
+    })
+    return reply.send(rows.map(r => ({
+      tocId: Number(r.tocSupplierId),
+      openCount: r._count.id,
+      pendingAmount: Number(r._sum.pendingAmount ?? 0),
+    })))
+  })
+
   fastify.post('/toconline/:clientId/sync', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const result = await (fastify as any).tocScheduler.triggerSync(clientId)
