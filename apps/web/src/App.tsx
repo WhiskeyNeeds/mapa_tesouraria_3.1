@@ -16,6 +16,7 @@ import EmpresaPage from '@/pages/EmpresaPage'
 import EntityDetailPage from '@/pages/EntityDetailPage'
 import SettingsPage from '@/pages/SettingsPage'
 import ToconlineCallbackPage from '@/pages/ToconlineCallbackPage'
+import TocExplorerPage from '@/pages/TocExplorerPage'
 import NotFoundPage from '@/pages/NotFoundPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -54,6 +55,7 @@ export default function App() {
             <Route path="empresa/fornecedores/:tocId" element={<EntityDetailPage entityType="supplier" />} />
             <Route path="empresa/clientes/:tocId" element={<EntityDetailPage entityType="customer" />} />
             <Route path="definicoes" element={<SettingsPage />} />
+            <Route path="toc-explorer" element={<TocExplorerPage />} />
           </Route>
 
           <Route path="/toconline/callback" element={<ToconlineCallbackPage />} />

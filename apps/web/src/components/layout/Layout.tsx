@@ -2,7 +2,7 @@ import { Outlet, NavLink } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   LayoutDashboard, Building2, Landmark, ArrowLeftRight, Euro, Plus, Minus,
-  Settings, LogOut, Menu, X, ChevronDown, AlertTriangle, SlidersHorizontal, Briefcase, Wallet,
+  Settings, LogOut, Menu, X, ChevronDown, AlertTriangle, SlidersHorizontal, Briefcase, Wallet, FlaskConical,
 } from 'lucide-react'
 
 // Ícones compostos para Contas a Receber (€+) e Contas a Pagar (€−).
@@ -38,6 +38,7 @@ const nav = [
   { to: '/budgets', label: 'Budgets', icon: Wallet },
   { to: '/empresa', label: 'Empresa', icon: Briefcase },
   { to: '/definicoes', label: 'Definições', icon: Settings },
+  { to: '/toc-explorer', label: 'TOC Explorer', icon: FlaskConical },
 ]
 
 interface Client { id: string; name: string; nif: string }
