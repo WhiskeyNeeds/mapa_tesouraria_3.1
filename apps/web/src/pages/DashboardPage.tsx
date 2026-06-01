@@ -2,9 +2,8 @@ import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
-import { formatCurrency, formatDate, formatDateRelative, statusLabel, statusVariant } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
-import Badge from '@/components/ui/Badge'
 import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -15,11 +14,6 @@ import { Link } from 'react-router-dom'
 
 interface UpcomingDue { entityName: string; reference: string; dueDate: string; pendingAmount: number }
 interface CatItem { name: string; color: string; amount: number }
-interface RecentMovement {
-  id: string; date: string; amount: string | number; description: string; counterpartName?: string | null; status: string; source: string
-  bankAccount: { id: string; name: string; bankName: string } | null
-  category: { id: string; name: string; color: string } | null
-}
 interface DashboardData {
   kpis: {
     totalBalance: number; cashAvailable: number; toReceive: number; toPay: number
@@ -1245,12 +1239,6 @@ export default function DashboardPage() {
     enabled: !!selectedClientId,
   })
 
-  const { data: recentMovementsData } = useQuery<{ items: RecentMovement[] }>({
-    queryKey: ['movements-recent', selectedClientId],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/movements?limit=10&sortDir=desc`),
-    enabled: !!selectedClientId,
-  })
-
   const { data: forecastData } = useQuery<{ startingBalance: number; days: number; forecast: ForecastDay[] }>({
     queryKey: ['dashboard-forecast', selectedClientId, forecastDays],
     queryFn: () => api.get(`/treasury/${selectedClientId}/dashboard/forecast?days=${forecastDays}`),
@@ -1832,49 +1820,6 @@ export default function DashboardPage() {
           )}
         </div>
       )}
-
-      {/* Recent movements — fixed mapping with bankAccount + status */}
-      <div className="card">
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-700">Movimentos Recentes</h2>
-          <Link to="/bancos" className="text-xs text-primary-600 hover:text-primary-700 font-medium">Ver todos →</Link>
-        </div>
-        <div className="divide-y divide-gray-50">
-          {(recentMovementsData?.items ?? []).length === 0 && (
-            <div className="px-5 py-8 text-center text-sm text-gray-400">Sem movimentos</div>
-          )}
-          {(recentMovementsData?.items ?? []).map((m) => {
-            const amt = Number(m.amount)
-            const label = m.counterpartName || m.description || '—'
-            const sublabel = m.counterpartName && m.description !== m.counterpartName ? m.description : null
-            return (
-              <div key={m.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors">
-                <div
-                  className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5"
-                  style={{ backgroundColor: m.category?.color ?? '#e5e7eb' }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-gray-900 truncate">{label}</div>
-                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                    <span className="text-xs text-gray-400">{formatDateRelative(m.date)}</span>
-                    {m.bankAccount?.name && <span className="text-xs text-gray-400">· {m.bankAccount.name}</span>}
-                    {m.category?.name && <span className="text-xs text-gray-400">· {m.category.name}</span>}
-                    {sublabel && <span className="text-xs text-gray-400 truncate">· {sublabel}</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {m.status !== 'UNCLASSIFIED' && (
-                    <Badge variant={statusVariant(m.status)}>{statusLabel(m.status)}</Badge>
-                  )}
-                  <span className={`text-sm font-semibold tabular-nums w-24 text-right ${amt >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {amt >= 0 ? '+' : ''}{formatCurrency(amt)}
-                  </span>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
 
     </div>
   )
