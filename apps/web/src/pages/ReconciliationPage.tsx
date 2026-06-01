@@ -137,20 +137,29 @@ export default function ReconciliationPage() {
     if (settings?.reconciliationDryRun !== undefined) setIsDryRun(settings.reconciliationDryRun)
   }, [settings?.reconciliationDryRun])
 
+  // staleTime 0 + refetchOnMount 'always': as listas de pendentes refazem fetch
+  // sempre que a página de reconciliação é mostrada, garantindo que uma fatura
+  // marcada como paga/liquidada noutro sítio nunca aparece aqui sem refresh manual.
   const { data: movementsData, refetch: refetchMovements } = useQuery({
     queryKey: ['movements-pending', selectedClientId],
     queryFn: () => api.get<{ items: Movement[] }>(`/treasury/${selectedClientId}/movements?status=UNCLASSIFIED,CLASSIFIED,PARTIAL&limit=500&sortBy=date&sortDir=desc`),
     enabled: !!selectedClientId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: receivablesData } = useQuery({
     queryKey: ['receivables-pending', selectedClientId],
     queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: payablesData } = useQuery({
     queryKey: ['payables-pending', selectedClientId],
     queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: tocSalesData } = useQuery({
     queryKey: ['toc-sales', selectedClientId],
@@ -158,6 +167,8 @@ export default function ReconciliationPage() {
     enabled: !!selectedClientId,
     retry: false,
     throwOnError: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: tocPurchasesData } = useQuery({
     queryKey: ['toc-purchases', selectedClientId],
@@ -165,6 +176,8 @@ export default function ReconciliationPage() {
     enabled: !!selectedClientId,
     retry: false,
     throwOnError: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: historyData } = useQuery({
     queryKey: ['reconciliations', selectedClientId, historyLimit],
@@ -424,6 +437,34 @@ export default function ReconciliationPage() {
       })
     },
     onSuccess: () => {
+      // Remoção otimista — refletir a ação imediatamente, sem esperar pelo refetch:
+      // documentos totalmente liquidados e movimentos totalmente usados saem já
+      // de "Documentos Pendentes" / "Movimentos". O invalidate a seguir confirma
+      // com os dados do servidor (e ajusta os parciais).
+      const fullySettled = allocations.filter((a) => a.amount >= a.pendingAmount - 0.01)
+      const localDocIds = new Set(fullySettled.filter((a) => a._src !== 'toc').map((a) => a.id))
+      const tocDocIds = new Set(
+        fullySettled.filter((a) => a._src === 'toc' && a._tocRaw).map((a) => Number(a._tocRaw!.id)),
+      )
+      if (localDocIds.size) {
+        for (const k of ['receivables-pending', 'payables-pending']) {
+          qc.setQueryData<{ items: Document[]; total: number }>([k, selectedClientId], (old) =>
+            old ? { ...old, items: old.items.filter((d) => !localDocIds.has(d.id)) } : old)
+        }
+      }
+      if (tocDocIds.size) {
+        for (const k of ['toc-sales', 'toc-purchases']) {
+          qc.setQueryData<TocRawDoc[]>([k, selectedClientId], (old) =>
+            old ? old.filter((d) => !tocDocIds.has(Number(d.id))) : old)
+        }
+      }
+      // Movimentos: só saem se ficaram totalmente reconciliados (sem sobra).
+      if (movementSurplus < 0.01) {
+        const movIds = new Set(selectedMovements.map((m) => m.id))
+        qc.setQueryData<{ items: Movement[] }>(['movements-pending', selectedClientId], (old) =>
+          old ? { ...old, items: old.items.filter((m) => !movIds.has(m.id)) } : old)
+      }
+
       qc.refetchQueries({ queryKey: ['reconciliations'] })
       ;['movements-pending', 'receivables-pending', 'payables-pending',
         'movements', 'receivables', 'payables', 'toc-sales', 'toc-purchases']

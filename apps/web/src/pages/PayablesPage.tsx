@@ -1960,7 +1960,7 @@ export default function PayablesPage() {
                       <Clock className="w-4 h-4 text-blue-700" />
                     </div>
                     <div className="flex-1">
-                      <div className="font-medium text-gray-900 text-sm">Definir data pagamento</div>
+                      <div className="font-medium text-gray-900 text-sm">Definir Data Pagamento</div>
                       {panelDoc.promisedPaymentDate
                         ? <div className="text-xs text-blue-600">{formatDate(panelDoc.promisedPaymentDate)}</div>
                         : <div className="text-xs text-gray-500">Sem data prometida</div>
