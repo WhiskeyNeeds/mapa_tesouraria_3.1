@@ -653,7 +653,7 @@ export class TreasuryReceivablesService {
     // nos filhos com dueDate >= hoje e status OPEN (sem pagamentos), para que
     // o dashboard e as listagens reflitam imediatamente as alterações.
     if (item.recurrenceId && !item.parentId) {
-      const childUpdate: Prisma.TreasuryReceivableUpdateManyMutationInput = {}
+      const childUpdate: Prisma.TreasuryReceivableUncheckedUpdateManyInput = {}
       if (data.entityName !== undefined)        childUpdate.entityName = data.entityName
       if (data.description !== undefined)       childUpdate.description = data.description
       if (data.totalAmount !== undefined) {
@@ -662,10 +662,6 @@ export class TreasuryReceivablesService {
       }
       if (data.tocCustomerId !== undefined)     childUpdate.tocCustomerId = data.tocCustomerId
       if (data.categoryId !== undefined)        childUpdate.categoryId = data.categoryId
-
-      // Campos com FK (budget*) actualizam-se via updateMany com set diretamente
-      if (data.budgetCategoryId !== undefined)  childUpdate.budgetCategoryId = data.budgetCategoryId
-      if (data.budgetId !== undefined)          childUpdate.budgetId = data.budgetId
 
       if (Object.keys(childUpdate).length > 0) {
         const today = new Date()
@@ -1046,7 +1042,7 @@ export class TreasuryReceivablesService {
       }),
       this.prisma.treasuryReceivable.findMany({
         where: { clientId, deletedAt: null, categoryId: null },
-        select: { id: true, totalAmount: true, description: true, reference: true, entityName: true, tocCustomerId: true, budgetCategoryId: true },
+        select: { id: true, totalAmount: true, description: true, reference: true, entityName: true, tocCustomerId: true },
       }),
     ])
 
@@ -1057,7 +1053,6 @@ export class TreasuryReceivablesService {
 
     for (const inv of unclassified) {
       let categoryId: string | undefined
-      let budgetCategoryId: string | undefined = inv.budgetCategoryId ?? undefined
 
       const matched = matchClassificationRule(rules, {
         amount: Number(inv.totalAmount),
@@ -1081,19 +1076,15 @@ export class TreasuryReceivablesService {
             ],
           },
           orderBy: { createdAt: 'desc' },
-          select: { categoryId: true, budgetCategoryId: true },
+          select: { categoryId: true },
         })
         if (last?.categoryId) categoryId = last.categoryId
-        if (!budgetCategoryId && last?.budgetCategoryId) budgetCategoryId = last.budgetCategoryId
       }
 
       if (categoryId) {
         await this.prisma.treasuryReceivable.update({
           where: { id: inv.id },
-          data: {
-            categoryId,
-            ...(budgetCategoryId && budgetCategoryId !== inv.budgetCategoryId ? { budgetCategoryId } : {}),
-          },
+          data: { categoryId },
         })
         classified++
       }

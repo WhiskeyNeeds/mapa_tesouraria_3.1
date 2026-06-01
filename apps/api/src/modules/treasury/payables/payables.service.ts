@@ -648,7 +648,7 @@ export class TreasuryPayablesService {
     // Simétrico ao receivables: replica campos relevantes nos filhos com
     // dueDate >= hoje e status OPEN (sem pagamentos).
     if (item.recurrenceId && !item.parentId) {
-      const childUpdate: Prisma.TreasuryPayableUpdateManyMutationInput = {}
+      const childUpdate: Prisma.TreasuryPayableUncheckedUpdateManyInput = {}
       if (data.entityName !== undefined)       childUpdate.entityName = data.entityName
       if (data.description !== undefined)      childUpdate.description = data.description
       if (data.totalAmount !== undefined) {
@@ -656,8 +656,6 @@ export class TreasuryPayablesService {
         childUpdate.pendingAmount = data.totalAmount
       }
       if (data.categoryId !== undefined)       childUpdate.categoryId = data.categoryId
-      if (data.budgetCategoryId !== undefined) childUpdate.budgetCategoryId = data.budgetCategoryId
-      if (data.budgetId !== undefined)         childUpdate.budgetId = data.budgetId
 
       if (Object.keys(childUpdate).length > 0) {
         const today = new Date()
@@ -1030,7 +1028,7 @@ export class TreasuryPayablesService {
       }),
       this.prisma.treasuryPayable.findMany({
         where: { clientId, deletedAt: null, categoryId: null },
-        select: { id: true, totalAmount: true, description: true, reference: true, entityName: true, tocSupplierId: true, budgetCategoryId: true },
+        select: { id: true, totalAmount: true, description: true, reference: true, entityName: true, tocSupplierId: true },
       }),
     ])
 
@@ -1041,7 +1039,6 @@ export class TreasuryPayablesService {
 
     for (const inv of unclassified) {
       let categoryId: string | undefined
-      let budgetCategoryId: string | undefined = inv.budgetCategoryId ?? undefined
 
       const matched = matchClassificationRule(rules, {
         amount: Number(inv.totalAmount),
@@ -1065,19 +1062,15 @@ export class TreasuryPayablesService {
             ],
           },
           orderBy: { createdAt: 'desc' },
-          select: { categoryId: true, budgetCategoryId: true },
+          select: { categoryId: true },
         })
         if (last?.categoryId) categoryId = last.categoryId
-        if (!budgetCategoryId && last?.budgetCategoryId) budgetCategoryId = last.budgetCategoryId
       }
 
       if (categoryId) {
         await this.prisma.treasuryPayable.update({
           where: { id: inv.id },
-          data: {
-            categoryId,
-            ...(budgetCategoryId && budgetCategoryId !== inv.budgetCategoryId ? { budgetCategoryId } : {}),
-          },
+          data: { categoryId },
         })
         classified++
       }

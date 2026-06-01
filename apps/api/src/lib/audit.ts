@@ -1,4 +1,5 @@
-import type { PrismaClient, Prisma } from '@prisma/client'
+import type { PrismaClient } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 
 export type AuditEntityType = 'Receivable' | 'Payable' | 'Reconciliation' | 'Budget'
 
@@ -28,7 +29,7 @@ export async function audit(
         action: opts.action,
         entityType: opts.entityType,
         entityId: opts.entityId,
-        payload: (opts.payload ?? null) as Prisma.InputJsonValue | null,
+        payload: (opts.payload ?? Prisma.JsonNull) as Prisma.InputJsonValue,
       },
     })
   } catch (err) {

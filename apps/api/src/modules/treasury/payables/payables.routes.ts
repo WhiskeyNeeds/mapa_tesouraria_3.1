@@ -201,7 +201,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.post(`${prefix}/:id/split`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    const { installments } = request.body as { installments: Array<{ dueDate: string; amount: number; description?: string }> }
+    const { installments } = request.body as { installments: Array<{ promisedPaymentDate: string; amount: number; description?: string }> }
     return reply.status(201).send(await svc.split(clientId, request.user.sub, id, installments))
   })
 
