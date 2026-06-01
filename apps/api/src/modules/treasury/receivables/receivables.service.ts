@@ -205,6 +205,10 @@ export class TreasuryReceivablesService {
     isRecurrent?: boolean
     overdue?: boolean
     tocCustomerId?: string
+    // Separa os documentos por separador da UI: 'clientes' = ligados ao TOConline
+    // (tocSalesDocId != null); 'outras' = operações locais (tocSalesDocId == null).
+    // Permite que cada separador ordene/pagine o seu próprio conjunto no servidor.
+    bucket?: 'clientes' | 'outras'
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
@@ -215,7 +219,7 @@ export class TreasuryReceivablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocCustomerId, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocCustomerId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusList: TreasuryDocStatus[] | undefined = overdue
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -275,7 +279,7 @@ export class TreasuryReceivablesService {
     const importedTocIds = new Set(localRows.map((r) => r.tocSalesDocId).filter((s): s is string => !!s))
     const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
     const tocPureMapped: ReceivableListItem[] = []
-    if (origin !== 'LOCAL') {
+    if (origin !== 'LOCAL' && bucket !== 'outras') {
       for (const d of allTocDocs) {
         if (importedTocIds.has(String(d.tocId))) continue
         const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
@@ -294,6 +298,8 @@ export class TreasuryReceivablesService {
     const entityQuery = entityName?.toLowerCase()
 
     const matches = (item: ReceivableListItem) => {
+      if (bucket === 'outras' && item.tocSalesDocId != null) return false
+      if (bucket === 'clientes' && item.tocSalesDocId == null) return false
       if (statusList && !statusList.includes(item.status)) return false
       if (origin && item.origin !== origin) return false
       if (entityQuery) {
@@ -1120,6 +1126,10 @@ export class TreasuryReceivablesService {
     const localOnlyClause: Prisma.TreasuryReceivableWhereInput = {
       clientId, deletedAt: null,
       tocSalesDocId: null,
+      // Exclui as parcelas-filhas de um split (parentId != null, recurrenceId null):
+      // a mãe já agrega o pendingAmount das parcelas (via syncParentStatus), por isso
+      // contá-las também duplicava o valor. Alinha com o clause da lista.
+      NOT: { parentId: { not: null }, recurrenceId: null },
       ...abertasClause,
     }
     const [totalOpenLocal, overdueLocal, settledMonth] = await Promise.all([

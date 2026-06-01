@@ -36,6 +36,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       isRecurrent?: string
       overdue?: string
       tocCustomerId?: string
+      bucket?: 'clientes' | 'outras'
       sortBy?: string
       sortDir?: string
       page?: string

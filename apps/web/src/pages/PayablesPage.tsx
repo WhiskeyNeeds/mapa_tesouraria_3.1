@@ -350,9 +350,17 @@ export default function PayablesPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['payables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
+    queryKey: ['payables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
     queryFn: () => {
-      const params = new URLSearchParams({ page: String(page), limit: '25' })
+      // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
+      // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
+      // categorizados no cliente, por isso trazemos o conjunto completo.
+      const bucket = activeTab === 'outras' ? 'outras' : 'fornecedores'
+      const params = new URLSearchParams({
+        bucket,
+        page: bucket === 'outras' ? '1' : String(page),
+        limit: bucket === 'outras' ? '1000' : '25',
+      })
       if (isOverdueFilter) {
         params.set('overdue', 'true')
       } else {
@@ -661,8 +669,9 @@ export default function PayablesPage() {
   const tocNcMap = useMemo(() => new Map<string, TocPurchaseDoc[]>(), [])
 
   // A lista vem unificada do backend: cada item traz `_src: 'local' | 'toc'`
-  // e `_tocRaw` quando origem TOC. Ordenação principal e paginação são feitas
-  // no servidor; aqui só convertemos para o shape `Row` da UI.
+  // e `_tocRaw` quando origem TOC. Ordenação, paginação e bucket
+  // ('fornecedores' = só TOConline) são feitos no servidor; aqui só
+  // convertemos para o shape `Row` da UI.
   const rows: Row[] = (data?.items ?? []).map((p) => {
     if (p._src === 'toc' && p._tocRaw) return { _src: 'toc' as const, d: p._tocRaw, item: p }
     return { _src: 'local' as const, p }

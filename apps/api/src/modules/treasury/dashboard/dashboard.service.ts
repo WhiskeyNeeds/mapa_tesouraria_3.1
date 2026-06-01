@@ -1,12 +1,23 @@
 import type { PrismaClient } from '@prisma/client'
 import { resolveAccountBalance } from '../bank-accounts/balance.js'
 import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
+import { TreasuryReceivablesService } from '../receivables/receivables.service.js'
+import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
+import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 
 export class TreasuryDashboardService {
   private recurrencesSvc: TreasuryRecurrencesService
+  private receivablesSvc: TreasuryReceivablesService
 
   constructor(private prisma: PrismaClient) {
     this.recurrencesSvc = new TreasuryRecurrencesService(prisma)
+    // Reutiliza os KPIs de Contas a Receber para o "A Receber" do dashboard usar
+    // exatamente os mesmos critérios do "Total Pendente" (single source of truth).
+    this.receivablesSvc = new TreasuryReceivablesService(
+      prisma,
+      new TreasuryBudgetsService(prisma),
+      new TreasuryBudgetRulesService(prisma),
+    )
   }
 
   private async fetchAccountBalances(clientId: string): Promise<Map<string, number>> {
@@ -80,7 +91,7 @@ export class TreasuryDashboardService {
     const now = new Date()
     const from = new Date(Date.now() - days * 86400000)
 
-    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements, settings, tocReceivables, tocPayables] = await Promise.all([
+    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements, settings, tocReceivables, tocPayables, receivablesPageKpis] = await Promise.all([
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
         select: { id: true, name: true, bankName: true, currency: true, ibanLast4: true, minBalance: true },
@@ -113,12 +124,14 @@ export class TreasuryDashboardService {
       this.prisma.treasurySettings.findUnique({ where: { clientId } }),
       this.fetchPendingTocDocs(clientId, 'receivable'),
       this.fetchPendingTocDocs(clientId, 'payable'),
+      this.receivablesSvc.getKpis(clientId),
     ])
 
     const totalBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
-    const tocReceivablesPending = tocReceivables.reduce((s, d) => s + d.pendingAmount, 0)
     const tocPayablesPending = tocPayables.reduce((s, d) => s + d.pendingAmount, 0)
-    const toReceive = Number(receivableKpis._sum.pendingAmount ?? 0) + tocReceivablesPending
+    // "A Receber" usa os mesmos critérios do "Total Pendente" de Contas a Receber
+    // (exclui recorrências futuras não vencidas; inclui docs TOC sem dueDate).
+    const toReceive = receivablesPageKpis.totalPending
     const toPay = Number(payableKpis._sum.pendingAmount ?? 0) + tocPayablesPending
     const cashAvailable = totalBalance - toPay
 

@@ -185,6 +185,10 @@ export class TreasuryPayablesService {
     isRecurrent?: boolean
     overdue?: boolean
     tocSupplierId?: string
+    // 'fornecedores' = ligados ao TOConline (tocPurchasesDocId != null);
+    // 'outras' = operações locais (tocPurchasesDocId == null). Cada separador
+    // ordena/pagina o seu próprio conjunto no servidor.
+    bucket?: 'fornecedores' | 'outras'
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
@@ -195,7 +199,7 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusList: TreasuryDocStatus[] | undefined = overdue
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -249,7 +253,7 @@ export class TreasuryPayablesService {
     const importedTocIds = new Set(localRows.map((p) => p.tocPurchasesDocId).filter((s): s is string => !!s))
     const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
     const tocPureMapped: PayableListItem[] = []
-    if (origin !== 'LOCAL') {
+    if (origin !== 'LOCAL' && bucket !== 'outras') {
       for (const d of allTocDocs) {
         if (importedTocIds.has(String(d.tocId))) continue
         const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
@@ -267,6 +271,8 @@ export class TreasuryPayablesService {
     const entityQuery = entityName?.toLowerCase()
 
     const matches = (item: PayableListItem) => {
+      if (bucket === 'outras' && item.tocPurchasesDocId != null) return false
+      if (bucket === 'fornecedores' && item.tocPurchasesDocId == null) return false
       if (statusList && !statusList.includes(item.status)) return false
       if (origin && item.origin !== origin) return false
       if (entityQuery) {
@@ -1101,6 +1107,10 @@ export class TreasuryPayablesService {
     const localOnlyClause: Prisma.TreasuryPayableWhereInput = {
       clientId, deletedAt: null,
       tocPurchasesDocId: null,
+      // Exclui as parcelas-filhas de um split (parentId != null, recurrenceId null):
+      // a mãe já agrega o pendingAmount das parcelas (via syncParentStatus), por isso
+      // contá-las também duplicava o valor. Alinha com o clause da lista.
+      NOT: { parentId: { not: null }, recurrenceId: null },
       ...abertasClause,
     }
     const [totalOpenLocal, overdueLocal, paidMonth] = await Promise.all([

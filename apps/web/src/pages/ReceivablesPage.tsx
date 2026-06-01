@@ -364,9 +364,17 @@ export default function ReceivablesPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['receivables', selectedClientId, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
+    queryKey: ['receivables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
     queryFn: () => {
-      const params = new URLSearchParams({ page: String(page), limit: '25' })
+      // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
+      // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
+      // categorizados no cliente, por isso trazemos o conjunto completo.
+      const bucket = activeTab === 'outras' ? 'outras' : 'clientes'
+      const params = new URLSearchParams({
+        bucket,
+        page: bucket === 'outras' ? '1' : String(page),
+        limit: bucket === 'outras' ? '1000' : '25',
+      })
       if (isOverdueFilter) {
         params.set('overdue', 'true')
       } else {
@@ -741,7 +749,8 @@ export default function ReceivablesPage() {
 
   // A lista vem unificada do backend: cada item traz `_src: 'local' | 'toc'`
   // e `_tocRaw` quando origem TOC. A ordenação principal e a paginação são
-  // feitas no servidor; aqui só convertemos para o shape `Row` da UI.
+  // feitas no servidor; o bucket ('clientes' = só TOConline) também, por isso
+  // aqui só convertemos para o shape `Row` da UI.
   const rows: Row[] = (data?.items ?? []).map((r) => {
     if (r._src === 'toc' && r._tocRaw) return { _src: 'toc' as const, d: r._tocRaw, item: r }
     return { _src: 'local' as const, r }

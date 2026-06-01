@@ -24,7 +24,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const q = request.query as {
       status?: string; origin?: TreasuryDocOrigin; categoryId?: string
       entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string; paymentDateFrom?: string; paymentDateTo?: string
-      isRecurrent?: string; overdue?: string; tocSupplierId?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
+      isRecurrent?: string; overdue?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
     const statusValue = q.status?.includes(',')
       ? (q.status.split(',') as TreasuryDocStatus[])
