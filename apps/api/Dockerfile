@@ -21,7 +21,7 @@ COPY apps/api ./apps/api
 
 # Generate Prisma client and compile TypeScript
 RUN npx prisma generate --schema apps/api/prisma/schema.prisma
-RUN npm run build -w apps/api || true
+RUN npm run build -w apps/api
 
 # ─── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
