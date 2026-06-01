@@ -35,7 +35,7 @@ const FIELD_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   OPEN: 'Em aberto',
   PARTIAL: 'Parcial',
-  SETTLED: 'Liquidada',
+  SETTLED: 'Pago',
   VOID: 'Anulada',
 }
 
@@ -84,10 +84,10 @@ export function auditTitle(action: string, payload: unknown): string {
       return p.recurrenceCascade ? 'Recorrência removida (com instâncias)' : 'Apagada'
     case 'receivable.settle':
     case 'payable.settle':
-      return p.cascadedChildren ? `Liquidada (+${p.cascadedChildren} parcelas)` : 'Liquidada'
+      return p.cascadedChildren ? `Pago (+${p.cascadedChildren} parcelas)` : 'Pago'
     case 'receivable.unsettle':
     case 'payable.unsettle':
-      return 'Liquidação revertida'
+      return 'Pagamento revertido'
     case 'receivable.partial_payment':
       return `Pagamento recebido: ${MONEY.format(Number(p.amount ?? 0))}`
     case 'payable.partial_payment':

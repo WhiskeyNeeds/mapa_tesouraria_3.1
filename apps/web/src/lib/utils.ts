@@ -92,12 +92,17 @@ export function tocStatusVariant(status: unknown): 'green' | 'yellow' | 'red' | 
   return 'gray'
 }
 
-export function statusLabel(status: string): string {
+// `settledInToc` distingue a origem do estado SETTLED: liquidado no próprio
+// TOConline → "Liquidado"; liquidado localmente nesta plataforma → "Pago".
+// Default `true` preserva "Liquidado" para todos os callers que não passam o
+// flag (movimentos, reconciliação, documentos vindos do TOC).
+export function statusLabel(status: string, settledInToc = true): string {
   const map: Record<string, string> = {
     OPEN: 'Emitido', PARTIAL: 'Parcialmente liquidado', SETTLED: 'Liquidado', VOID: 'Anulado',
     UNCLASSIFIED: 'Por classificar', CLASSIFIED: 'Classificado', RECONCILED: 'Reconciliado',
     DRAFT: 'Rascunho', CONFIRMED: 'Confirmado', REVERSED: 'Estornado',
   }
+  if (status === 'SETTLED' && !settledInToc) return 'Pago'
   return map[status] ?? status
 }
 

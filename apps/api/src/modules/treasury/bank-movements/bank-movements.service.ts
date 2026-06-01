@@ -125,6 +125,10 @@ export class TreasuryBankMovementsService {
         include: {
           category: { select: { id: true, name: true, color: true, type: true } },
           bankAccount: { select: { id: true, name: true, bankName: true } },
+          reconciliationLinks: {
+            where: { reconciliation: { status: 'CONFIRMED' } },
+            select: { amount: true, reconciliation: { select: { isDryRun: true } } },
+          },
         },
         orderBy,
         skip: (page - 1) * limit,
@@ -144,7 +148,30 @@ export class TreasuryBankMovementsService {
       })
     }
 
-    return { total, page, limit, items }
+    // Deriva um resumo de reconciliação por movimento. Necessário porque, em
+    // dry-run (o default), o confirm() não altera o status nem reconciledAmount
+    // do movimento — a reconciliação existe apenas como registos de ligação.
+    const mapped = items.map(({ reconciliationLinks, ...m }) => {
+      const allocated = reconciliationLinks.reduce((s, l) => s + Math.abs(Number(l.amount)), 0)
+      const fullAmount = Math.abs(Number(m.amount))
+      // Reconciliação só por dry-run quando há ligações e nenhuma foi sincronizada
+      // com o TOConline.
+      const isDryRun = reconciliationLinks.length > 0 && !reconciliationLinks.some((l) => !l.reconciliation.isDryRun)
+      let reconciliation: { state: 'RECONCILED' | 'PARTIAL'; isDryRun: boolean; allocated: number } | null = null
+      if (m.status === 'RECONCILED') {
+        reconciliation = { state: 'RECONCILED', isDryRun, allocated }
+      } else if (m.status === 'PARTIAL') {
+        reconciliation = { state: 'PARTIAL', isDryRun, allocated }
+      } else if (allocated > 0.01) {
+        // Fallback para reconciliações dry-run antigas, criadas antes de o estado
+        // local passar a ser sempre atualizado (status do movimento não mudou).
+        const covered = allocated >= fullAmount - 0.01
+        reconciliation = { state: covered ? 'RECONCILED' : 'PARTIAL', isDryRun, allocated }
+      }
+      return { ...m, reconciliation }
+    })
+
+    return { total, page, limit, items: mapped }
   }
 
   async importMovements(clientId: string, bankAccountId: string, movements: CsvMovement[], source: TreasuryMovementSource, userId: string, importId?: string) {

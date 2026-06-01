@@ -12,6 +12,7 @@ import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import DateRangePopover from '@/components/ui/DateRangePopover'
+import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
@@ -530,7 +531,7 @@ export default function ReceivablesPage() {
         promisedPaymentDate: null,
         children: settleChildren(old.children),
       } : old)
-      toast.success('Documento liquidado.')
+      toast.success('Documento marcado como pago.')
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -966,7 +967,7 @@ export default function ReceivablesPage() {
                                     )}
                                   </td>
                                   <td className="px-5 py-3">
-                                    <Badge variant={statusVariant(r.status)}>{statusLabel(r.status)}</Badge>
+                                    <Badge variant={statusVariant(r.status)}>{statusLabel(r.status, r._statusToc === 'SETTLED')}</Badge>
                                     {r._statusDiffersFromToc && (
                                       <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${r._statusToc ?? '—'}`}>(Local)</span>
                                     )}
@@ -1105,7 +1106,7 @@ export default function ReceivablesPage() {
                                   <td className="px-5 py-3 text-right text-gray-700">{formatCurrency(total)}</td>
                                   <td className="px-5 py-3 text-right font-semibold text-green-700">{formatCurrency(pending)}</td>
                                   <td className="px-5 py-3">
-                                    <Badge variant={statusVariant(row.item.status)}>{statusLabel(row.item.status)}</Badge>
+                                    <Badge variant={statusVariant(row.item.status)}>{statusLabel(row.item.status, row.item._statusToc === 'SETTLED')}</Badge>
                                     {row.item._statusDiffersFromToc && (
                                       <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${row.item._statusToc ?? '—'}`}>(Local)</span>
                                     )}
@@ -1344,7 +1345,7 @@ export default function ReceivablesPage() {
                                     <div className="text-xs text-gray-400">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
                                   )}
                                 </td>
-                                <td className="px-5 py-3"><Badge variant={statusVariant(r.status)}>{statusLabel(r.status)}</Badge></td>
+                                <td className="px-5 py-3"><Badge variant={statusVariant(r.status)}>{statusLabel(r.status, r._statusToc === 'SETTLED')}</Badge></td>
                                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <button
@@ -1625,7 +1626,7 @@ export default function ReceivablesPage() {
                   <label className="label">Valor (€)</label>
                   <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} />
                 </div>
-                <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: pickWorkday(e.target.value, form.dueDate) })} /></div>
+                <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><WorkdayDatePicker value={form.dueDate} onChange={(v) => setForm({ ...form, dueDate: v })} /></div>
                 <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
               </div>
 
@@ -1832,7 +1833,7 @@ export default function ReceivablesPage() {
                 </div>
                 <div>
                   <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
-                  <input type="date" className="input" value={outrasForm.dueDate} onChange={(e) => setOutrasForm({ ...outrasForm, dueDate: pickWorkday(e.target.value, outrasForm.dueDate) })} />
+                  <WorkdayDatePicker value={outrasForm.dueDate} onChange={(v) => setOutrasForm({ ...outrasForm, dueDate: v })} />
                 </div>
                 <div className="col-span-2">
                   <label className="label">Descrição</label>
@@ -1968,7 +1969,7 @@ export default function ReceivablesPage() {
               </div>
               <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
               <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <Badge variant={statusVariant(panelDoc.status)}>{statusLabel(panelDoc.status)}</Badge>
+                <Badge variant={statusVariant(panelDoc.status)}>{statusLabel(panelDoc.status, panelDoc._statusToc === 'SETTLED')}</Badge>
                 {panelDoc._statusDiffersFromToc && (
                   <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${panelDoc._statusToc ?? '—'}`}>(Local)</span>
                 )}
@@ -2033,9 +2034,9 @@ export default function ReceivablesPage() {
                         <CheckCircle className="w-4 h-4 text-green-700" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium text-green-900 text-sm">Marcado como liquidado</div>
+                        <div className="font-medium text-green-900 text-sm">{panelDoc._statusToc === 'SETTLED' ? 'Liquidado' : 'Pago'}</div>
                         <div className="text-xs text-green-600 mt-0.5">
-                          {panelDoc.origin === 'TOC' ? 'Estado do TOConline' : 'Registado manualmente nesta plataforma'}
+                          {panelDoc._statusToc === 'SETTLED' ? 'Estado do TOConline' : 'Registado manualmente nesta plataforma'}
                         </div>
                       </div>
                       <button
@@ -2065,7 +2066,7 @@ export default function ReceivablesPage() {
                           <CreditCard className="w-4 h-4 text-green-700" />
                         </div>
                         <div>
-                          <div className="font-medium text-gray-900 text-sm">Marcar como liquidada</div>
+                          <div className="font-medium text-gray-900 text-sm">Marcar como Pago</div>
                           <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar recebimento total'}</div>
                         </div>
                       </button>
@@ -2331,7 +2332,7 @@ export default function ReceivablesPage() {
                         className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
                         <div className="flex items-center justify-between mb-0.5">
                           <span className="text-xs text-gray-400">Parcela {i + 1}</span>
-                          <Badge variant={statusVariant(child.status)}>{statusLabel(child.status)}</Badge>
+                          <Badge variant={statusVariant(child.status)}>{statusLabel(child.status, false)}</Badge>
                         </div>
                         <div className="font-semibold text-sm text-gray-900">{formatCurrency(child.totalAmount)}</div>
                         <div className="text-xs text-gray-500">{child.reference} · Pag. {formatDate(child.promisedPaymentDate ?? child.dueDate)}</div>

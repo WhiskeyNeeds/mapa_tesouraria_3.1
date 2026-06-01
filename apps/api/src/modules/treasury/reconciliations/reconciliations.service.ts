@@ -148,16 +148,18 @@ export class TreasuryReconciliationsService {
         await tx.treasuryReconciliationMovement.create({
           data: { reconciliationId: recon.id, movementId: movId, amount: movAllocated },
         })
-        if (!isDryRun) {
-          const newReconciledAmount = Number(mov.reconciledAmount) + movAllocated
-          await tx.treasuryBankMovement.update({
-            where: { id: movId },
-            data: {
-              reconciledAmount: newReconciledAmount,
-              status: newReconciledAmount >= movFullAmt - 0.01 ? 'RECONCILED' : 'PARTIAL',
-            },
-          })
-        }
+        // O estado local é sempre atualizado, mesmo em dry-run. dry-run significa
+        // apenas "não escrever no TOConline" — a reconciliação é registada localmente,
+        // por isso o movimento deixa de surgir como disponível e o reverse() (que
+        // também atualiza o estado sem verificar dry-run) fica coerente.
+        const newReconciledAmount = Number(mov.reconciledAmount) + movAllocated
+        await tx.treasuryBankMovement.update({
+          where: { id: movId },
+          data: {
+            reconciledAmount: newReconciledAmount,
+            status: newReconciledAmount >= movFullAmt - 0.01 ? 'RECONCILED' : 'PARTIAL',
+          },
+        })
       }
 
       // Link and process allocations
@@ -191,20 +193,19 @@ export class TreasuryReconciliationsService {
             data: { reconciliationId: recon.id, receivableId: alloc.id, amountAllocated: alloc.amount, tocReceiptId, tocError },
           })
 
-          if (!isDryRun) {
-            const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
-            if (rec) {
-              const newReceived = Number(rec.receivedAmount) + alloc.amount
-              const newPending = Number(rec.totalAmount) - newReceived
-              await tx.treasuryReceivable.update({
-                where: { id: alloc.id },
-                data: {
-                  receivedAmount: newReceived,
-                  pendingAmount: Math.max(0, newPending),
-                  status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
-                },
-              })
-            }
+          // Atualização local sempre aplicada (ver nota no bloco dos movimentos).
+          const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
+          if (rec) {
+            const newReceived = Number(rec.receivedAmount) + alloc.amount
+            const newPending = Number(rec.totalAmount) - newReceived
+            await tx.treasuryReceivable.update({
+              where: { id: alloc.id },
+              data: {
+                receivedAmount: newReceived,
+                pendingAmount: Math.max(0, newPending),
+                status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
+              },
+            })
           }
         } else {
           let tocPaymentId: string | undefined
@@ -228,20 +229,19 @@ export class TreasuryReconciliationsService {
             data: { reconciliationId: recon.id, payableId: alloc.id, amountAllocated: alloc.amount, tocPaymentId, tocError },
           })
 
-          if (!isDryRun) {
-            const pay = await tx.treasuryPayable.findUnique({ where: { id: alloc.id } })
-            if (pay) {
-              const newPaid = Number(pay.paidAmount) + alloc.amount
-              const newPending = Number(pay.totalAmount) - newPaid
-              await tx.treasuryPayable.update({
-                where: { id: alloc.id },
-                data: {
-                  paidAmount: newPaid,
-                  pendingAmount: Math.max(0, newPending),
-                  status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
-                },
-              })
-            }
+          // Atualização local sempre aplicada (ver nota no bloco dos movimentos).
+          const pay = await tx.treasuryPayable.findUnique({ where: { id: alloc.id } })
+          if (pay) {
+            const newPaid = Number(pay.paidAmount) + alloc.amount
+            const newPending = Number(pay.totalAmount) - newPaid
+            await tx.treasuryPayable.update({
+              where: { id: alloc.id },
+              data: {
+                paidAmount: newPaid,
+                pendingAmount: Math.max(0, newPending),
+                status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
+              },
+            })
           }
         }
       }

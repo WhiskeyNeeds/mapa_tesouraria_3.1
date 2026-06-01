@@ -28,6 +28,7 @@ interface TocRawDoc {
 }
 interface Document {
   id: string; reference: string; entityName: string; dueDate: string
+  documentDate?: string | null
   pendingAmount: number; totalAmount: number; status: string
   category?: { name: string; color: string } | null
   type: 'receivable' | 'payable'
@@ -205,34 +206,43 @@ export default function ReconciliationPage() {
     })
   }, [tocPurchasesData, importedPurchaseIds])
 
-  const allDocs: Document[] = useMemo(() => [
-    ...(receivablesData?.items ?? []).filter((r) => r.status !== 'SETTLED').map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
-    ...(payablesData?.items ?? []).filter((p) => p.status !== 'SETTLED').map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
-    ...tocSalesOnly.map((d): Document => ({
-      id: `toc-${d.id}`,
-      reference: d.document_no,
-      entityName: d.customer_business_name ?? '—',
-      dueDate: d.due_date ?? d.date,
-      pendingAmount: d.pending_total,
-      totalAmount: d.gross_total,
-      status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
-      type: 'receivable',
-      _src: 'toc',
-      _tocRaw: d,
-    })),
-    ...tocPurchasesOnly.map((d): Document => ({
-      id: `toc-${d.id}`,
-      reference: d.document_no,
-      entityName: d.supplier_business_name ?? '—',
-      dueDate: d.due_date ?? d.date,
-      pendingAmount: d.pending_total,
-      totalAmount: d.gross_total,
-      status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
-      type: 'payable',
-      _src: 'toc',
-      _tocRaw: d,
-    })),
-  ], [receivablesData, payablesData, tocSalesOnly, tocPurchasesOnly])
+  const allDocs: Document[] = useMemo(() => {
+    // Documentos com data de emissão futura (ex.: recorrências/forecast ainda não
+    // emitidos) não são reconciliáveis — não devem surgir em Documentos Pendentes.
+    // Documentos sem data de emissão mantêm-se visíveis.
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const notFuture = (documentDate?: string | null) => !documentDate || documentDate.slice(0, 10) <= todayStr
+    return [
+      ...(receivablesData?.items ?? []).filter((r) => r.status !== 'SETTLED').map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
+      ...(payablesData?.items ?? []).filter((p) => p.status !== 'SETTLED').map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
+      ...tocSalesOnly.map((d): Document => ({
+        id: `toc-${d.id}`,
+        reference: d.document_no,
+        entityName: d.customer_business_name ?? '—',
+        dueDate: d.due_date ?? d.date,
+        documentDate: d.date,
+        pendingAmount: d.pending_total,
+        totalAmount: d.gross_total,
+        status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
+        type: 'receivable',
+        _src: 'toc',
+        _tocRaw: d,
+      })),
+      ...tocPurchasesOnly.map((d): Document => ({
+        id: `toc-${d.id}`,
+        reference: d.document_no,
+        entityName: d.supplier_business_name ?? '—',
+        dueDate: d.due_date ?? d.date,
+        documentDate: d.date,
+        pendingAmount: d.pending_total,
+        totalAmount: d.gross_total,
+        status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
+        type: 'payable',
+        _src: 'toc',
+        _tocRaw: d,
+      })),
+    ].filter((d) => notFuture(d.documentDate))
+  }, [receivablesData, payablesData, tocSalesOnly, tocPurchasesOnly])
 
   const docsTruncated = (receivablesData?.total ?? 0) > (receivablesData?.items?.length ?? 0)
     || (payablesData?.total ?? 0) > (payablesData?.items?.length ?? 0)
