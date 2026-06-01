@@ -168,11 +168,11 @@ Sem configuração SMTP válida, os 3 fluxos falham silenciosamente (a função 
 ## 7. Migrations e seeds
 
 - **Migrations:** `prisma migrate deploy` no entrypoint do container API. Idempotente — só aplica o que falta. Em caso de erro de migration, o container falha o arranque (Dokploy mostra logs com o erro).
-- **Seed em produção:** **não** corre automaticamente. O seed actual (`apps/api/prisma/seed.ts`) é para dev. Se for preciso criar utilizador admin inicial, fazer manualmente uma vez via "Run Command" do Dokploy no container API:
+- **Seed em produção:** **corre** automaticamente (esta é uma versão de testes). O entrypoint fica:
   ```
-  npx tsx prisma/seed.ts
+  npx prisma migrate deploy && npx tsx prisma/seed.ts && node dist/server.js
   ```
-  Ou criar um `seed-prod.ts` dedicado (fora do âmbito deste spec).
+  Como `tsx` é dependência de dev, fica no `node_modules` do runtime stage (ver nota no Dockerfile da API: precisamos de manter `tsx` instalado para o seed). O seed em `apps/api/prisma/seed.ts` deve ser idempotente para sobreviver a re-deploys; se não for, pode duplicar dados a cada deploy. Verificar/ajustar isso na execução do plano.
 
 ---
 
