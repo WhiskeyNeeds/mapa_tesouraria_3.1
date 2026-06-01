@@ -6,10 +6,8 @@ import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
 import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Play, GripVertical, Pencil, Archive, RotateCcw } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
-import FollowUpPlanTab from '@/components/followups/FollowUpPlanTab'
 import BudgetRulesTab from '@/components/settings/BudgetRulesTab'
 import DunningTracksTab from '@/components/settings/DunningTracksTab'
-import BudgetCategoriesTab from '@/components/settings/BudgetCategoriesTab'
 
 interface Category { id: string; name: string; type: string; color: string; isArchived: boolean; usageCount: number }
 interface Settings {
