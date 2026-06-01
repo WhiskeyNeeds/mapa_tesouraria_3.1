@@ -8,7 +8,7 @@ import {
   Split, Undo2, CircleDollarSign,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { FollowupDoc, FollowupDirection, InvoiceAttachment, TimelineEvent } from './types'
+import type { FollowupDoc, FollowupDirection, TimelineEvent } from './types'
 import EmailFollowupModal from './EmailFollowupModal'
 import CallTaskModal from './CallTaskModal'
 import LogCallModal from './LogCallModal'
@@ -83,13 +83,6 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
     staleTime: 0,
   })
 
-  const { data: attachments = [] } = useQuery<InvoiceAttachment[]>({
-    queryKey: ['attachments', clientId, direction, doc.id],
-    queryFn: () => api.get(`/treasury/${clientId}/invoice-attachments?${idKey}=${doc.id}`),
-    refetchInterval: 3000,
-    refetchIntervalInBackground: false,
-  })
-
   // Plano de follow-up: define que ações ficam visíveis no painel. Vem de
   // TreasurySettings; cai em "tudo ligado" antes da empresa configurar.
   const { data: planSettings } = useQuery<Partial<{
@@ -127,30 +120,6 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
     },
   })
 
-  const uploadAttachment = useMutation({
-    mutationFn: async (file: File) => {
-      const form = new FormData()
-      form.append('file', file)
-      form.append(idKey, doc.id)
-      const token = localStorage.getItem('access_token')
-      const res = await fetch(`/api/v1/treasury/${clientId}/invoice-attachments`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: form,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as { error: string }
-        throw new Error(err.error || 'Falha no upload')
-      }
-      return res.json()
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['attachments', clientId, direction, doc.id] })
-      toast.success('PDF anexado')
-    },
-    onError: (err: Error) => toast.error(err.message),
-  })
-
   const filtered = events.filter((ev) => {
     if (filter === 'ALL') return true
     if (filter === 'EMAIL') return ev.kind === 'EMAIL_SENT'
@@ -160,17 +129,6 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
     if (filter === 'CHANGES') return ev.source === 'audit'
     return true
   })
-
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (file.type !== 'application/pdf') {
-      toast.error('Apenas ficheiros PDF são aceites')
-      return
-    }
-    uploadAttachment.mutate(file)
-    e.target.value = ''
-  }
 
   // Configuração de cada ação — usada pela grelha 2x2 e pelo painel inline.
   const actions: { key: ActionPanel; label: string; icon: LucideIcon; enabled: boolean; matches: (kind: string) => boolean; ctaLabel: string; ctaColor: string; onCreate: () => void; emptyHint: string }[] = [
@@ -259,42 +217,6 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
                 />
               ))}
             </ol>
-          )}
-        </div>
-      )}
-
-      {/* Anexos */}
-      {plan.pdfUpload && (
-        <div className="border border-gray-100 rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-gray-700 uppercase tracking-wider">PDFs anexos</span>
-            <label className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 cursor-pointer">
-              <Plus className="w-3 h-3" /> Anexar PDF
-              <input type="file" accept="application/pdf" className="hidden" onChange={handleFileSelect} />
-            </label>
-          </div>
-          {attachments.length === 0 ? (
-            <div className="text-xs text-gray-400 italic">Sem anexos manuais.{doc.origin !== 'LOCAL' && ' O PDF do TOConline será incluído automaticamente.'}</div>
-          ) : (
-            <ul className="space-y-1">
-              {attachments.map((a) => (
-                <li key={a.id} className="flex items-center justify-between text-xs">
-                  <a href={`/api/v1/treasury/${clientId}/invoice-attachments/${a.id}/download`} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate">
-                    {a.filename}
-                  </a>
-                  <button
-                    onClick={async () => {
-                      if (!confirm(`Remover ${a.filename}?`)) return
-                      await api.delete(`/treasury/${clientId}/invoice-attachments/${a.id}`)
-                      queryClient.invalidateQueries({ queryKey: ['attachments', clientId, direction, doc.id] })
-                    }}
-                    className="text-gray-400 hover:text-red-500"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </li>
-              ))}
-            </ul>
           )}
         </div>
       )}
