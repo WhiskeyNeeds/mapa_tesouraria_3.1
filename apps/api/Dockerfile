@@ -4,6 +4,11 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 
+# Prisma's query/migrate engines need libssl/openssl at runtime; without it the
+# engine binary fails to load and Prisma throws a cryptic "Could not parse
+# schema engine response" error. Install openssl in every stage that runs prisma.
+RUN apk add --no-cache openssl
+
 # Copy root + ALL workspace manifests (root package.json has "workspaces":
 # ["apps/*"], so npm needs every workspace package.json present to resolve).
 COPY package.json package-lock.json ./
@@ -26,6 +31,9 @@ RUN npm run build -w apps/api
 # ─── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 WORKDIR /app
+
+# See note in deps stage.
+RUN apk add --no-cache openssl
 
 ENV NODE_ENV=production
 
