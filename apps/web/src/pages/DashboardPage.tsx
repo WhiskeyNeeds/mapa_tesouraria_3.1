@@ -382,14 +382,38 @@ function CashflowStatementTable() {
       if (abs >= 1_000)     return `${sign}${(abs / 1_000).toLocaleString('pt-PT', { maximumFractionDigits: 1 })}k €`
       return `${sign}${abs.toLocaleString('pt-PT', { maximumFractionDigits: 0 })} €`
     }
+    // Eixo Y desenhado na coluna fixa da legenda (não dentro do gráfico): assim a
+    // área de plot preenche todo o colSpan e cada barra fica centrada na sua coluna.
+    const CHART_H = 200, PAD_TOP = 12, PAD_BOTTOM = 4
+    const balances = cData.map((d) => d.balance).filter((b): b is number => b != null)
+    const dataMax = Math.max(1, ...cData.map((d) => Math.max(d.income, d.expense)), ...balances)
+    const dataMin = Math.min(0, ...balances)
+    const niceStep = (range: number, divs = 4) => {
+      const r = (range / divs) || 1
+      const m = Math.pow(10, Math.floor(Math.log10(r)))
+      return Math.ceil(r / m) * m
+    }
+    const step = niceStep(dataMax - dataMin)
+    const yMax = Math.ceil(dataMax / step) * step
+    const yMin = dataMin < 0 ? Math.floor(dataMin / step) * step : 0
+    const yTicks: number[] = []
+    for (let v = yMin; v <= yMax + 0.001; v += step) yTicks.push(v)
+    const yPix = (v: number) => PAD_TOP + ((yMax - v) / (yMax - yMin)) * (CHART_H - PAD_TOP - PAD_BOTTOM)
     return (
       <tr>
-        <td className="sticky left-0 bg-white z-10 px-5 align-middle border-b border-gray-100" style={{ minWidth: 220 }}>{chartLegend}</td>
+        <td className="sticky left-0 bg-white z-10 px-5 align-middle border-b border-gray-100 relative" style={{ minWidth: 220 }}>
+          {chartLegend}
+          {yTicks.map((v) => (
+            <span key={v} className="absolute text-gray-400 tabular-nums select-none pointer-events-none" style={{ top: yPix(v) - 6, right: 8, fontSize: 10, lineHeight: '12px' }}>
+              {compactNumber(v)}
+            </span>
+          ))}
+        </td>
         <td colSpan={nCols} className="p-0 border-b border-gray-100">
-          <ResponsiveContainer width="100%" height={200}>
+          <ResponsiveContainer width="100%" height={CHART_H}>
             <ComposedChart
               data={cData}
-              margin={{ left: 12, right: 12, top: 12, bottom: 0 }}
+              margin={{ left: 0, right: 0, top: PAD_TOP, bottom: PAD_BOTTOM }}
               barCategoryGap="22%"
             >
               <defs>
@@ -401,14 +425,8 @@ function CashflowStatementTable() {
                 </pattern>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-              <XAxis dataKey="label" hide />
-              <YAxis
-                width={60}
-                tickFormatter={compactNumber}
-                tick={{ fontSize: 10, fill: '#9ca3af' }}
-                axisLine={false}
-                tickLine={false}
-              />
+              <XAxis dataKey="label" hide height={0} />
+              <YAxis hide width={0} domain={[yMin, yMax]} ticks={yTicks} />
               <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} />
               {/* Entradas: 3 segmentos empilhados */}
               <Bar dataKey="incomeSettled"    stackId="income" name="Entradas (fechadas)"   fill="#10b981" fillOpacity={1}    maxBarSize={32} isAnimationActive={false} />
