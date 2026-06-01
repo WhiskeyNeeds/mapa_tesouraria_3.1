@@ -2073,11 +2073,13 @@ export default function ReceivablesPage() {
                     )
                   })()}
 
-                  {/* Data prometida */}
+                  {/* Data prometida — bloqueada em faturas pagas/liquidadas */}
                   <div className="rounded-xl border border-gray-200 overflow-hidden">
                     <button
-                      onClick={() => setPanelSection(panelSection === 'promised' ? null : 'promised')}
-                      className="w-full flex items-center gap-3 p-3.5 hover:bg-blue-50 text-left transition-colors group"
+                      onClick={() => { if (panelDoc.status !== 'SETTLED') setPanelSection(panelSection === 'promised' ? null : 'promised') }}
+                      disabled={panelDoc.status === 'SETTLED'}
+                      title={panelDoc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível definir data de pagamento' : undefined}
+                      className={`w-full flex items-center gap-3 p-3.5 text-left transition-colors group ${panelDoc.status === 'SETTLED' ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50'}`}
                     >
                       <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200 transition-colors">
                         <Clock className="w-4 h-4 text-blue-700" />
@@ -2090,7 +2092,7 @@ export default function ReceivablesPage() {
                         }
                       </div>
                     </button>
-                    {panelSection === 'promised' && (
+                    {panelSection === 'promised' && panelDoc.status !== 'SETTLED' && (
                       <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
                         <input type="date" className="input" value={panelPromisedDate} onChange={(e) => setPanelPromisedDate(pickWorkday(e.target.value, panelPromisedDate))} />
                         <div className="flex gap-2">
@@ -2109,8 +2111,8 @@ export default function ReceivablesPage() {
                     )}
                   </div>
 
-                  {/* Dividir Fatura */}
-                  {panelDoc.status === 'OPEN' && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
+                  {/* Dividir Fatura — bloqueada em faturas pagas/liquidadas */}
+                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'SETTLED') && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
                     <div className="rounded-xl border border-gray-200 overflow-hidden">
                       <button
                         onClick={() => {
@@ -2127,6 +2129,8 @@ export default function ReceivablesPage() {
                           }
                           setPanelSection(panelSection === 'split' ? null : 'split')
                         }}
+                        disabled={panelDoc.status === 'SETTLED'}
+                        title={panelDoc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível dividir' : undefined}
                         className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
@@ -2137,7 +2141,7 @@ export default function ReceivablesPage() {
                           <div className="text-xs text-gray-500">Criar parcelas a partir desta fatura</div>
                         </div>
                       </button>
-                      {panelSection === 'split' && (
+                      {panelSection === 'split' && panelDoc.status !== 'SETTLED' && (
                         <div className="px-4 pb-4 pt-3 border-t border-gray-100 space-y-3">
                           {/* Controlo do nº de parcelas */}
                           <div className="flex items-center justify-between">

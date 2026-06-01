@@ -915,6 +915,7 @@ export class TreasuryReceivablesService {
   async setPromisedDate(clientId: string, userId: string, id: string, date: string | null) {
     id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SETTLED') throw httpError(409, 'Não é possível definir data de pagamento numa fatura já paga/liquidada')
     const newDate = date ? new Date(date) : null
     const result = await this.prisma.treasuryReceivable.update({
       where: { id },

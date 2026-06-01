@@ -296,11 +296,13 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
               </button>
             )}
 
-            {/* Definir data pagamento */}
+            {/* Definir data pagamento — bloqueada em faturas pagas/liquidadas */}
             <div className="rounded-xl border border-gray-200 overflow-hidden">
               <button
-                onClick={() => setSection(section === 'promised' ? null : 'promised')}
-                className="w-full flex items-center gap-3 p-3.5 hover:bg-blue-50 text-left transition-colors group"
+                onClick={() => { if (doc.status !== 'SETTLED') setSection(section === 'promised' ? null : 'promised') }}
+                disabled={doc.status === 'SETTLED'}
+                title={doc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível definir data de pagamento' : undefined}
+                className={`w-full flex items-center gap-3 p-3.5 text-left transition-colors group ${doc.status === 'SETTLED' ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50'}`}
               >
                 <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200 transition-colors">
                   <Clock className="w-4 h-4 text-blue-700" />
@@ -313,7 +315,7 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
                   }
                 </div>
               </button>
-              {section === 'promised' && (
+              {section === 'promised' && doc.status !== 'SETTLED' && (
                 <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
                   <input
                     type="date"
@@ -343,15 +345,18 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
               )}
             </div>
 
-            {/* Dividir Fatura — só quando OPEN e sem filhos */}
-            {isOpen && !doc.parentId && !hasSplit && (
+            {/* Dividir Fatura — bloqueada em faturas pagas/liquidadas */}
+            {(isOpen || doc.status === 'SETTLED') && !doc.parentId && !hasSplit && (
               <div className="rounded-xl border border-gray-200 overflow-hidden">
                 <button
                   onClick={() => {
+                    if (doc.status === 'SETTLED') return
                     if (section !== 'split') initSplit(doc)
                     setSection(section === 'split' ? null : 'split')
                   }}
-                  className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group"
+                  disabled={doc.status === 'SETTLED'}
+                  title={doc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível dividir' : undefined}
+                  className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
                     <Scissors className="w-4 h-4 text-purple-700" />
@@ -361,7 +366,7 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
                     <div className="text-xs text-gray-500">Criar parcelas a partir desta fatura</div>
                   </div>
                 </button>
-                {section === 'split' && (
+                {section === 'split' && doc.status !== 'SETTLED' && (
                   <div className="px-4 pb-4 pt-3 border-t border-gray-100 space-y-3">
                     {/* Nº de parcelas */}
                     <div className="flex items-center justify-between">
