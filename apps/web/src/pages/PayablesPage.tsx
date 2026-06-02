@@ -296,7 +296,7 @@ export default function PayablesPage() {
     }
     return next
   }
-  const [statusFilter, setStatusFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('OPEN,PARTIAL')
   const [entitySearch, setEntitySearch] = useState('')
   const [dueDateFrom, setDueDateFrom] = useState('')
   const [dueDateTo, setDueDateTo] = useState('')
@@ -304,7 +304,7 @@ export default function PayablesPage() {
   const [docDateTo, setDocDateTo] = useState('')
   const [paymentDateFrom, setPaymentDateFrom] = useState('')
   const [paymentDateTo, setPaymentDateTo] = useState('')
-  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'>('dueDate')
+  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'>('promisedPaymentDate')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
   const [showNew, setShowNew] = useState(false)
@@ -474,6 +474,35 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  const payPayable = useMutation({
+    mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/pay`, {}),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      const payChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
+        (arr ?? []).map((c) => c.recurrenceId || c.status === 'PAID' || c.status === 'SETTLED' || c.status === 'VOID'
+          ? c
+          : { ...c, status: 'PAID', pendingAmount: 0, paidAmount: Number(c.totalAmount) })
+      setPanelDoc((d) => d ? {
+        ...d,
+        status: 'PAID',
+        pendingAmount: 0,
+        paidAmount: d.totalAmount,
+        promisedPaymentDate: null,
+        children: payChildren(d.children),
+      } : d)
+      qc.setQueryData<Payable>(['payable-detail', selectedClientId, id], (old) => old ? {
+        ...old,
+        status: 'PAID',
+        pendingAmount: 0,
+        paidAmount: old.totalAmount,
+        promisedPaymentDate: null,
+        children: payChildren(old.children),
+      } : old)
+      toast.success('Documento marcado como pago.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
   const settlePayable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/settle`, {}),
     onSuccess: (_, id) => {
@@ -498,7 +527,7 @@ export default function PayablesPage() {
         promisedPaymentDate: null,
         children: settleChildren(old.children),
       } : old)
-      toast.success('Documento marcado como pago.')
+      toast.success('Documento marcado como liquidado.')
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -508,7 +537,7 @@ export default function PayablesPage() {
     onSuccess: (_, id) => {
       qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] })
       const revertChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
-        (arr ?? []).map((c) => c.recurrenceId || c.status !== 'SETTLED'
+        (arr ?? []).map((c) => c.recurrenceId || (c.status !== 'SETTLED' && c.status !== 'PAID')
           ? c
           : { ...c, status: 'OPEN', pendingAmount: Number(c.totalAmount), paidAmount: 0 })
       setPanelDoc((d) => d ? {
@@ -687,7 +716,7 @@ export default function PayablesPage() {
     countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
   } : null
 
-  const isClosed = (status: string) => status === 'SETTLED' || status === 'VOID'
+  const isClosed = (status: string) => status === 'PAID' || status === 'SETTLED' || status === 'VOID'
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
   const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (p: Payable) => {
@@ -887,7 +916,7 @@ export default function PayablesPage() {
                               const displayDate = isSplit && p.promisedPaymentDate ? p.promisedPaymentDate : p.dueDate
                               const now = Date.now()
                               const due = new Date(displayDate).getTime()
-                              const isActive = p.status !== 'SETTLED' && p.status !== 'VOID'
+                              const isActive = p.status !== 'PAID' && p.status !== 'SETTLED' && p.status !== 'VOID'
                               const overdue = isActive && due < now
                               const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
                               const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
@@ -948,7 +977,20 @@ export default function PayablesPage() {
                                 const isFutureRec = !!(p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd)
                                 return (
                                   <button
-                                    title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : 'Liquidar totalmente'}
+                                    title={isFutureRec ? 'Recorrência futura — só pode ser paga a partir da data de vencimento' : 'Marcar como pago'}
+                                    onClick={() => { if (!isFutureRec) payPayable.mutate(p.id) }}
+                                    disabled={isFutureRec}
+                                    className="p-1 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
+                                  >
+                                    <CreditCard className="w-3.5 h-3.5" />
+                                  </button>
+                                )
+                              })()}
+                              {(p.status === 'OPEN' || p.status === 'PARTIAL' || p.status === 'PAID') && (() => {
+                                const isFutureRec = !!(p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd)
+                                return (
+                                  <button
+                                    title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : 'Marcar como liquidada'}
                                     onClick={() => { if (!isFutureRec) settlePayable.mutate(p.id) }}
                                     disabled={isFutureRec}
                                     className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
@@ -1909,30 +1951,80 @@ export default function PayablesPage() {
           <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {panelTab === 'details' && (
               <>
-                {/* Nota de liquidado localmente */}
+                {/* Nota de liquidado */}
                 {panelDoc.status === 'SETTLED' && (
                   <div className="flex items-center gap-3 p-3.5 bg-green-50 border border-green-200 rounded-xl">
                     <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
                       <CheckCircle className="w-4 h-4 text-green-700" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-green-900 text-sm">{panelDoc._statusToc === 'SETTLED' ? 'Liquidado' : 'Pago'}</div>
+                      <div className="font-medium text-green-900 text-sm">Liquidado</div>
                       <div className="text-xs text-green-600 mt-0.5">
-                        {panelDoc._statusToc === 'SETTLED' ? 'Estado do TOConline' : 'Registado manualmente nesta plataforma'}
+                        {panelDoc._statusToc === 'SETTLED' ? 'Recibo emitido no TOConline' : 'Liquidado manualmente nesta plataforma'}
+                      </div>
+                    </div>
+                    {panelDoc._statusToc === 'SETTLED' ? (
+                      <span className="text-xs text-green-700/70 flex-shrink-0">Gerido no TOConline</span>
+                    ) : (
+                      <button
+                        onClick={() => unsettlePayable.mutate(panelDoc.id)}
+                        disabled={unsettlePayable.isPending}
+                        className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-green-700 disabled:hover:border-green-200 disabled:hover:bg-transparent"
+                      >
+                        {unsettlePayable.isPending ? '...' : 'Anular'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Nota de pago — aguarda liquidação */}
+                {panelDoc.status === 'PAID' && (
+                  <div className="flex items-center gap-3 p-3.5 bg-teal-50 border border-teal-200 rounded-xl">
+                    <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0">
+                      <CreditCard className="w-4 h-4 text-teal-700" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-teal-900 text-sm">Pago</div>
+                      <div className="text-xs text-teal-600 mt-0.5">
+                        {panelDoc.tocPurchasesDocId ? 'Pagamento registado — liquida quando houver recibo no TOConline' : 'Pagamento registado — aguarda liquidação'}
                       </div>
                     </div>
                     <button
                       onClick={() => unsettlePayable.mutate(panelDoc.id)}
                       disabled={unsettlePayable.isPending}
-                      className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-green-700 disabled:hover:border-green-200 disabled:hover:bg-transparent"
+                      className="text-xs text-teal-700 hover:text-red-700 border border-teal-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-teal-700 disabled:hover:border-teal-200 disabled:hover:bg-transparent"
                     >
                       {unsettlePayable.isPending ? '...' : 'Anular'}
                     </button>
                   </div>
                 )}
 
-                {/* Marcar como liquidada — bloqueado em recorrências futuras (dueDate > hoje) */}
+                {/* Marcar como Pago — bloqueado em recorrências futuras (dueDate > hoje) */}
                 {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (() => {
+                  const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
+                  return (
+                    <button
+                      onClick={() => {
+                        if (isFutureRec) return
+                        payPayable.mutate(panelDoc.id)
+                      }}
+                      disabled={payPayable.isPending || isFutureRec}
+                      title={isFutureRec ? 'Recorrência futura — só pode ser paga a partir da data de vencimento' : undefined}
+                      className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-teal-50 hover:border-teal-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0 group-hover:bg-teal-200 transition-colors">
+                        <CreditCard className="w-4 h-4 text-teal-700" />
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900 text-sm">Marcar como Pago</div>
+                        <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar pagamento total (sem liquidar)'}</div>
+                      </div>
+                    </button>
+                  )
+                })()}
+
+                {/* Marcar como Liquidada — direto ou a partir de "Pago" */}
+                {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
                   const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
                   return (
                     <button
@@ -1945,11 +2037,11 @@ export default function PayablesPage() {
                       className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
-                        <CreditCard className="w-4 h-4 text-green-700" />
+                        <CheckCircle className="w-4 h-4 text-green-700" />
                       </div>
                       <div>
-                        <div className="font-medium text-gray-900 text-sm">Marcar como Pago</div>
-                        <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar pagamento total'}</div>
+                        <div className="font-medium text-gray-900 text-sm">Marcar como Liquidada</div>
+                        <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar recibo / liquidação total'}</div>
                       </div>
                     </button>
                   )
@@ -1958,10 +2050,10 @@ export default function PayablesPage() {
                 {/* Data prometida — bloqueada em faturas pagas/liquidadas */}
                 <div className="rounded-xl border border-gray-200 overflow-hidden">
                   <button
-                    onClick={() => { if (panelDoc.status !== 'SETTLED') setPanelSection(panelSection === 'promised' ? null : 'promised') }}
-                    disabled={panelDoc.status === 'SETTLED'}
-                    title={panelDoc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível definir data de pagamento' : undefined}
-                    className={`w-full flex items-center gap-3 p-3.5 text-left transition-colors group ${panelDoc.status === 'SETTLED' ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50 hover:border-blue-200'}`}
+                    onClick={() => { if (panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID') setPanelSection(panelSection === 'promised' ? null : 'promised') }}
+                    disabled={panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID'}
+                    title={(panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID') ? 'Fatura paga/liquidada — não é possível definir data de pagamento' : undefined}
+                    className={`w-full flex items-center gap-3 p-3.5 text-left transition-colors group ${(panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID') ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50 hover:border-blue-200'}`}
                   >
                     <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200 transition-colors">
                       <Clock className="w-4 h-4 text-blue-700" />
@@ -1974,7 +2066,7 @@ export default function PayablesPage() {
                       }
                     </div>
                   </button>
-                  {panelSection === 'promised' && panelDoc.status !== 'SETTLED' && (
+                  {panelSection === 'promised' && panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID' && (
                     <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
                       <input type="date" className="input" value={panelPromisedDate} onChange={(e) => setPanelPromisedDate(pickWorkday(e.target.value, panelPromisedDate))} />
                       <div className="flex gap-2">
@@ -1994,7 +2086,7 @@ export default function PayablesPage() {
                 </div>
 
                 {/* Dividir Fatura — bloqueada em faturas pagas/liquidadas */}
-                {(panelDoc.status === 'OPEN' || panelDoc.status === 'SETTLED') && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
+                {(panelDoc.status === 'OPEN' || panelDoc.status === 'PAID' || panelDoc.status === 'SETTLED') && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
                   <div className="rounded-xl border border-gray-200 overflow-hidden">
                     <button
                       onClick={() => {
@@ -2012,8 +2104,8 @@ export default function PayablesPage() {
                         }
                         setPanelSection(panelSection === 'split' ? null : 'split')
                       }}
-                      disabled={panelDoc.status === 'SETTLED'}
-                      title={panelDoc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível dividir' : undefined}
+                      disabled={panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID'}
+                      title={(panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID') ? 'Fatura paga/liquidada — não é possível dividir' : undefined}
                       className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
@@ -2024,7 +2116,7 @@ export default function PayablesPage() {
                         <div className="text-xs text-gray-500">Criar parcelas a partir desta fatura</div>
                       </div>
                     </button>
-                    {panelSection === 'split' && panelDoc.status !== 'SETTLED' && (
+                    {panelSection === 'split' && panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID' && (
                       <div className="px-4 pb-4 pt-3 border-t border-gray-100 space-y-3">
                         {/* Controlo do nº de parcelas */}
                         <div className="flex items-center justify-between">

@@ -96,9 +96,15 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
     onMutated?.()
   }
 
+  const payDoc = useMutation({
+    mutationFn: () => api.post(`/treasury/${selectedClientId}/${seg}/${currentId}/pay`, {}),
+    onSuccess: () => { invalidate(); toast.success('Marcado como pago') },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
   const settleDoc = useMutation({
     mutationFn: () => api.post(`/treasury/${selectedClientId}/${seg}/${currentId}/settle`, {}),
-    onSuccess: () => { invalidate(); toast.success('Marcado como pago') },
+    onSuccess: () => { invalidate(); toast.success('Marcado como liquidado') },
     onError: (e: Error) => toast.error(e.message),
   })
 
@@ -255,16 +261,14 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
         {/* ── Tab: Detalhes ── */}
         {tab === 'details' && (
           <>
-            {/* Pago — banner */}
-            {isPaid && (
+            {/* Liquidado — banner */}
+            {doc.status === 'SETTLED' && (
               <div className="flex items-center gap-3 p-3.5 bg-green-50 border border-green-200 rounded-xl">
                 <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
                   <CheckCircle className="w-4 h-4 text-green-700" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-green-900 text-sm">
-                    {isExpense ? 'Marcado como pago' : 'Marcado como recebido'}
-                  </div>
+                  <div className="font-medium text-green-900 text-sm">Liquidado</div>
                   <div className="text-xs text-green-600 mt-0.5">Registado nesta plataforma</div>
                 </div>
                 <button
@@ -277,21 +281,60 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
               </div>
             )}
 
-            {/* Marcar como liquidada */}
+            {/* Pago — banner (aguarda liquidação) */}
+            {doc.status === 'PAID' && (
+              <div className="flex items-center gap-3 p-3.5 bg-teal-50 border border-teal-200 rounded-xl">
+                <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0">
+                  <CreditCard className="w-4 h-4 text-teal-700" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-teal-900 text-sm">Pago</div>
+                  <div className="text-xs text-teal-600 mt-0.5">Registado — aguarda liquidação</div>
+                </div>
+                <button
+                  onClick={() => unsettleDoc.mutate()}
+                  disabled={unsettleDoc.isPending}
+                  className="text-xs text-teal-700 hover:text-red-700 border border-teal-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {unsettleDoc.isPending ? '...' : 'Anular'}
+                </button>
+              </div>
+            )}
+
+            {/* Marcar como pago */}
             {isOpen && (
+              <button
+                onClick={() => payDoc.mutate()}
+                disabled={payDoc.isPending}
+                className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-teal-50 hover:border-teal-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0 group-hover:bg-teal-200 transition-colors">
+                  <CreditCard className="w-4 h-4 text-teal-700" />
+                </div>
+                <div>
+                  <div className="font-medium text-gray-900 text-sm">
+                    {isExpense ? 'Marcar como pago' : 'Marcar como recebido'}
+                  </div>
+                  <div className="text-xs text-gray-500">Registar pagamento total (sem liquidar)</div>
+                </div>
+              </button>
+            )}
+
+            {/* Marcar como liquidada — direto ou a partir de "Pago" */}
+            {(isOpen || doc.status === 'PAID') && (
               <button
                 onClick={() => settleDoc.mutate()}
                 disabled={settleDoc.isPending}
                 className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
-                  <CreditCard className="w-4 h-4 text-green-700" />
+                  <CheckCircle className="w-4 h-4 text-green-700" />
                 </div>
                 <div>
                   <div className="font-medium text-gray-900 text-sm">
                     {isExpense ? 'Marcar como liquidada' : 'Marcar como recebida'}
                   </div>
-                  <div className="text-xs text-gray-500">Registar pagamento total</div>
+                  <div className="text-xs text-gray-500">Registar recibo / liquidação total</div>
                 </div>
               </button>
             )}
@@ -299,10 +342,10 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
             {/* Definir data pagamento — bloqueada em faturas pagas/liquidadas */}
             <div className="rounded-xl border border-gray-200 overflow-hidden">
               <button
-                onClick={() => { if (doc.status !== 'SETTLED') setSection(section === 'promised' ? null : 'promised') }}
-                disabled={doc.status === 'SETTLED'}
-                title={doc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível definir data de pagamento' : undefined}
-                className={`w-full flex items-center gap-3 p-3.5 text-left transition-colors group ${doc.status === 'SETTLED' ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50'}`}
+                onClick={() => { if (!isPaid) setSection(section === 'promised' ? null : 'promised') }}
+                disabled={isPaid}
+                title={isPaid ? 'Fatura paga/liquidada — não é possível definir data de pagamento' : undefined}
+                className={`w-full flex items-center gap-3 p-3.5 text-left transition-colors group ${isPaid ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50'}`}
               >
                 <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200 transition-colors">
                   <Clock className="w-4 h-4 text-blue-700" />
@@ -315,7 +358,7 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
                   }
                 </div>
               </button>
-              {section === 'promised' && doc.status !== 'SETTLED' && (
+              {section === 'promised' && !isPaid && (
                 <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
                   <input
                     type="date"
@@ -346,16 +389,16 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
             </div>
 
             {/* Dividir Fatura — bloqueada em faturas pagas/liquidadas */}
-            {(isOpen || doc.status === 'SETTLED') && !doc.parentId && !hasSplit && (
+            {(isOpen || isPaid) && !doc.parentId && !hasSplit && (
               <div className="rounded-xl border border-gray-200 overflow-hidden">
                 <button
                   onClick={() => {
-                    if (doc.status === 'SETTLED') return
+                    if (isPaid) return
                     if (section !== 'split') initSplit(doc)
                     setSection(section === 'split' ? null : 'split')
                   }}
-                  disabled={doc.status === 'SETTLED'}
-                  title={doc.status === 'SETTLED' ? 'Fatura paga/liquidada — não é possível dividir' : undefined}
+                  disabled={isPaid}
+                  title={isPaid ? 'Fatura paga/liquidada — não é possível dividir' : undefined}
                   className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
@@ -366,7 +409,7 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
                     <div className="text-xs text-gray-500">Criar parcelas a partir desta fatura</div>
                   </div>
                 </button>
-                {section === 'split' && doc.status !== 'SETTLED' && (
+                {section === 'split' && !isPaid && (
                   <div className="px-4 pb-4 pt-3 border-t border-gray-100 space-y-3">
                     {/* Nº de parcelas */}
                     <div className="flex items-center justify-between">

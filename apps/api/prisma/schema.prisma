@@ -43,6 +43,7 @@ enum TreasuryDocOrigin {
 enum TreasuryDocStatus {
   OPEN
   PARTIAL
+  PAID
   SETTLED
   VOID
 }

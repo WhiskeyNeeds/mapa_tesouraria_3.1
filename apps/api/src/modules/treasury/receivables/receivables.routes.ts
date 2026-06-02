@@ -180,6 +180,11 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.update(clientId, request.user.sub, id, body))
   })
 
+  fastify.post(`${prefix}/:id/pay`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    return reply.send(await svc.pay(clientId, request.user.sub, id))
+  })
+
   fastify.post(`${prefix}/:id/settle`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     return reply.send(await svc.settle(clientId, request.user.sub, id))

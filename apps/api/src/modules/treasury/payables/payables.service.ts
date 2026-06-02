@@ -78,11 +78,22 @@ function resolveStatusOverlay(
   tocGross: number,
   tocPending: number,
 ): { status: TreasuryDocStatus; paid: number; pending: number; statusDiffers: boolean } {
-  if (localStatus === 'SETTLED') {
-    return { status: 'SETTLED', paid: tocGross, pending: 0, statusDiffers: tocStatus !== 'SETTLED' }
-  }
+  // Anulação local prevalece sempre.
   if (localStatus === 'VOID') {
     return { status: 'VOID', paid: 0, pending: 0, statusDiffers: true }
+  }
+  // Recibo emitido no TOConline (status 3 → SETTLED) liquida automaticamente,
+  // mesmo que localmente esteja só "Pago" ou em aberto.
+  if (tocStatus === 'SETTLED') {
+    return { status: 'SETTLED', paid: tocGross, pending: 0, statusDiffers: false }
+  }
+  // Liquidada manualmente na plataforma antes de o TOC reportar o recibo.
+  if (localStatus === 'SETTLED') {
+    return { status: 'SETTLED', paid: tocGross, pending: 0, statusDiffers: true }
+  }
+  // "Pago": pagamento registado na plataforma, ainda sem recibo no TOC.
+  if (localStatus === 'PAID') {
+    return { status: 'PAID', paid: tocGross, pending: 0, statusDiffers: true }
   }
   if (localStatus === 'PARTIAL') {
     const paid = Number(localPaid ?? 0)
@@ -703,14 +714,16 @@ export class TreasuryPayablesService {
     if (children.length === 0) return
     const paidAmount = children.reduce((s, c) => s + Number(c.paidAmount ?? 0), 0)
     const pendingAmount = children.reduce((s, c) => s + Number(c.pendingAmount ?? 0), 0)
-    const allSettled = children.every((c) => c.status === 'SETTLED')
-    const someSettledOrPartial = children.some((c) => c.status === 'SETTLED' || c.status === 'PARTIAL')
-    const status: TreasuryDocStatus = allSettled ? 'SETTLED' : someSettledOrPartial ? 'PARTIAL' : 'OPEN'
+    const active = children.filter((c) => c.status !== 'VOID')
+    const allSettled = active.length > 0 && active.every((c) => c.status === 'SETTLED')
+    const allClosed = active.length > 0 && active.every((c) => c.status === 'SETTLED' || c.status === 'PAID')
+    const someProgress = active.some((c) => c.status === 'SETTLED' || c.status === 'PAID' || c.status === 'PARTIAL')
+    const status: TreasuryDocStatus = allSettled ? 'SETTLED' : allClosed ? 'PAID' : someProgress ? 'PARTIAL' : 'OPEN'
 
     // Earliest pending parcela drives the parent's promisedPaymentDate.
-    // SETTLED/VOID children are excluded (already paid or cancelled).
+    // PAID/SETTLED/VOID children are excluded (already paid or cancelled).
     const pendingDates = children
-      .filter((c) => c.status !== 'SETTLED' && c.status !== 'VOID')
+      .filter((c) => c.status !== 'PAID' && c.status !== 'SETTLED' && c.status !== 'VOID')
       .map((c) => c.promisedPaymentDate ?? c.dueDate)
       .filter((d): d is Date => d != null)
     const promisedPaymentDate = pendingDates.length > 0
@@ -765,12 +778,65 @@ export class TreasuryPayablesService {
     return result
   }
 
+  async pay(clientId: string, userId: string, id: string) {
+    id = await this.resolveLocalPayableId(clientId, userId, id)
+    const item = await this.getById(clientId, id)
+    if (item.status === 'PAID') throw httpError(409, 'Already paid')
+    if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
+    if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
+    if (item.recurrenceId && item.parentId) {
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+      if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível pagar uma recorrência futura antes da sua data de vencimento')
+    }
+
+    const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status !== 'PAID' && c.status !== 'SETTLED' && c.status !== 'VOID')
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const parent = await tx.treasuryPayable.update({
+        where: { id },
+        data: {
+          status: 'PAID',
+          pendingAmount: item.tocPurchasesDocId ? null : 0,
+          paidAmount: item.tocPurchasesDocId ? null : item.totalAmount,
+          promisedPaymentDate: null,
+        },
+      })
+      // Cascade: marcar a mãe como paga marca as parcelas em aberto/parciais.
+      if (splitChildren.length > 0) {
+        await tx.$executeRaw`
+          UPDATE "treasury_payables"
+          SET "status" = 'PAID', "pendingAmount" = 0, "paidAmount" = "totalAmount", "updatedAt" = NOW()
+          WHERE "parentId" = ${id}
+            AND "recurrenceId" IS NULL
+            AND "deletedAt" IS NULL
+            AND "status" NOT IN ('PAID', 'SETTLED', 'VOID')
+        `
+      }
+      await audit(tx, {
+        clientId, userId,
+        action: 'payable.pay',
+        entityType: 'Payable', entityId: id,
+        payload: { from: item.status, to: 'PAID', cascadedChildren: splitChildren.length },
+      })
+      return parent
+    })
+
+    if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
+    return result
+  }
+
   async unsettle(clientId: string, userId: string, id: string) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
-    if (item.status !== 'SETTLED') throw httpError(409, 'Apenas documentos liquidados podem ser revertidos')
+    // Faturas liquidadas no TOConline (recibo emitido, status 3) refletem a
+    // contabilidade — a liquidação não pode ser anulada aqui, só no TOConline.
+    const tocOverlay = (item as { _tocOverlay?: { status?: number | null } | null })._tocOverlay
+    if (item.tocPurchasesDocId && mapTocStatus(tocOverlay?.status ?? null) === 'SETTLED') {
+      throw httpError(409, 'Fatura liquidada no TOConline (recibo emitido) — não é possível anular a liquidação aqui.')
+    }
+    if (item.status !== 'SETTLED' && item.status !== 'PAID') throw httpError(409, 'Apenas documentos pagos ou liquidados podem ser revertidos')
 
-    const settledChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status === 'SETTLED')
+    const settledChildren = (item.children ?? []).filter((c) => !c.recurrenceId && (c.status === 'SETTLED' || c.status === 'PAID'))
 
     const result = await this.prisma.$transaction(async (tx) => {
       const parent = await tx.treasuryPayable.update({
@@ -781,7 +847,7 @@ export class TreasuryPayablesService {
           paidAmount: item.tocPurchasesDocId ? null : 0,
         },
       })
-      // Cascade: reverting the parent reverts every SETTLED non-recurring child.
+      // Cascade: reverting the parent reverts every PAID/SETTLED non-recurring child.
       if (settledChildren.length > 0) {
         await tx.$executeRaw`
           UPDATE "treasury_payables"
@@ -789,14 +855,14 @@ export class TreasuryPayablesService {
           WHERE "parentId" = ${id}
             AND "recurrenceId" IS NULL
             AND "deletedAt" IS NULL
-            AND "status" = 'SETTLED'
+            AND "status" IN ('SETTLED', 'PAID')
         `
       }
       await audit(tx, {
         clientId, userId,
         action: 'payable.unsettle',
         entityType: 'Payable', entityId: id,
-        payload: { from: 'SETTLED', to: 'OPEN', cascadedChildren: settledChildren.length },
+        payload: { from: item.status, to: 'OPEN', cascadedChildren: settledChildren.length },
       })
       return parent
     })
@@ -808,6 +874,7 @@ export class TreasuryPayablesService {
   async partialPayment(clientId: string, userId: string, id: string, amount: number) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'PAID') throw httpError(409, 'Already paid')
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
     if (amount <= 0) throw httpError(400, 'Amount must be positive')
@@ -1124,7 +1191,7 @@ export class TreasuryPayablesService {
         where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
       }),
       this.prisma.treasuryPayable.aggregate({
-        where: { clientId, deletedAt: null, status: 'SETTLED', updatedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
+        where: { clientId, deletedAt: null, status: { in: ['PAID', 'SETTLED'] }, updatedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
         _sum: { totalAmount: true },
       }),
     ])
@@ -1144,11 +1211,19 @@ export class TreasuryPayablesService {
       where: { clientId, status: { in: [1, 2, 5] } },
       select: { tocId: true, dueDate: true, status: true, pendingTotal: true, grossTotal: true, raw: true },
     })
+    // Docs TOC liquidados/pagos/anulados localmente (overlay) deixam de ser
+    // pendentes — excluídos dos totais (decisão: "Pago" não conta como pendente).
+    const overriddenToc = await this.prisma.treasuryPayable.findMany({
+      where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null }, status: { in: ['PAID', 'SETTLED', 'VOID'] } },
+      select: { tocPurchasesDocId: true },
+    })
+    const overriddenTocIds = new Set(overriddenToc.map((p) => Number(p.tocPurchasesDocId)))
     const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
     let tocTotalPending = 0
     let tocOpenCount = 0
     let tocOverdue = 0
     for (const d of tocDocs) {
+      if (overriddenTocIds.has(d.tocId)) continue
       const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
       if (!PURCH_INVOICE_TYPES.has(docType)) continue
       const pending = Number(d.pendingTotal ?? d.grossTotal ?? 0)

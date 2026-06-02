@@ -93,21 +93,22 @@ export function tocStatusVariant(status: unknown): 'green' | 'yellow' | 'red' | 
 }
 
 // `settledInToc` distingue a origem do estado SETTLED: liquidado no próprio
-// TOConline → "Liquidado"; liquidado localmente nesta plataforma → "Pago".
-// Default `true` preserva "Liquidado" para todos os callers que não passam o
-// flag (movimentos, reconciliação, documentos vindos do TOC).
-export function statusLabel(status: string, settledInToc = true): string {
+// Estados de documento: "Pago" (PAID) é intermédio — pagamento registado mas
+// ainda não liquidado; "Liquidado" (SETTLED) é o fecho final (recibo no caso TOC).
+// O 2.º argumento mantém-se por compatibilidade com callers existentes mas já
+// não altera o resultado (o "Pago" passou a ser o estado PAID dedicado).
+export function statusLabel(status: string, _settledInToc = true): string {
   const map: Record<string, string> = {
-    OPEN: 'Emitido', PARTIAL: 'Parcialmente liquidado', SETTLED: 'Liquidado', VOID: 'Anulado',
+    OPEN: 'Emitido', PARTIAL: 'Parcialmente liquidado', PAID: 'Pago', SETTLED: 'Liquidado', VOID: 'Anulado',
     UNCLASSIFIED: 'Por classificar', CLASSIFIED: 'Classificado', RECONCILED: 'Reconciliado',
     DRAFT: 'Rascunho', CONFIRMED: 'Confirmado', REVERSED: 'Estornado',
   }
-  if (status === 'SETTLED' && !settledInToc) return 'Pago'
   return map[status] ?? status
 }
 
-export function statusVariant(status: string): 'green' | 'yellow' | 'red' | 'gray' | 'blue' {
+export function statusVariant(status: string): 'green' | 'yellow' | 'red' | 'gray' | 'blue' | 'teal' {
   if (['SETTLED', 'CONFIRMED', 'RECONCILED', 'CLASSIFIED'].includes(status)) return 'green'
+  if (status === 'PAID') return 'teal'
   if (['PARTIAL', 'DRAFT'].includes(status)) return 'yellow'
   if (['VOID', 'REVERSED'].includes(status)) return 'red'
   if (['OPEN', 'UNCLASSIFIED'].includes(status)) return 'blue'

@@ -227,8 +227,8 @@ export default function ReconciliationPage() {
     const todayStr = new Date().toISOString().slice(0, 10)
     const notFuture = (documentDate?: string | null) => !documentDate || documentDate.slice(0, 10) <= todayStr
     return [
-      ...(receivablesData?.items ?? []).filter((r) => r.status !== 'SETTLED').map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
-      ...(payablesData?.items ?? []).filter((p) => p.status !== 'SETTLED').map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
+      ...(receivablesData?.items ?? []).filter((r) => r.status !== 'SETTLED' && r.status !== 'PAID').map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
+      ...(payablesData?.items ?? []).filter((p) => p.status !== 'SETTLED' && p.status !== 'PAID').map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
       ...tocSalesOnly.map((d): Document => ({
         id: `toc-${d.id}`,
         reference: d.document_no,

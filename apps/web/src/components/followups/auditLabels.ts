@@ -35,7 +35,8 @@ const FIELD_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   OPEN: 'Em aberto',
   PARTIAL: 'Parcial',
-  SETTLED: 'Pago',
+  PAID: 'Pago',
+  SETTLED: 'Liquidada',
   VOID: 'Anulada',
 }
 
