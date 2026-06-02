@@ -10,6 +10,7 @@ import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, form
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
+import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import DateRangePopover from '@/components/ui/DateRangePopover'
 import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
@@ -770,7 +771,13 @@ export default function ReceivablesPage() {
       <div className="flex -m-6 min-h-[calc(100vh-4rem)]">
         <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-6">
           <div className="space-y-6">
-            <h1 className="text-2xl font-bold text-gray-900">Contas a Receber</h1>
+            <div className="flex items-center justify-between">
+              <h1 className="text-2xl font-bold text-gray-900">Contas a Receber</h1>
+              <TocSyncStatus invalidateKeys={[
+                ['receivables', selectedClientId ?? ''],
+                ['receivables-kpis', selectedClientId ?? ''],
+              ]} />
+            </div>
 
             {combinedKpis && (
               <>

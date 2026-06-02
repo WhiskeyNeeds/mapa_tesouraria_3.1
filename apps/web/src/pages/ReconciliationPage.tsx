@@ -6,8 +6,9 @@ import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, statusLabel, statusVariant } from '@/lib/utils'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
+import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import {
-  CheckSquare, Square, RefreshCw, AlertCircle, Search,
+  CheckSquare, Square, AlertCircle, Search,
   ChevronDown, ChevronRight, Undo2, SlidersHorizontal, X,
   Link2, Zap,
 } from 'lucide-react'
@@ -140,7 +141,7 @@ export default function ReconciliationPage() {
   // staleTime 0 + refetchOnMount 'always': as listas de pendentes refazem fetch
   // sempre que a página de reconciliação é mostrada, garantindo que uma fatura
   // marcada como paga/liquidada noutro sítio nunca aparece aqui sem refresh manual.
-  const { data: movementsData, refetch: refetchMovements } = useQuery({
+  const { data: movementsData } = useQuery({
     queryKey: ['movements-pending', selectedClientId],
     queryFn: () => api.get<{ items: Movement[] }>(`/treasury/${selectedClientId}/movements?status=UNCLASSIFIED,CLASSIFIED,PARTIAL&limit=500&sortBy=date&sortDir=desc`),
     enabled: !!selectedClientId,
@@ -617,9 +618,13 @@ export default function ReconciliationPage() {
           <h1 className="section-title">Reconciliação</h1>
           <p className="section-subtitle mt-0.5">Associe movimentos bancários a documentos de compra e venda</p>
         </div>
-        <button onClick={() => refetchMovements()} className="btn-ghost flex items-center gap-1.5 text-xs">
-          <RefreshCw className="w-3.5 h-3.5" /> Atualizar
-        </button>
+        <TocSyncStatus invalidateKeys={[
+          ['movements-pending', selectedClientId ?? ''],
+          ['receivables-pending', selectedClientId ?? ''],
+          ['payables-pending', selectedClientId ?? ''],
+          ['toc-sales', selectedClientId ?? ''],
+          ['toc-purchases', selectedClientId ?? ''],
+        ]} />
       </div>
 
       {/* Two-column selection */}
