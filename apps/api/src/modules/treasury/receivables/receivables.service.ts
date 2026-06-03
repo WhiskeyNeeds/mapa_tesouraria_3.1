@@ -744,6 +744,9 @@ export class TreasuryReceivablesService {
   async settle(clientId: string, userId: string, id: string) {
     id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    // Faturas do TOConline não podem ser liquidadas manualmente: a liquidação é
+    // gerida pelo recibo emitido no TOConline (sync status 3 → SETTLED).
+    if (item.tocSalesDocId) throw httpError(409, 'A liquidação de faturas do TOConline é gerida automaticamente pelo recibo no TOConline')
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided receivable')
     if (item.recurrenceId && item.parentId) {

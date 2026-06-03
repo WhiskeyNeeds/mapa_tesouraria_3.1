@@ -321,6 +321,31 @@ export default function PayablesPage() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras'>('fornecedores')
   const [outrasSubTab, setOutrasSubTab] = useState<'fechadas' | 'futuras' | 'programadas' | 'abertas'>('abertas')
+  // Filtros das "Outras Operações" são independentes por sub-separador: cada uma
+  // das 4 divisões mantém o seu próprio conjunto de filtros (aplicados no cliente).
+  type OutrasSubTab = 'fechadas' | 'futuras' | 'programadas' | 'abertas'
+  type OutrasFilterState = {
+    statusFilter: string; entitySearch: string
+    docDateFrom: string; docDateTo: string
+    dueDateFrom: string; dueDateTo: string
+    paymentDateFrom: string; paymentDateTo: string
+    isOverdue: boolean
+  }
+  const emptyOutrasFilter: OutrasFilterState = {
+    statusFilter: '', entitySearch: '', docDateFrom: '', docDateTo: '',
+    dueDateFrom: '', dueDateTo: '', paymentDateFrom: '', paymentDateTo: '', isOverdue: false,
+  }
+  const [outrasFilters, setOutrasFilters] = useState<Record<OutrasSubTab, OutrasFilterState>>({
+    abertas: { ...emptyOutrasFilter }, fechadas: { ...emptyOutrasFilter },
+    futuras: { ...emptyOutrasFilter }, programadas: { ...emptyOutrasFilter },
+  })
+  const outrasFilter = outrasFilters[outrasSubTab]
+  const setOutrasFilter = (patch: Partial<OutrasFilterState>) =>
+    setOutrasFilters((prev) => ({ ...prev, [outrasSubTab]: { ...prev[outrasSubTab], ...patch } }))
+  const clearOutrasFilter = () =>
+    setOutrasFilters((prev) => ({ ...prev, [outrasSubTab]: { ...emptyOutrasFilter } }))
+  const outrasHasFilters = (f: OutrasFilterState) =>
+    !!(f.statusFilter || f.entitySearch || f.dueDateFrom || f.dueDateTo || f.docDateFrom || f.docDateTo || f.paymentDateFrom || f.paymentDateTo || f.isOverdue)
   const [showNewOutras, setShowNewOutras] = useState(false)
   const [outrasForm, setOutrasForm] = useState(emptyOutrasForm)
   const [outrasContact, setOutrasContact] = useState<TocSupplier | null>(null)
@@ -363,18 +388,22 @@ export default function PayablesPage() {
         page: bucket === 'outras' ? '1' : String(page),
         limit: bucket === 'outras' ? '1000' : '25',
       })
-      if (isOverdueFilter) {
-        params.set('overdue', 'true')
-      } else {
-        if (statusFilter) params.set('status', statusFilter)
+      // O bucket "outras" traz o conjunto completo sem filtros: a filtragem é
+      // feita no cliente, de forma independente por sub-separador.
+      if (bucket !== 'outras') {
+        if (isOverdueFilter) {
+          params.set('overdue', 'true')
+        } else {
+          if (statusFilter) params.set('status', statusFilter)
+        }
+        if (entitySearch) params.set('entityName', entitySearch)
+        if (dueDateFrom) params.set('dueDateFrom', dueDateFrom)
+        if (dueDateTo) params.set('dueDateTo', dueDateTo)
+        if (docDateFrom) params.set('docDateFrom', docDateFrom)
+        if (docDateTo) params.set('docDateTo', docDateTo)
+        if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
+        if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
       }
-      if (entitySearch) params.set('entityName', entitySearch)
-      if (dueDateFrom) params.set('dueDateFrom', dueDateFrom)
-      if (dueDateTo) params.set('dueDateTo', dueDateTo)
-      if (docDateFrom) params.set('docDateFrom', docDateFrom)
-      if (docDateTo) params.set('docDateTo', docDateTo)
-      if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
-      if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
       if (sortBy !== 'dueDate' || sortDir !== 'asc') { params.set('sortBy', sortBy); params.set('sortDir', sortDir) }
       return api.get<{ total: number; items: Payable[] }>(`/treasury/${selectedClientId}/payables?${params}`)
     },
@@ -724,10 +753,32 @@ export default function PayablesPage() {
     if (p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd) return 'futuras' as const
     return isClosed(p.status) ? ('fechadas' as const) : ('abertas' as const)
   }
+  const matchesOutrasFilter = (p: Payable, f: OutrasFilterState): boolean => {
+    if (f.entitySearch) {
+      const q = f.entitySearch.toLowerCase()
+      if (!`${p.entityName ?? ''} ${p.reference ?? ''}`.toLowerCase().includes(q)) return false
+    }
+    if (f.statusFilter && !f.statusFilter.split(',').includes(p.status)) return false
+    const dueYmd = String(p.dueDate).slice(0, 10)
+    if (f.dueDateFrom && dueYmd < f.dueDateFrom) return false
+    if (f.dueDateTo && dueYmd > f.dueDateTo) return false
+    const docYmd = p.documentDate ? String(p.documentDate).slice(0, 10) : ''
+    if (f.docDateFrom && (!docYmd || docYmd < f.docDateFrom)) return false
+    if (f.docDateTo && (!docYmd || docYmd > f.docDateTo)) return false
+    const payYmd = p.promisedPaymentDate ? String(p.promisedPaymentDate).slice(0, 10) : ''
+    if (f.paymentDateFrom && (!payYmd || payYmd < f.paymentDateFrom)) return false
+    if (f.paymentDateTo && (!payYmd || payYmd > f.paymentDateTo)) return false
+    if (f.isOverdue) {
+      const isActive = p.status !== 'PAID' && p.status !== 'SETTLED' && p.status !== 'VOID'
+      if (!(isActive && new Date(dueYmd).getTime() < Date.now())) return false
+    }
+    return true
+  }
+  // Contagem por sub-separador é sempre o total da divisão, independente dos filtros.
   const outrasCount = { fechadas: 0, futuras: 0, programadas: 0, abertas: 0 }
   for (const p of outrasAll) outrasCount[outrasCategorise(p)]++
   const outrasRows = (() => {
-    const filtered = outrasAll.filter((p) => outrasCategorise(p) === outrasSubTab)
+    const filtered = outrasAll.filter((p) => outrasCategorise(p) === outrasSubTab && matchesOutrasFilter(p, outrasFilter))
     if (sortBy === 'reference') {
       return [...filtered].sort((a, b) => {
         const cmp = refSortKey(a.reference).localeCompare(refSortKey(b.reference))
@@ -986,7 +1037,7 @@ export default function PayablesPage() {
                                   </button>
                                 )
                               })()}
-                              {(p.status === 'OPEN' || p.status === 'PARTIAL' || p.status === 'PAID') && (() => {
+                              {p.origin !== 'TOCONLINE' && (p.status === 'OPEN' || p.status === 'PARTIAL' || p.status === 'PAID') && (() => {
                                 const isFutureRec = !!(p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd)
                                 return (
                                   <button
@@ -1210,49 +1261,51 @@ export default function PayablesPage() {
                 <input
                   className="input pl-8 text-sm py-1 w-44"
                   placeholder="Fornecedor ou referência..."
-                  value={entitySearch}
-                  onChange={(e) => { setEntitySearch(e.target.value); setPage(1) }}
+                  value={outrasFilter.entitySearch}
+                  onChange={(e) => setOutrasFilter({ entitySearch: e.target.value })}
                 />
-                {entitySearch && (
-                  <button onClick={() => { setEntitySearch(''); setPage(1) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                {outrasFilter.entitySearch && (
+                  <button onClick={() => setOutrasFilter({ entitySearch: '' })} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                     <X className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
-              <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
-                <option value="">Todos os estados</option>
-                <option value="OPEN,PARTIAL">Pendente</option>
-                <option value="OPEN">Emitido / Em aberto</option>
-                <option value="PARTIAL">Parcialmente liquidado</option>
-                <option value="SETTLED">Liquidado</option>
-                <option value="VOID">Anulado</option>
-              </select>
+              {outrasSubTab === 'abertas' && (
+                <select className="input w-auto text-sm py-1" value={outrasFilter.statusFilter} onChange={(e) => setOutrasFilter({ statusFilter: e.target.value })}>
+                  <option value="">Todos os estados</option>
+                  <option value="OPEN,PARTIAL">Pendente</option>
+                  <option value="OPEN">Emitido / Em aberto</option>
+                  <option value="PARTIAL">Parcialmente liquidado</option>
+                  <option value="SETTLED">Liquidado</option>
+                  <option value="VOID">Anulado</option>
+                </select>
+              )}
               <DateRangePopover
                 label="Data doc."
-                startDate={docDateFrom}
-                endDate={docDateTo}
-                onChange={(s, e) => { setDocDateFrom(s); setDocDateTo(e); setPage(1) }}
+                startDate={outrasFilter.docDateFrom}
+                endDate={outrasFilter.docDateTo}
+                onChange={(s, e) => setOutrasFilter({ docDateFrom: s, docDateTo: e })}
               />
               <DateRangePopover
                 label="Vencimento"
-                startDate={dueDateFrom}
-                endDate={dueDateTo}
-                onChange={(s, e) => { setDueDateFrom(s); setDueDateTo(e); setPage(1) }}
+                startDate={outrasFilter.dueDateFrom}
+                endDate={outrasFilter.dueDateTo}
+                onChange={(s, e) => setOutrasFilter({ dueDateFrom: s, dueDateTo: e })}
               />
               <DateRangePopover
                 label="Pagamento"
-                startDate={paymentDateFrom}
-                endDate={paymentDateTo}
-                onChange={(s, e) => { setPaymentDateFrom(s); setPaymentDateTo(e); setPage(1) }}
+                startDate={outrasFilter.paymentDateFrom}
+                endDate={outrasFilter.paymentDateTo}
+                onChange={(s, e) => setOutrasFilter({ paymentDateFrom: s, paymentDateTo: e })}
               />
               <button
-                onClick={() => { setIsOverdueFilter((v) => !v); setPage(1) }}
-                className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isOverdueFilter ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                onClick={() => setOutrasFilter({ isOverdue: !outrasFilter.isOverdue })}
+                className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${outrasFilter.isOverdue ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
               >
                 <AlertTriangle className="w-3.5 h-3.5" /> Vencidas
               </button>
-              {hasFilters && (
-                <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
+              {outrasHasFilters(outrasFilter) && (
+                <button onClick={clearOutrasFilter} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                   <X className="w-3.5 h-3.5" /> Limpar
                 </button>
               )}
@@ -2023,8 +2076,8 @@ export default function PayablesPage() {
                   )
                 })()}
 
-                {/* Marcar como Liquidada — direto ou a partir de "Pago" */}
-                {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
+                {/* Marcar como Liquidada — direto ou a partir de "Pago" (não disponível em documentos TOC) */}
+                {panelDoc.origin !== 'TOCONLINE' && (panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
                   const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
                   return (
                     <button
