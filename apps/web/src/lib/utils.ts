@@ -108,7 +108,7 @@ export function statusLabel(status: string, _settledInToc = true): string {
 
 export function statusVariant(status: string): 'green' | 'yellow' | 'red' | 'gray' | 'blue' | 'teal' | 'purple' {
   if (['SETTLED', 'CONFIRMED', 'RECONCILED', 'CLASSIFIED'].includes(status)) return 'green'
-  if (status === 'PAID') return 'purple'
+  if (status === 'PAID') return 'teal'
   if (['PARTIAL', 'DRAFT'].includes(status)) return 'yellow'
   if (['VOID', 'REVERSED'].includes(status)) return 'red'
   if (['OPEN', 'UNCLASSIFIED'].includes(status)) return 'blue'
