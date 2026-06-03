@@ -174,6 +174,22 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
     }))
   })
 
+  fastify.patch(`${prefix}/bulk-category`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids, categoryId } = request.body as { ids: string[]; categoryId: string }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    if (!categoryId) return reply.status(400).send({ message: 'Categoria em falta' })
+    return reply.send(await svc.bulkSetCategory(clientId, request.user.sub, ids, categoryId))
+  })
+
+  fastify.patch(`${prefix}/bulk-status`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids, status } = request.body as { ids: string[]; status: 'PAID' | 'SETTLED' | 'OPEN' | 'VOID' }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    if (!['PAID', 'SETTLED', 'OPEN', 'VOID'].includes(status)) return reply.status(400).send({ message: 'Estado inválido' })
+    return reply.send(await svc.bulkSetStatus(clientId, request.user.sub, ids, status))
+  })
+
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const body = request.body as Parameters<TreasuryReceivablesService['update']>[3]
