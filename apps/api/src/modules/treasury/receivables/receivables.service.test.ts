@@ -37,3 +37,25 @@ describe('bulkSetStatus', () => {
     expect(res).toEqual({ updated: 1, failed: 1, errors: [{ id: 'bad', error: 'Already paid' }] })
   })
 })
+
+describe('void', () => {
+  it('bloqueia anular uma fatura TOConline liquidada (status 3) mesmo com status local OPEN', async () => {
+    const svc = makeService()
+    vi.spyOn(svc as never as { resolveLocalReceivableId: () => Promise<string> }, 'resolveLocalReceivableId').mockResolvedValue('r1')
+    vi.spyOn(svc, 'getById').mockResolvedValue({
+      id: 'r1', status: 'OPEN', tocSalesDocId: '123', _tocOverlay: { status: 3 },
+    } as never)
+
+    await expect(svc.void('c1', 'u1', 'toc-123')).rejects.toThrow(/liquidada no TOConline/)
+  })
+
+  it('bloqueia anular um documento já liquidado localmente', async () => {
+    const svc = makeService()
+    vi.spyOn(svc as never as { resolveLocalReceivableId: () => Promise<string> }, 'resolveLocalReceivableId').mockResolvedValue('r2')
+    vi.spyOn(svc, 'getById').mockResolvedValue({
+      id: 'r2', status: 'SETTLED', tocSalesDocId: null, _tocOverlay: null,
+    } as never)
+
+    await expect(svc.void('c1', 'u1', 'r2')).rejects.toThrow(/settled/)
+  })
+})

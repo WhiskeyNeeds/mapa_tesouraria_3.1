@@ -951,6 +951,13 @@ export class TreasuryPayablesService {
   async void(clientId: string, userId: string, id: string) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    // Faturas liquidadas no TOConline (recibo emitido, status 3) refletem a
+    // contabilidade — não podem ser anuladas aqui (o status local fica OPEN, a
+    // liquidação vive no espelho TOC). A anulação tem de ser feita no TOConline.
+    const tocOverlay = (item as { _tocOverlay?: { status?: number | null } | null })._tocOverlay
+    if (item.tocPurchasesDocId && mapTocStatus(tocOverlay?.status ?? null) === 'SETTLED') {
+      throw httpError(409, 'Fatura liquidada no TOConline (recibo emitido) — não é possível anulá-la aqui.')
+    }
     if (item.status === 'SETTLED') throw httpError(409, 'Cannot void a settled payable')
     const result = await this.prisma.treasuryPayable.update({ where: { id }, data: { status: 'VOID' } })
     await audit(this.prisma, {
