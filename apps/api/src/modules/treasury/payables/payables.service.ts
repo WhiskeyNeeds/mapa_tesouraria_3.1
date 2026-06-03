@@ -575,7 +575,7 @@ export class TreasuryPayablesService {
     reference: string
     documentDate: string
     dueDate: string
-    categoryId: string
+    categoryId: string | null
     budgetId: string | null
     budgetAutoAssigned: boolean
     totalAmount: number
@@ -630,7 +630,9 @@ export class TreasuryPayablesService {
       }
     }
 
-    if (data.categoryId) {
+    if (data.categoryId === null) {
+      updateData.category = { disconnect: true }
+    } else if (data.categoryId) {
       const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
       if (!category) throw httpError(404, 'Category not found')
       if (category.type !== 'EXPENSE') throw httpError(400, `Categoria '${category.name}' é de Receita; não pode ser associada a uma conta a pagar`)
@@ -704,6 +706,50 @@ export class TreasuryPayablesService {
     }
 
     return updated
+  }
+
+  /** Atribuição de categoria em massa. Reaproveita `update()` por documento (que
+   *  resolve docs TOC para um registo local, valida a categoria, faz cascade às
+   *  parcelas e regista auditoria). Resiliente: documentos que falhem não abortam
+   *  os restantes. Devolve a contagem de sucessos e os erros por id. */
+  async bulkSetCategory(clientId: string, userId: string, ids: string[], categoryId: string) {
+    const category = await this.prisma.treasuryCategory.findFirst({ where: { id: categoryId, clientId, deletedAt: null } })
+    if (!category) throw httpError(404, 'Category not found')
+    if (category.type !== 'EXPENSE') throw httpError(400, `Categoria '${category.name}' é de Receita; não pode ser associada a contas a pagar`)
+
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        await this.update(clientId, userId, id, { categoryId })
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
+  /** Atribuição de estado em massa. Despacha cada documento para o método
+   *  por-documento correspondente (`pay`/`settle`/`unsettle`/`void`), herdando
+   *  todas as regras de negócio, cascatas às parcelas e auditoria. Resiliente:
+   *  documentos que não possam transitar (ex.: liquidar fatura TOConline, anular
+   *  já liquidado) são apanhados e não abortam os restantes. */
+  async bulkSetStatus(clientId: string, userId: string, ids: string[], status: 'PAID' | 'SETTLED' | 'OPEN' | 'VOID') {
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        if (status === 'PAID') await this.pay(clientId, userId, id)
+        else if (status === 'SETTLED') await this.settle(clientId, userId, id)
+        else if (status === 'OPEN') await this.unsettle(clientId, userId, id)
+        else await this.void(clientId, userId, id)
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
   }
 
   private async syncParentStatus(clientId: string, parentId: string) {
