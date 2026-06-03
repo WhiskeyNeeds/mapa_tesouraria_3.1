@@ -1009,6 +1009,7 @@ export default function ReceivablesPage() {
                         <option value="OPEN,PARTIAL">Pendente</option>
                         <option value="OPEN">Emitido / Em aberto</option>
                         <option value="PARTIAL">Parcialmente liquidado</option>
+                        <option value="PAID">Pago</option>
                         <option value="SETTLED">Liquidado</option>
                         <option value="VOID">Anulado</option>
                       </select>
