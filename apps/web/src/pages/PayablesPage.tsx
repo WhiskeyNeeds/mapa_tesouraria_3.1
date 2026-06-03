@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo } from 'react'
+import { Fragment, useState, useMemo, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -14,6 +14,7 @@ import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import DateRangePopover from '@/components/ui/DateRangePopover'
 import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
+import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
@@ -82,7 +83,7 @@ interface Payable {
   _statusToc?: string | null
   _statusDiffersFromToc?: boolean
 }
-interface Category { id: string; name: string; type: string }
+interface Category { id: string; name: string; type: string; color?: string | null }
 interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
 interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
 interface TocSupplier { id: string | number; business_name?: string; tax_registration_number?: string; [key: string]: unknown }
@@ -238,7 +239,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
   if (isLoading) {
     return (
       <tr>
-        <td colSpan={8} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+        <td colSpan={9} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
           <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar pagamentos...
         </td>
       </tr>
@@ -248,7 +249,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
   if (!payments.length) {
     return (
       <tr>
-        <td colSpan={8} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+        <td colSpan={9} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
           Sem pagamentos associados
         </td>
       </tr>
@@ -274,6 +275,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
           <td className="px-5 py-2 text-xs text-gray-500">{pm.date ? formatDate(pm.date) : '—'}</td>
           <td className="px-5 py-2" />
           <td className="px-5 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(pm.gross_total)}</td>
+          <td className="px-5 py-2" />
           <td className="px-5 py-2" />
           <td className="px-3 py-2" />
         </tr>
@@ -319,6 +321,10 @@ export default function PayablesPage() {
   const [partialAmount, setPartialAmount] = useState('')
   const [partialMax, setPartialMax] = useState(0)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  // Seleção para atribuição de categoria em massa (âmbito: página visível).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkCategoryId, setBulkCategoryId] = useState('')
+  const [bulkStatus, setBulkStatus] = useState('')
   const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras'>('fornecedores')
   const [outrasSubTab, setOutrasSubTab] = useState<'fechadas' | 'futuras' | 'programadas' | 'abertas'>('abertas')
   // Filtros das "Outras Operações" são independentes por sub-separador: cada uma
@@ -502,6 +508,53 @@ export default function PayablesPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); toast.success('Documento anulado.') },
     onError: (e) => toast.error((e as Error).message),
   })
+
+  const bulkCategory = useMutation({
+    mutationFn: ({ ids, categoryId }: { ids: string[]; categoryId: string }) =>
+      api.patch<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/payables/bulk-category`, { ids, categoryId }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      toast.success(res.failed > 0
+        ? `Categoria aplicada a ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `Categoria aplicada a ${res.updated} documento(s).`)
+      setSelectedIds(new Set()); setBulkCategoryId('')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const bulkStatusMut = useMutation({
+    mutationFn: ({ ids, status }: { ids: string[]; status: string }) =>
+      api.patch<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/payables/bulk-status`, { ids, status }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      toast.success(res.failed > 0
+        ? `Estado aplicado a ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `Estado aplicado a ${res.updated} documento(s).`)
+      setSelectedIds(new Set()); setBulkStatus('')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  // Atribuição unitária de categoria (picker inline na célula, como nos movimentos).
+  const classify = useMutation({
+    mutationFn: ({ id, categoryId }: { id: string; categoryId: string | null }) =>
+      api.patch(`/treasury/${selectedClientId}/payables/${id}`, { categoryId }),
+    onSuccess: (_, { categoryId }) => {
+      qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      toast.success(categoryId === null ? 'Categoria removida.' : 'Documento classificado.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const toggleSelect = (id: string) => setSelectedIds((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleSelectMany = (ids: string[], select: boolean) => setSelectedIds((prev) => {
+    const next = new Set(prev)
+    for (const id of ids) { if (select) next.add(id); else next.delete(id) }
+    return next
+  })
+  // A seleção é por página visível: limpa ao trocar de separador, sub-separador ou página.
+  useEffect(() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkStatus('') }, [activeTab, outrasSubTab, page])
 
   const payPayable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/pay`, {}),
@@ -736,6 +789,43 @@ export default function PayablesPage() {
     if (p._src === 'toc' && p._tocRaw) return { _src: 'toc' as const, d: p._tocRaw, item: p }
     return { _src: 'local' as const, p }
   })
+  // Ids selecionáveis visíveis no separador Fornecedores (para o "selecionar todos").
+  // `outrasVisibleIds` é definido mais abaixo, após `outrasRows`.
+  const fornecedoresVisibleIds = rows.map((row) => row._src === 'local' ? row.p.id : row.item.id)
+  const allSelected = (ids: string[]) => ids.length > 0 && ids.every((id) => selectedIds.has(id))
+
+  // Barra de ação de categorização em massa, partilhada pelos dois separadores.
+  const renderBulkBar = () => selectedIds.size === 0 ? null : (
+    <div className="sticky -top-6 z-20 px-5 py-3 bg-primary-50 border-b border-primary-100 flex items-center gap-3 flex-wrap">
+      <span className="text-sm font-medium text-primary-800">{selectedIds.size} selecionado(s)</span>
+      <select className="input w-auto text-sm py-1" value={bulkCategoryId} onChange={(e) => setBulkCategoryId(e.target.value)}>
+        <option value="">Atribuir categoria…</option>
+        {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+      <button
+        className="btn-primary text-sm py-1.5 px-3"
+        disabled={!bulkCategoryId || bulkCategory.isPending}
+        onClick={() => bulkCategory.mutate({ ids: [...selectedIds], categoryId: bulkCategoryId })}
+      >
+        {bulkCategory.isPending ? 'A aplicar…' : 'Aplicar'}
+      </button>
+      <select className="input w-auto text-sm py-1" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
+        <option value="">Atribuir estado…</option>
+        <option value="PAID">Pago</option>
+        <option value="SETTLED">Liquidado</option>
+        <option value="OPEN">Reverter p/ Em aberto</option>
+        <option value="VOID">Anulado</option>
+      </select>
+      <button
+        className="btn-primary text-sm py-1.5 px-3"
+        disabled={!bulkStatus || bulkStatusMut.isPending}
+        onClick={() => bulkStatusMut.mutate({ ids: [...selectedIds], status: bulkStatus })}
+      >
+        {bulkStatusMut.isPending ? 'A aplicar…' : 'Aplicar'}
+      </button>
+      <button className="text-sm text-gray-500 hover:text-gray-700" onClick={() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkStatus('') }}>Limpar seleção</button>
+    </div>
+  )
 
   // KPIs vêm do endpoint /kpis, que já agrega locais + TOC pendentes.
   // Subtraímos `countOverdue` ao `countOpen` para manter a UX existente
@@ -787,10 +877,11 @@ export default function PayablesPage() {
     }
     return filtered
   })()
+  const outrasVisibleIds = outrasRows.map((p) => p.id)
 
   return (
     <>
-    <div className="flex -m-6 min-h-[calc(100vh-4rem)]">
+    <div className="flex -m-6 h-[calc(100vh-4rem)]">
     <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-6">
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -894,12 +985,22 @@ export default function PayablesPage() {
               </button>
             </div>
 
+            {renderBulkBar()}
+
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                    <th onClick={() => toggleSort('reference')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
-                      Documento <SortIcon field="reference" />
+                    <th className="text-left px-5 py-3 select-none">
+                      <span className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
+                          checked={allSelected(fornecedoresVisibleIds)}
+                          onChange={(e) => toggleSelectMany(fornecedoresVisibleIds, e.target.checked)}
+                        />
+                        <span className="cursor-pointer hover:text-gray-700" onClick={() => toggleSort('reference')}>Documento <SortIcon field="reference" /></span>
+                      </span>
                     </th>
                     <th onClick={() => toggleSort('entityName')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                       Fornecedor <SortIcon field="entityName" />
@@ -919,6 +1020,7 @@ export default function PayablesPage() {
                     <th onClick={() => toggleSort('status')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">
                       Estado <SortIcon field="status" />
                     </th>
+                    <th className="text-left px-5 py-3">Categoria</th>
                     <th className="w-16 px-3 py-3" />
                   </tr>
                 </thead>
@@ -930,7 +1032,13 @@ export default function PayablesPage() {
                         <tr key={`l-${p.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => { setPanelDoc(p); setPanelTocDoc(null); setPanelTab((p.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(p.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                           <td className="px-5 py-3">
                             <div className="flex items-start gap-1.5">
-                              <span className="w-4 flex-shrink-0" />
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer flex-shrink-0"
+                                checked={selectedIds.has(p.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={() => toggleSelect(p.id)}
+                              />
                               <div>
                                 <div className="flex items-center gap-1.5">
                                   <span className="font-medium text-gray-900">{p.reference}</span>
@@ -993,6 +1101,14 @@ export default function PayablesPage() {
                             {p._statusDiffersFromToc && (
                               <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${p._statusToc ?? '—'}`}>(Local)</span>
                             )}
+                          </td>
+                          <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                            <InlineCategoryPicker
+                              category={p.category}
+                              categories={categories}
+                              typeLabel="Despesa"
+                              onSelect={(categoryId) => classify.mutate({ id: p.id, categoryId })}
+                            />
                           </td>
                           <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1092,7 +1208,7 @@ export default function PayablesPage() {
                           onClick={() => {
                             setPanelDoc(row.item)
                             setPanelTocDoc(d)
-                            setPanelTab('details')
+                            setPanelTab((row.item.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details')
                             setPanelSection(null)
                             setPanelPromisedDate(row.item.promisedPaymentDate?.slice(0, 10) ?? '')
                             setSplitCount(2)
@@ -1101,6 +1217,13 @@ export default function PayablesPage() {
                         >
                           <td className="px-5 py-3">
                             <div className="flex items-start gap-1.5">
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer flex-shrink-0"
+                                checked={selectedIds.has(row.item.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={() => toggleSelect(row.item.id)}
+                              />
                               {expandCount > 0 ? (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
@@ -1114,7 +1237,18 @@ export default function PayablesPage() {
                                 <span className="w-4 flex-shrink-0" />
                               )}
                               <div>
-                                <div className="font-medium text-gray-900">{ref}</div>
+                                <div className="flex items-center gap-1.5">
+                                  {(() => {
+                                    const n = (row.item.children ?? []).filter((c) => !c.recurrenceId).length
+                                    return n > 0 ? (
+                                      <span title={`Dividida em ${n} parcelas`} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[11px] font-semibold whitespace-nowrap">
+                                        <Scissors className="w-3 h-3" />
+                                        {n}
+                                      </span>
+                                    ) : null
+                                  })()}
+                                  <span className="font-medium text-gray-900">{ref}</span>
+                                </div>
                                 <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
                               </div>
                             </div>
@@ -1143,6 +1277,14 @@ export default function PayablesPage() {
                               <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${row.item._statusToc ?? '—'}`}>(Local)</span>
                             )}
                           </td>
+                          <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                            <InlineCategoryPicker
+                              category={row.item.category}
+                              categories={categories}
+                              typeLabel="Despesa"
+                              onSelect={(categoryId) => classify.mutate({ id: row.item.id, categoryId })}
+                            />
+                          </td>
                           <td className="px-3 py-3" />
                         </tr>
                         {isExpanded && (
@@ -1164,6 +1306,7 @@ export default function PayablesPage() {
                                 <td className="px-5 py-2 text-right text-xs text-amber-700 font-medium">−{formatCurrency(nc.gross_total)}</td>
                                 <td className="px-5 py-2" />
                                 <td className="px-5 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
+                                <td className="px-5 py-2" />
                                 <td className="px-3 py-2" />
                               </tr>
                             ))}
@@ -1181,7 +1324,7 @@ export default function PayablesPage() {
                     )
                   })}
                   {rows.length === 0 && (
-                    <tr><td colSpan={8} className="px-5 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
+                    <tr><td colSpan={9} className="px-5 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
                   )}
                 </tbody>
                 {rows.length > 0 && (() => {
@@ -1197,7 +1340,7 @@ export default function PayablesPage() {
                           <td className="px-5 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
                           <td className="px-5 py-2 text-right text-gray-400">—</td>
                           <td className="px-5 py-2 text-right text-red-700">{formatCurrency(combinedKpis.totalPending)}</td>
-                          <td colSpan={1} />
+                          <td colSpan={2} />
                         </tr>
                       </tfoot>
                     )
@@ -1211,7 +1354,7 @@ export default function PayablesPage() {
                         <td colSpan={4} className="px-5 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
                         <td className="px-5 py-2 text-right">{formatCurrency(totalAmt)}</td>
                         <td className="px-5 py-2 text-right text-red-700">{formatCurrency(pendingAmt)}</td>
-                        <td colSpan={2} />
+                        <td colSpan={3} />
                       </tr>
                     </tfoot>
                   )
@@ -1310,17 +1453,29 @@ export default function PayablesPage() {
                 </button>
               )}
             </div>
+            {renderBulkBar()}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                    <th onClick={() => toggleSort('reference')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
+                    <th className="text-left px-5 py-3 select-none">
+                      <span className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
+                          checked={allSelected(outrasVisibleIds)}
+                          onChange={(e) => toggleSelectMany(outrasVisibleIds, e.target.checked)}
+                        />
+                        <span className="cursor-pointer hover:text-gray-700" onClick={() => toggleSort('reference')}>Documento <SortIcon field="reference" /></span>
+                      </span>
+                    </th>
                     <th onClick={() => toggleSort('entityName')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Fornecedor <SortIcon field="entityName" /></th>
                     <th onClick={() => toggleSort('dueDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Vencimento <SortIcon field="dueDate" /></th>
                     <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Pagamento <SortIcon field="promisedPaymentDate" /></th>
                     <th onClick={() => toggleSort('totalAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Total <SortIcon field="totalAmount" /></th>
                     <th onClick={() => toggleSort('pendingAmount')} className="text-right px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
                     <th onClick={() => toggleSort('status')} className="text-left px-5 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
+                    <th className="text-left px-5 py-3">Categoria</th>
                     <th className="w-16 px-3 py-3" />
                   </tr>
                 </thead>
@@ -1339,7 +1494,13 @@ export default function PayablesPage() {
                       <tr key={`o-${p.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => { setPanelDoc(p); setPanelTocDoc(null); setPanelTab((p.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(p.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
                         <td className="px-5 py-3">
                           <div className="flex items-start gap-1.5">
-                            <span className="w-4 flex-shrink-0" />
+                            <input
+                              type="checkbox"
+                              className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer flex-shrink-0"
+                              checked={selectedIds.has(p.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={() => toggleSelect(p.id)}
+                            />
                             <div>
                               <div className="flex items-center gap-1.5">
                                 <span className="font-medium text-gray-900">{p.reference}</span>
@@ -1383,6 +1544,14 @@ export default function PayablesPage() {
                           )}
                         </td>
                         <td className="px-5 py-3"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status, p._statusToc === 'SETTLED')}</Badge></td>
+                        <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                          <InlineCategoryPicker
+                            category={p.category}
+                            categories={categories}
+                            typeLabel="Despesa"
+                            onSelect={(categoryId) => classify.mutate({ id: p.id, categoryId })}
+                          />
+                        </td>
                         <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
@@ -1436,7 +1605,7 @@ export default function PayablesPage() {
                     }
 
                     if (outrasRows.length === 0) {
-                      return <tr><td colSpan={8} className="px-5 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
+                      return <tr><td colSpan={9} className="px-5 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
                     }
 
                     return outrasRows.map(renderRow)
