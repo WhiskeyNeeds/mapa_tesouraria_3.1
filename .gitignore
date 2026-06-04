@@ -4,3 +4,11 @@ node_modules
 
 # Compiled output — reproducível com npm run build
 apps/api/dist
+apps/web/dist
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Vite config compiled artifacts (gerados quando o tsc compila vite.config.ts)
+apps/web/vite.config.d.ts
+apps/web/vite.config.js
