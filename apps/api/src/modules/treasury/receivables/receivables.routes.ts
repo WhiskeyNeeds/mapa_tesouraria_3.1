@@ -26,6 +26,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       status?: string
       origin?: TreasuryDocOrigin
       categoryId?: string
+      uncategorized?: string
       entityName?: string
       dueDateFrom?: string
       dueDateTo?: string
@@ -50,6 +51,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.list(clientId, {
       ...q,
       status: statusValue,
+      uncategorized: q.uncategorized === 'true',
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
       overdue: q.overdue === 'true',
       docDateFrom: q.docDateFrom,

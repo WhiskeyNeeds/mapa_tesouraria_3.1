@@ -186,6 +186,7 @@ export class TreasuryPayablesService {
     status?: TreasuryDocStatus | TreasuryDocStatus[]
     origin?: TreasuryDocOrigin
     categoryId?: string
+    uncategorized?: boolean
     entityName?: string
     dueDateFrom?: string
     dueDateTo?: string
@@ -210,7 +211,7 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusList: TreasuryDocStatus[] | undefined = overdue
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -285,6 +286,7 @@ export class TreasuryPayablesService {
       if (bucket === 'outras' && item.tocPurchasesDocId != null) return false
       if (bucket === 'fornecedores' && item.tocPurchasesDocId == null) return false
       if (statusList && !statusList.includes(item.status)) return false
+      if (uncategorized && item.category != null) return false
       if (origin && item.origin !== origin) return false
       if (entityQuery) {
         const en = (item.entityName ?? '').toLowerCase()
@@ -1290,12 +1292,39 @@ export class TreasuryPayablesService {
       if (isOverdue) tocOverdue += 1
     }
 
+    // Contadores dos cartões compactos clicáveis (dataset completo, com overlay TOC).
+    const cardItems = (await this.list(clientId, { limit: 1_000_000, page: 1 })).items
+    const startToday = new Date(); startToday.setHours(0, 0, 0, 0)
+    const wd = startToday.getDay() // 0=Dom … 6=Sáb
+    const weekStart = new Date(startToday); weekStart.setDate(startToday.getDate() + (wd === 0 ? -6 : 1 - wd))
+    const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7) // exclusivo
+    const isPending = (s: string) => s === 'OPEN' || s === 'PARTIAL'
+    let cUncat = 0, cPending = 0, cOverdue = 0, cWeek = 0, cPastPay = 0
+    for (const it of cardItems) {
+      if (it.status !== 'VOID' && it.category == null) cUncat++
+      if (isPending(it.status)) {
+        cPending++
+        if (it.dueDate != null && it.dueDate < startToday) cOverdue++
+        if (it.promisedPaymentDate != null) {
+          if (it.promisedPaymentDate >= weekStart && it.promisedPaymentDate < weekEnd) cWeek++
+          if (it.promisedPaymentDate < startToday) cPastPay++
+        }
+      }
+    }
+
     return {
       totalPending: Number(totalOpenLocal._sum?.pendingAmount ?? 0) + tocTotalPending,
       countOpen: totalOpenLocal._count + tocOpenCount,
       countOverdue: overdueLocal + tocOverdue,
       paidThisMonth: Number(paidMonth._sum?.totalAmount ?? 0),
       aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
+      cards: {
+        uncategorized: cUncat,
+        pending: cPending,
+        overdue: cOverdue,
+        dueThisWeek: cWeek,
+        pastPaymentDeadline: cPastPay,
+      },
     }
   }
 }

@@ -848,9 +848,9 @@ export default function ReceivablesPage() {
     } catch { /* ignora erros silenciosamente */ }
   }
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter)
   function clearFilters() {
-    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setPage(1)
+    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setActiveCard(null); setPage(1)
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -995,6 +995,29 @@ export default function ReceivablesPage() {
                   />
                   <KpiCard title="Recebido este mês" value={formatCurrency(combinedKpis.settledThisMonth)} />
                 </div>
+                {kpis?.cards && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    {([
+                      ['uncategorized', 'Sem categoria', kpis.cards.uncategorized],
+                      ['pending', 'Pendentes / Em aberto', kpis.cards.pending],
+                      ['overdue', 'Vencidas', kpis.cards.overdue],
+                      ['thisWeek', 'A receber esta semana', kpis.cards.dueThisWeek],
+                      ['pastDeadline', 'Passou prazo pagamento', kpis.cards.pastPaymentDeadline],
+                    ] as const).map(([key, label, count]) => {
+                      const active = activeCard === key
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => applyCard(key)}
+                          className={`rounded-xl border px-3 py-2 text-left flex items-center justify-between gap-2 transition-all ${active ? 'border-primary-300 bg-primary-50 shadow-sm' : 'border-gray-100 bg-white hover:border-gray-200 hover:shadow-card-md'}`}
+                        >
+                          <span className="text-[11px] font-medium text-gray-500 leading-tight">{label}</span>
+                          <span className={`text-lg font-bold tabular-nums ${active ? 'text-primary-700' : 'text-gray-900'}`}>{count}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </>
             )}
 
@@ -1038,7 +1061,7 @@ export default function ReceivablesPage() {
                           </button>
                         )}
                       </div>
-                      <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
+                      <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setUncategorizedFilter(false); setActiveCard(null); setPage(1) }}>
                         <option value="">Todos os estados</option>
                         <option value="OPEN,PARTIAL">Pendente</option>
                         <option value="OPEN">Emitido / Em aberto</option>
@@ -1065,12 +1088,6 @@ export default function ReceivablesPage() {
                         endDate={paymentDateTo}
                         onChange={(s, e) => { setPaymentDateFrom(s); setPaymentDateTo(e); setPage(1) }}
                       />
-                      <button
-                        onClick={() => { setIsOverdueFilter((v) => !v); setPage(1) }}
-                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isOverdueFilter ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5" /> Vencidas
-                      </button>
                       {hasFilters && (
                         <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                           <X className="w-3.5 h-3.5" /> Limpar
@@ -1541,12 +1558,6 @@ export default function ReceivablesPage() {
                         endDate={outrasFilter.paymentDateTo}
                         onChange={(s, e) => setOutrasFilter({ paymentDateFrom: s, paymentDateTo: e })}
                       />
-                      <button
-                        onClick={() => setOutrasFilter({ isOverdue: !outrasFilter.isOverdue })}
-                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${outrasFilter.isOverdue ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5" /> Vencidas
-                      </button>
                       {outrasHasFilters(outrasFilter) && (
                         <button onClick={clearOutrasFilter} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                           <X className="w-3.5 h-3.5" /> Limpar

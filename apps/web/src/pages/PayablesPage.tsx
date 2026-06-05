@@ -16,7 +16,7 @@ import DateRangePopover from '@/components/ui/DateRangePopover'
 import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
-import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye } from 'lucide-react'
+import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -316,6 +316,8 @@ export default function PayablesPage() {
   const [form, setForm] = useState(emptyForm)
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isOverdueFilter, setIsOverdueFilter] = useState(false)
+  const [uncategorizedFilter, setUncategorizedFilter] = useState(false)
+  const [activeCard, setActiveCard] = useState<'uncategorized' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline' | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
   const [editRow, setEditRow] = useState<Payable | null>(null)
   const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
@@ -380,12 +382,12 @@ export default function PayablesPage() {
 
   const { data: kpis } = useQuery({
     queryKey: ['payables-kpis', selectedClientId],
-    queryFn: () => api.get<{ totalPending: number; countOpen: number; countOverdue: number; paidThisMonth: number; aging: Record<string, number> }>(`/treasury/${selectedClientId}/payables/kpis`),
+    queryFn: () => api.get<{ totalPending: number; countOpen: number; countOverdue: number; paidThisMonth: number; aging: Record<string, number>; cards: { uncategorized: number; pending: number; overdue: number; dueThisWeek: number; pastPaymentDeadline: number } }>(`/treasury/${selectedClientId}/payables/kpis`),
     enabled: !!selectedClientId,
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['payables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter],
+    queryKey: ['payables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, uncategorizedFilter],
     queryFn: () => {
       // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
       // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
@@ -411,6 +413,7 @@ export default function PayablesPage() {
         if (docDateTo) params.set('docDateTo', docDateTo)
         if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
         if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
+        if (uncategorizedFilter) params.set('uncategorized', 'true')
       }
       if (sortBy !== 'dueDate' || sortDir !== 'asc') { params.set('sortBy', sortBy); params.set('sortDir', sortDir) }
       return api.get<{ total: number; items: Payable[] }>(`/treasury/${selectedClientId}/payables?${params}`)
@@ -744,9 +747,9 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter)
   function clearFilters() {
-    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setPage(1)
+    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setActiveCard(null); setPage(1)
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -833,6 +836,34 @@ export default function PayablesPage() {
   // KPIs vêm do endpoint /kpis, que já agrega locais + TOC pendentes.
   // Subtraímos `countOverdue` ao `countOpen` para manter a UX existente
   // (cards "Em aberto" e "Vencidas" como números separados).
+  // Cartões compactos clicáveis: cada um aplica um preset de filtros à tabela
+  // de Fornecedores. Clicar no cartão ativo limpa os filtros.
+  const cardWeekRange = () => {
+    const d = new Date(); d.setHours(0, 0, 0, 0)
+    const wd = d.getDay()
+    const start = new Date(d); start.setDate(d.getDate() + (wd === 0 ? -6 : 1 - wd))
+    const end = new Date(start); end.setDate(start.getDate() + 6)
+    const ymd = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`
+    return { start: ymd(start), end: ymd(end) }
+  }
+  const resetCardFilters = () => {
+    setActiveCard(null); setStatusFilter('OPEN,PARTIAL'); setIsOverdueFilter(false)
+    setUncategorizedFilter(false); setPaymentDateFrom(''); setPaymentDateTo(''); setPage(1)
+  }
+  const applyCard = (card: 'uncategorized' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline') => {
+    if (activeCard === card) { resetCardFilters(); return }
+    setActiveTab('fornecedores'); setPage(1); setActiveCard(card)
+    setIsOverdueFilter(false); setUncategorizedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
+    if (card === 'uncategorized') { setUncategorizedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
+    else if (card === 'pending') { setStatusFilter('OPEN,PARTIAL') }
+    else if (card === 'overdue') { setStatusFilter(''); setIsOverdueFilter(true) }
+    else if (card === 'thisWeek') { const w = cardWeekRange(); setStatusFilter('OPEN,PARTIAL'); setPaymentDateFrom(w.start); setPaymentDateTo(w.end) }
+    else if (card === 'pastDeadline') {
+      const y = new Date(); y.setDate(y.getDate() - 1)
+      setStatusFilter('OPEN,PARTIAL'); setPaymentDateTo(`${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`)
+    }
+  }
+
   const combinedKpis = kpis ? {
     ...kpis,
     countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
@@ -907,6 +938,29 @@ export default function PayablesPage() {
                   />
                   <KpiCard title="Pago este mês" value={formatCurrency(combinedKpis.paidThisMonth)} />
                 </div>
+                {kpis?.cards && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    {([
+                      ['uncategorized', 'Sem categoria', kpis.cards.uncategorized],
+                      ['pending', 'Pendentes / Em aberto', kpis.cards.pending],
+                      ['overdue', 'Vencidas', kpis.cards.overdue],
+                      ['thisWeek', 'A pagar esta semana', kpis.cards.dueThisWeek],
+                      ['pastDeadline', 'Passou prazo pagamento', kpis.cards.pastPaymentDeadline],
+                    ] as const).map(([key, label, count]) => {
+                      const active = activeCard === key
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => applyCard(key)}
+                          className={`rounded-xl border px-3 py-2 text-left flex items-center justify-between gap-2 transition-all ${active ? 'border-primary-300 bg-primary-50 shadow-sm' : 'border-gray-100 bg-white hover:border-gray-200 hover:shadow-card-md'}`}
+                        >
+                          <span className="text-[11px] font-medium text-gray-500 leading-tight">{label}</span>
+                          <span className={`text-lg font-bold tabular-nums ${active ? 'text-primary-700' : 'text-gray-900'}`}>{count}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </>
             )}
 
@@ -943,7 +997,7 @@ export default function PayablesPage() {
                         </button>
                       )}
                     </div>
-                    <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
+                    <select className="input w-auto text-sm py-1" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setUncategorizedFilter(false); setActiveCard(null); setPage(1) }}>
                       <option value="">Todos os estados</option>
                       <option value="OPEN,PARTIAL">Pendente</option>
                       <option value="OPEN">Emitido / Em aberto</option>
@@ -970,12 +1024,6 @@ export default function PayablesPage() {
                       endDate={paymentDateTo}
                       onChange={(s, e) => { setPaymentDateFrom(s); setPaymentDateTo(e); setPage(1) }}
                     />
-                    <button
-                      onClick={() => { setIsOverdueFilter((v) => !v); setPage(1) }}
-                      className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${isOverdueFilter ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-                    >
-                      <AlertTriangle className="w-3.5 h-3.5" /> Vencidas
-                    </button>
                     {hasFilters && (
                       <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                         <X className="w-3.5 h-3.5" /> Limpar
@@ -1444,12 +1492,6 @@ export default function PayablesPage() {
                       endDate={outrasFilter.paymentDateTo}
                       onChange={(s, e) => setOutrasFilter({ paymentDateFrom: s, paymentDateTo: e })}
                     />
-                    <button
-                      onClick={() => setOutrasFilter({ isOverdue: !outrasFilter.isOverdue })}
-                      className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${outrasFilter.isOverdue ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-                    >
-                      <AlertTriangle className="w-3.5 h-3.5" /> Vencidas
-                    </button>
                     {outrasHasFilters(outrasFilter) && (
                       <button onClick={clearOutrasFilter} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors">
                         <X className="w-3.5 h-3.5" /> Limpar

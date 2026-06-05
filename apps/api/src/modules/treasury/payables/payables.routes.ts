@@ -22,7 +22,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
   fastify.get(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as {
-      status?: string; origin?: TreasuryDocOrigin; categoryId?: string
+      status?: string; origin?: TreasuryDocOrigin; categoryId?: string; uncategorized?: string
       entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string; paymentDateFrom?: string; paymentDateTo?: string
       isRecurrent?: string; overdue?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
@@ -34,6 +34,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.list(clientId, {
       ...q,
       status: statusValue,
+      uncategorized: q.uncategorized === 'true',
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
       overdue: q.overdue === 'true',
       sortBy: validSortBy,
