@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Tag, X } from 'lucide-react'
 
 interface PickerCategory {
@@ -20,19 +21,50 @@ interface Props {
   disabled?: boolean
 }
 
+const MENU_WIDTH = 208 // w-52
+
 /**
  * Atribuição unitária de categoria inline, replicando o picker dos movimentos
  * bancários: célula clicável que abre um dropdown com as categorias do tipo
  * permitido e a opção de remover a categoria atual.
+ *
+ * O dropdown é renderizado num portal com `position: fixed` para não ser
+ * cortado pelo `overflow` das tabelas onde o picker vive.
  */
 export default function InlineCategoryPicker({ category, categories, typeLabel, onSelect, disabled }: Props) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
+  const updatePosition = () => {
+    const r = btnRef.current?.getBoundingClientRect()
+    if (!r) return
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - MENU_WIDTH - 8))
+    setCoords({ top: r.bottom + 4, left })
+  }
+
+  // Posiciona ao abrir e reacompanha scroll (inclui o scroll interno das tabelas,
+  // por isso captura na fase de captura) e resize.
+  useLayoutEffect(() => {
+    if (!open) return
+    updatePosition()
+    const onMove = () => updatePosition()
+    window.addEventListener('scroll', onMove, true)
+    window.addEventListener('resize', onMove)
+    return () => {
+      window.removeEventListener('scroll', onMove, true)
+      window.removeEventListener('resize', onMove)
+    }
+  }, [open])
+
+  // Fecha ao clicar fora (botão ou menu — o menu vive no portal).
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -50,8 +82,9 @@ export default function InlineCategoryPicker({ category, categories, typeLabel, 
   }
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={btnRef}
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o) }}
         className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border transition-colors ${category
@@ -65,8 +98,13 @@ export default function InlineCategoryPicker({ category, categories, typeLabel, 
           : <><Tag className="w-3 h-3" />N/C</>
         }
       </button>
-      {open && (
-        <div onClick={(e) => e.stopPropagation()} className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg py-1 w-52 max-h-64 overflow-y-auto">
+      {open && coords && createPortal(
+        <div
+          ref={menuRef}
+          onClick={(e) => e.stopPropagation()}
+          style={{ position: 'fixed', top: coords.top, left: coords.left, width: MENU_WIDTH }}
+          className="z-50 bg-white border border-gray-200 rounded-xl shadow-lg py-1 max-h-64 overflow-y-auto"
+        >
           {category && (
             <>
               <button
@@ -95,8 +133,9 @@ export default function InlineCategoryPicker({ category, categories, typeLabel, 
               {c.name}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   )
 }
