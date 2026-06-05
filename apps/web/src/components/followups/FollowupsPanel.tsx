@@ -5,7 +5,7 @@ import { useToast } from '@/contexts/ToastContext'
 import {
   Mail, Phone, NotebookPen, StickyNote, Clock, CheckCircle2, AlertCircle, Bell,
   Plus, Trash2, PencilLine, FilePlus2, XCircle, CalendarClock,
-  Split, Undo2, CircleDollarSign,
+  Split, Undo2, CircleDollarSign, CreditCard,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { FollowupDoc, FollowupDirection, TimelineEvent } from './types'
@@ -38,8 +38,9 @@ function eventVisual(ev: TimelineEvent): EventVisual {
   if (ev.kind.endsWith('.create')) return { icon: FilePlus2, label: 'Criação', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
   if (ev.kind.endsWith('.update')) return { icon: PencilLine, label: 'Edição', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' }
   if (ev.kind.endsWith('.delete')) return { icon: Trash2, label: 'Eliminada', color: 'bg-red-50 text-red-700 border-red-200' }
-  if (ev.kind.endsWith('.settle')) return { icon: CheckCircle2, label: 'Pago', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
-  if (ev.kind.endsWith('.unsettle')) return { icon: Undo2, label: 'Pagamento revertido', color: 'bg-amber-50 text-amber-700 border-amber-200' }
+  if (ev.kind.endsWith('.pay')) return { icon: CreditCard, label: 'Pago', color: 'bg-teal-50 text-teal-700 border-teal-200' }
+  if (ev.kind.endsWith('.settle')) return { icon: CheckCircle2, label: 'Liquidada', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
+  if (ev.kind.endsWith('.unsettle')) return { icon: Undo2, label: 'Revertida para Em Aberto', color: 'bg-amber-50 text-amber-700 border-amber-200' }
   if (ev.kind.endsWith('.partial_payment')) return { icon: CircleDollarSign, label: 'Pagamento parcial', color: 'bg-teal-50 text-teal-700 border-teal-200' }
   if (ev.kind.endsWith('.void')) return { icon: XCircle, label: 'Anulada', color: 'bg-red-50 text-red-700 border-red-200' }
   if (ev.kind.endsWith('.set_promised_date')) return { icon: CalendarClock, label: 'Data prometida', color: 'bg-blue-50 text-blue-700 border-blue-200' }

@@ -97,9 +97,11 @@ export function tocStatusVariant(status: unknown): 'green' | 'yellow' | 'red' | 
 // ainda não liquidado; "Liquidado" (SETTLED) é o fecho final (recibo no caso TOC).
 // O 2.º argumento mantém-se por compatibilidade com callers existentes mas já
 // não altera o resultado (o "Pago" passou a ser o estado PAID dedicado).
-export function statusLabel(status: string, _settledInToc = true): string {
+export function statusLabel(status: string, _settledInToc = true, full = false): string {
+  // Na tabela usa-se a forma abreviada; no detalhe (full) o texto completo.
+  if (status === 'PARTIAL') return full ? 'Parcialmente liquidado' : 'Parc. Liq.'
   const map: Record<string, string> = {
-    OPEN: 'Emitido', PARTIAL: 'Parcialmente liquidado', PAID: 'Pago', SETTLED: 'Liquidado', VOID: 'Anulado',
+    OPEN: 'Emitido', PARTIAL: 'Parc. Liq.', PAID: 'Pago', SETTLED: 'Liquidado', VOID: 'Anulado',
     UNCLASSIFIED: 'Por classificar', CLASSIFIED: 'Classificado', RECONCILED: 'Reconciliado',
     DRAFT: 'Rascunho', CONFIRMED: 'Confirmado', REVERSED: 'Estornado',
   }

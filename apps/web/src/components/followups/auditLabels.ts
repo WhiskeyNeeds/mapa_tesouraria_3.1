@@ -5,11 +5,11 @@
 
 export type AuditAction =
   | 'receivable.create' | 'receivable.update' | 'receivable.delete'
-  | 'receivable.settle' | 'receivable.unsettle' | 'receivable.partial_payment'
+  | 'receivable.pay' | 'receivable.settle' | 'receivable.unsettle' | 'receivable.partial_payment'
   | 'receivable.void' | 'receivable.set_promised_date'
   | 'receivable.split' | 'receivable.unsplit'
   | 'payable.create' | 'payable.update' | 'payable.delete'
-  | 'payable.settle' | 'payable.unsettle' | 'payable.partial_payment'
+  | 'payable.pay' | 'payable.settle' | 'payable.unsettle' | 'payable.partial_payment'
   | 'payable.void' | 'payable.set_promised_date'
   | 'payable.split' | 'payable.unsplit'
   | string
@@ -85,10 +85,13 @@ export function auditTitle(action: string, payload: unknown): string {
       return p.recurrenceCascade ? 'Recorrência removida (com instâncias)' : 'Apagada'
     case 'receivable.settle':
     case 'payable.settle':
-      return p.cascadedChildren ? `Pago (+${p.cascadedChildren} parcelas)` : 'Pago'
+      return p.cascadedChildren ? `Liquidada (+${p.cascadedChildren} parcelas)` : 'Liquidada'
+    case 'receivable.pay':
+    case 'payable.pay':
+      return p.cascadedChildren ? `Marcada como paga (+${p.cascadedChildren} parcelas)` : 'Marcada como paga'
     case 'receivable.unsettle':
     case 'payable.unsettle':
-      return 'Pagamento revertido'
+      return 'Revertida para Em Aberto'
     case 'receivable.partial_payment':
       return `Pagamento recebido: ${MONEY.format(Number(p.amount ?? 0))}`
     case 'payable.partial_payment':

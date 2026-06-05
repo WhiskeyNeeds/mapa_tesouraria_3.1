@@ -165,9 +165,9 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.patch(`${prefix}/bulk-status`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const { ids, status } = request.body as { ids: string[]; status: 'PAID' | 'SETTLED' | 'OPEN' | 'VOID' }
+    const { ids, status } = request.body as { ids: string[]; status: 'PAID' | 'OPEN' }
     if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
-    if (!['PAID', 'SETTLED', 'OPEN', 'VOID'].includes(status)) return reply.status(400).send({ message: 'Estado inválido' })
+    if (!['PAID', 'OPEN'].includes(status)) return reply.status(400).send({ message: 'Estado inválido' })
     return reply.send(await svc.bulkSetStatus(clientId, request.user.sub, ids, status))
   })
 
