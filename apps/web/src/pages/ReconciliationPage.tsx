@@ -613,7 +613,7 @@ export default function ReconciliationPage() {
   return (
     <div className="space-y-5 pb-28">
       {/* Page header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="section-title">Reconciliação</h1>
           <p className="section-subtitle mt-0.5">Associe movimentos bancários a documentos de compra e venda</p>

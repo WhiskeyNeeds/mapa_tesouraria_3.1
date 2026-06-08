@@ -184,10 +184,10 @@ export default function TocExplorerPage() {
         </div>
       </div>
 
-      <div className="flex gap-4 flex-1 min-h-0">
+      <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-0">
 
         {/* Left column: presets + params */}
-        <div className="flex flex-col gap-4 w-72 flex-shrink-0">
+        <div className="flex flex-col gap-4 w-full lg:w-72 lg:flex-shrink-0">
 
           {/* Presets */}
           <div className="card p-4">
