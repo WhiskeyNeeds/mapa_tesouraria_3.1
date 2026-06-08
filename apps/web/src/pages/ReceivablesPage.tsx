@@ -605,8 +605,11 @@ export default function ReceivablesPage() {
   const classify = useMutation({
     mutationFn: ({ id, categoryId }: { id: string; categoryId: string | null }) =>
       api.patch(`/treasury/${selectedClientId}/receivables/${id}`, { categoryId }),
-    onSuccess: (_, { categoryId }) => {
+    onSuccess: (_, { id, categoryId }) => {
       qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      // Update panel state immediately so user sees change without refresh
+      setPanelDoc((d) => d ? { ...d, category: categories.find((c) => c.id === categoryId) ?? null } : d)
+      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? { ...old, category: categories.find((c) => c.id === categoryId) ?? null, categoryId } : old)
       toast.success(categoryId === null ? 'Categoria removida.' : 'Documento classificado.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -615,8 +618,11 @@ export default function ReceivablesPage() {
   const classifyBudget = useMutation({
     mutationFn: ({ id, budgetId }: { id: string; budgetId: string | null }) =>
       api.patch(`/treasury/${selectedClientId}/receivables/${id}`, { budgetId }),
-    onSuccess: (_, { budgetId }) => {
+    onSuccess: (_, { id, budgetId }) => {
       qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      // Update panel state immediately so user sees change without refresh
+      setPanelDoc((d) => d ? { ...d, budget: budgets.find((b) => b.id === budgetId) ?? null } : d)
+      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? { ...old, budget: budgets.find((b) => b.id === budgetId) ?? null, budgetId } : old)
       toast.success(budgetId === null ? 'Budget removido.' : 'Budget atribuído.')
     },
     onError: (e) => toast.error((e as Error).message),
