@@ -1041,6 +1041,25 @@ export default function ReceivablesPage() {
     enabled: !!selectedClientId,
   })
 
+  // Normalize settled value coming from kpisRange so formatCurrency always receives a number
+  const displayedSettled = (() => {
+    const raw = kpisRange?.settledThisMonth
+    const fallback = combinedKpis?.settledThisMonth ?? 0
+    if (raw == null) return fallback
+    if (typeof raw === 'number') return raw
+    if (typeof raw === 'string') {
+      const n = Number(raw.replace(/[^0-9.-]+/g, ''))
+      return Number.isFinite(n) ? n : fallback
+    }
+    if (typeof raw === 'object') {
+      const obj: any = raw as any
+      if (obj.total != null && !Number.isNaN(Number(obj.total))) return Number(obj.total)
+      if (obj.amount != null && !Number.isNaN(Number(obj.amount))) return Number(obj.amount)
+      if (obj.settledThisMonth != null && !Number.isNaN(Number(obj.settledThisMonth))) return Number(obj.settledThisMonth)
+    }
+    return fallback
+  })()
+
   return (
     <>
       <div className="flex -m-6 h-[calc(100vh-4rem)]">
