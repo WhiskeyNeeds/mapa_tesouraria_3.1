@@ -1199,8 +1199,8 @@ function CashflowStatementTable() {
           <h2 className="text-sm font-semibold text-gray-700">Demonstração</h2>
           <p className="text-xs text-gray-400 mt-0.5">Entradas e saídas e Saldo por Contas</p>
         </div>
-        <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap mt-3 pt-3 border-t border-gray-100">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
               {(['cashflow', 'balances'] as const).map((v) => (
                 <button key={v} onClick={() => { setViewType(v); setSelectedColKey(null); setHoveredColKey(null) }}
