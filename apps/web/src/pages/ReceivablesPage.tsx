@@ -16,7 +16,7 @@ import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff, TrendingUp } from 'lucide-react'
+import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -1147,7 +1147,7 @@ export default function ReceivablesPage() {
                         <p className="text-xl font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(kpisRange?.settledThisMonth ?? combinedKpis.settledThisMonth)}</p>
                       </div>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 ring-1 ring-white/25 text-[10.5px] font-semibold flex-shrink-0">
-                        <TrendingUp className="w-3.5 h-3.5" />{receivedDays === null ? 'este mês' : (receivedDays === 'ALL' ? 'Todo periodo' : `${receivedDays}d`)}
+                        {receivedDays === null ? 'este mês' : (receivedDays === 'ALL' ? 'Todo periodo' : `${receivedDays}d`)}
                       </span>
                     </div>
                   </div>
