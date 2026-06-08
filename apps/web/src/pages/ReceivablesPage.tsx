@@ -1030,14 +1030,15 @@ export default function ReceivablesPage() {
     ...kpis,
     countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
   } : null
-  const [receivedDays, setReceivedDays] = useState<number | 'ALL' | null>(null)
+  // Always keep one selection active; default to 30 days.
+  const [receivedDays, setReceivedDays] = useState<number | 'ALL'>(30)
   const { data: kpisRange } = useQuery({
     queryKey: ['receivables-kpis-range', selectedClientId, receivedDays],
     queryFn: () => {
       if (receivedDays === 'ALL') return api.get(`/treasury/${selectedClientId}/receivables/kpis?all=true`)
       return api.get(`/treasury/${selectedClientId}/receivables/kpis?days=${receivedDays}`)
     },
-    enabled: !!selectedClientId && receivedDays != null,
+    enabled: !!selectedClientId,
   })
 
   return (
@@ -1115,13 +1116,13 @@ export default function ReceivablesPage() {
                           <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Recebido</p>
                           <div className="inline-flex bg-white/10 rounded-lg p-0.5">
                             <button
-                              onClick={(e) => { e.stopPropagation(); setReceivedDays(receivedDays === 'ALL' ? null : 'ALL') }}
+                              onClick={(e) => { e.stopPropagation(); setReceivedDays('ALL') }}
                               className={`px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === 'ALL' ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
                             >Todo periodo</button>
                             {[30, 60, 90].map((d) => (
                               <button
                                 key={d}
-                                onClick={(e) => { e.stopPropagation(); setReceivedDays(receivedDays === d ? null : d) }}
+                                onClick={(e) => { e.stopPropagation(); setReceivedDays(d) }}
                                 className={`px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === d ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
                               >{d}d</button>
                             ))}
