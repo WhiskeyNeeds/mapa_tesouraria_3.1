@@ -2347,9 +2347,10 @@ export default function ReceivablesPage() {
 
         {/* ── Painel lateral de detalhes ── */}
         {panelDoc && (
-          <div className="w-80 xl:w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden">
+          <div className="w-80 xl:w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden animate-slide-in">
+            {/* Faixa de acento fintech removida */}
             {/* Cabeçalho */}
-            <div className="p-5 border-b border-gray-100">
+            <div className="p-5 border-b border-gray-100 bg-gradient-to-b from-blue-50/50 to-transparent">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-1">
                   {panelDoc.parentId && !panelDoc.recurrenceId && (
@@ -2368,10 +2369,10 @@ export default function ReceivablesPage() {
                   )}
                   <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Conta a Receber</div>
                 </div>
-                <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
+                <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
               </div>
               <div className="flex items-center gap-2">
-                <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
+                <div className="text-[1.7rem] font-bold tracking-tight tabular-nums text-gray-900 leading-none">{formatCurrency(panelDoc.totalAmount)}</div>
                 {(() => {
                   const tocRaw = panelTocDoc ?? panelDoc._tocRaw
                   const link = tocRaw && typeof tocRaw.public_link === 'string' ? tocRaw.public_link : null
@@ -2426,10 +2427,16 @@ export default function ReceivablesPage() {
                   <span className="text-xs text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3" />{formatDate(panelDoc.promisedPaymentDate)}</span>
                 )}
               </div>
-              <div className="mt-2 flex items-center gap-3 text-xs flex-wrap">
-                <span className="text-gray-500">Pendente: <span className="font-semibold text-gray-700">{formatCurrency(panelDoc.pendingAmount)}</span></span>
+              <div className="mt-3 flex items-center gap-2 text-xs flex-wrap">
+                <span className="inline-flex items-baseline gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 border border-gray-100">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Pendente</span>
+                  <span className="font-bold tabular-nums text-gray-800">{formatCurrency(panelDoc.pendingAmount)}</span>
+                </span>
                 {Number(panelDoc.receivedAmount) > 0 && (
-                  <span className="text-green-600">Recebido: <span className="font-semibold">{formatCurrency(Number(panelDoc.receivedAmount))}</span></span>
+                  <span className="inline-flex items-baseline gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-100">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-500">Recebido</span>
+                    <span className="font-bold tabular-nums text-emerald-700">{formatCurrency(Number(panelDoc.receivedAmount))}</span>
+                  </span>
                 )}
               </div>
             </div>
@@ -2462,14 +2469,16 @@ export default function ReceivablesPage() {
               </div>
             )}
 
-            {/* Tabs */}
-            <div className="flex border-b border-gray-100">
-              {(['parcelas', 'details', 'followups'] as const).map((t) => (
-                <button key={t} onClick={() => { setPanelTab(t); setPanelSection(null) }}
-                  className={`flex-1 py-2.5 text-sm font-medium transition-colors ${panelTab === t ? 'border-b-2 border-primary-600 text-primary-700' : 'text-gray-500 hover:text-gray-700'}`}>
-                  {t === 'details' ? 'Detalhes' : t === 'parcelas' ? 'Parcelas' : 'Follow-ups'}
-                </button>
-              ))}
+            {/* Tabs — controlo segmentado */}
+            <div className="px-4 py-3 border-b border-gray-100">
+              <div className="flex gap-1 p-1 bg-gray-100/80 rounded-xl">
+                {(['parcelas', 'details', 'followups'] as const).map((t) => (
+                  <button key={t} onClick={() => { setPanelTab(t); setPanelSection(null) }}
+                    className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all duration-200 ${panelTab === t ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    {t === 'details' ? 'Detalhes' : t === 'parcelas' ? 'Parcelas' : 'Follow-ups'}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Conteúdo */}
