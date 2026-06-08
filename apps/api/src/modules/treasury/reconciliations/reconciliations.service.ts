@@ -204,6 +204,7 @@ export class TreasuryReconciliationsService {
                 receivedAmount: newReceived,
                 pendingAmount: Math.max(0, newPending),
                 status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
+                settledAt: newPending <= 0.01 ? new Date() : null,
               },
             })
           }
@@ -297,6 +298,7 @@ export class TreasuryReconciliationsService {
               receivedAmount: newReceived,
               pendingAmount: Number(rec.totalAmount) - newReceived,
               status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
+              settledAt: null,
             },
           })
         }
