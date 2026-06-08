@@ -215,6 +215,8 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
                 <TimelineItem
                   key={`inline-${ev.id}`}
                   ev={ev}
+                  clientId={clientId}
+                  direction={direction}
                   expanded={expandedId === ev.id}
                   onToggleExpand={() => setExpandedId(expandedId === ev.id ? null : ev.id)}
                   onComplete={() => completeTask.mutate(ev.id)}
@@ -274,6 +276,8 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
               <TimelineItem
                 key={`${ev.source}-${ev.id}`}
                 ev={ev}
+                clientId={clientId}
+                direction={direction}
                 expanded={expandedId === ev.id}
                 onToggleExpand={() => setExpandedId(expandedId === ev.id ? null : ev.id)}
                 onComplete={() => completeTask.mutate(ev.id)}
@@ -336,9 +340,10 @@ interface TimelineItemProps {
   onComplete: () => void
   onLogCall: (taskId: string) => void
   onDelete: () => void
+  clientId: string
+  direction: FollowupDirection
 }
-
-function TimelineItem({ ev, expanded, onToggleExpand, onComplete, onLogCall, onDelete }: TimelineItemProps) {
+function TimelineItem({ ev, expanded, onToggleExpand, onComplete, onLogCall, onDelete, clientId, direction }: TimelineItemProps) {
   const { icon: Icon, label, color } = eventVisual(ev)
   const isPending = ev.status === 'PENDING'
   const isFailed = ev.status === 'FAILED'
