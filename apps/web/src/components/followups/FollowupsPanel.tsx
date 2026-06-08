@@ -133,10 +133,10 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
 
   // Configuração de cada ação — usada pela grelha 2x2 e pelo painel inline.
   const actions: { key: ActionPanel; label: string; icon: LucideIcon; enabled: boolean; matches: (kind: string) => boolean; ctaLabel: string; ctaColor: string; onCreate: () => void; emptyHint: string }[] = [
-    { key: 'EMAIL', label: 'Email',    icon: Mail,        enabled: plan.email,    matches: (k) => k === 'EMAIL_SENT',                ctaLabel: 'Novo email',       ctaColor: 'bg-blue-600 hover:bg-blue-700',       onCreate: () => setShowEmail(true),    emptyHint: 'Ainda nenhum email enviado.' },
-    { key: 'TASK',  label: 'Tarefas',  icon: NotebookPen, enabled: plan.callTask, matches: (k) => k === 'CALL_TASK',                  ctaLabel: 'Nova tarefa',      ctaColor: 'bg-amber-600 hover:bg-amber-700',     onCreate: () => setShowCallTask(true), emptyHint: 'Ainda nenhuma tarefa criada.' },
-    { key: 'CALL',  label: 'Chamadas', icon: Phone,       enabled: plan.logCall,  matches: (k) => k === 'CALL_LOGGED',                ctaLabel: 'Registar chamada', ctaColor: 'bg-emerald-600 hover:bg-emerald-700', onCreate: () => setShowLogCall({}),    emptyHint: 'Ainda nenhuma chamada registada.' },
-    { key: 'NOTE',  label: 'Notas',    icon: StickyNote,  enabled: plan.note,     matches: (k) => k === 'NOTE' || k === 'AUTO_REMINDER', ctaLabel: 'Nova nota',     ctaColor: 'bg-gray-700 hover:bg-gray-800',       onCreate: () => setShowNote(true),     emptyHint: 'Ainda nenhuma nota.' },
+    { key: 'EMAIL', label: 'Email', icon: Mail, enabled: plan.email, matches: (k) => k === 'EMAIL_SENT', ctaLabel: 'Novo email', ctaColor: 'bg-blue-600 hover:bg-blue-700', onCreate: () => setShowEmail(true), emptyHint: 'Ainda nenhum email enviado.' },
+    { key: 'TASK', label: 'Tarefas', icon: NotebookPen, enabled: plan.callTask, matches: (k) => k === 'CALL_TASK', ctaLabel: 'Nova tarefa', ctaColor: 'bg-amber-600 hover:bg-amber-700', onCreate: () => setShowCallTask(true), emptyHint: 'Ainda nenhuma tarefa criada.' },
+    { key: 'CALL', label: 'Chamadas', icon: Phone, enabled: plan.logCall, matches: (k) => k === 'CALL_LOGGED', ctaLabel: 'Registar chamada', ctaColor: 'bg-emerald-600 hover:bg-emerald-700', onCreate: () => setShowLogCall({}), emptyHint: 'Ainda nenhuma chamada registada.' },
+    { key: 'NOTE', label: 'Notas', icon: StickyNote, enabled: plan.note, matches: (k) => k === 'NOTE' || k === 'AUTO_REMINDER', ctaLabel: 'Nova nota', ctaColor: 'bg-gray-700 hover:bg-gray-800', onCreate: () => setShowNote(true), emptyHint: 'Ainda nenhuma nota.' },
   ]
   const activeAction = actions.find((a) => a.key === expandedAction) ?? null
   const activeActionItems = activeAction
@@ -152,20 +152,20 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
             const open = expandedAction === a.key
             // Cor própria de cada ação, em vez de azul-primário para todas
             const activeCls =
-              a.key === 'EMAIL' ? 'bg-blue-600 text-white border-blue-600 shadow-sm'       :
-              a.key === 'TASK'  ? 'bg-amber-600 text-white border-amber-600 shadow-sm'     :
-              a.key === 'CALL'  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' :
-                                  'bg-gray-700 text-white border-gray-700 shadow-sm'
+              a.key === 'EMAIL' ? 'bg-blue-600 text-white border-blue-600 shadow-sm' :
+                a.key === 'TASK' ? 'bg-amber-600 text-white border-amber-600 shadow-sm' :
+                  a.key === 'CALL' ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' :
+                    'bg-gray-700 text-white border-gray-700 shadow-sm'
             const idleCls =
-              a.key === 'EMAIL' ? 'bg-blue-50 text-blue-700 border-blue-200 hover:-translate-y-0.5 hover:shadow-card-md'         :
-              a.key === 'TASK'  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:-translate-y-0.5 hover:shadow-card-md'    :
-              a.key === 'CALL'  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:-translate-y-0.5 hover:shadow-card-md' :
-                                  'bg-gray-50 text-gray-700 border-gray-200 hover:-translate-y-0.5 hover:shadow-card-md'
+              a.key === 'EMAIL' ? 'bg-blue-50 text-blue-700 border-blue-200 hover:-translate-y-0.5 hover:shadow-card-md' :
+                a.key === 'TASK' ? 'bg-amber-50 text-amber-700 border-amber-200 hover:-translate-y-0.5 hover:shadow-card-md' :
+                  a.key === 'CALL' ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:-translate-y-0.5 hover:shadow-card-md' :
+                    'bg-gray-50 text-gray-700 border-gray-200 hover:-translate-y-0.5 hover:shadow-card-md'
             const chipCls = open ? 'bg-white/20 text-white' :
-              a.key === 'EMAIL' ? 'bg-blue-100 text-blue-600'    :
-              a.key === 'TASK'  ? 'bg-amber-100 text-amber-600'  :
-              a.key === 'CALL'  ? 'bg-emerald-100 text-emerald-600' :
-                                  'bg-gray-200 text-gray-600'
+              a.key === 'EMAIL' ? 'bg-blue-100 text-blue-600' :
+                a.key === 'TASK' ? 'bg-amber-100 text-amber-600' :
+                  a.key === 'CALL' ? 'bg-emerald-100 text-emerald-600' :
+                    'bg-gray-200 text-gray-600'
             return (
               <button
                 key={a.key}
