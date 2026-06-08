@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -53,6 +54,7 @@ export default function BudgetsPage() {
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [selectedBudgetId, setSelectedBudgetId] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const { data: budgets = [], isLoading } = useQuery<Budget[]>({
     queryKey: ['budgets', selectedClientId, showArchived],
@@ -64,6 +66,19 @@ export default function BudgetsPage() {
     if (tab === 'ALL') return budgets
     return budgets.filter((b) => b.type === tab)
   }, [budgets, tab])
+
+  // Deep-link "?budget=<id>" (ex.: vindo do botão "Ir para budget" de uma fatura):
+  // selecciona o budget, faz scroll até ao cartão e limpa o parâmetro do URL.
+  useEffect(() => {
+    const target = searchParams.get('budget')
+    if (!target || budgets.length === 0) return
+    setSelectedBudgetId(target)
+    searchParams.delete('budget')
+    setSearchParams(searchParams, { replace: true })
+    requestAnimationFrame(() => {
+      document.getElementById(`budget-card-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [budgets, searchParams, setSearchParams])
 
   const createBudget = useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
@@ -389,6 +404,7 @@ function BudgetCard({ budget, selected, onClick, onEdit, onDelete, onToggleArchi
 
   return (
     <div
+      id={`budget-card-${budget.id}`}
       className={`bg-white border rounded-xl p-5 cursor-pointer transition-all ${
         selected ? 'border-primary-400 ring-1 ring-primary-300' : overrun ? 'border-rose-300 bg-rose-50/30' : 'border-gray-200 hover:border-gray-300'
       }`}

@@ -74,6 +74,19 @@
   }
 }
 
+/* ── Botão "ir para budget" (painel de detalhe) ──────────────────
+   Pill circular tingido com a cor do próprio budget (via currentColor,
+   definido inline) com micro-interação da seta no hover. */
+.budget-goto {
+  background-color: color-mix(in srgb, currentColor 11%, transparent);
+  transition: background-color .18s ease, transform .12s ease;
+}
+.budget-goto:hover { background-color: color-mix(in srgb, currentColor 20%, transparent); }
+.budget-goto:active { transform: scale(0.9); }
+.budget-goto:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 45%, transparent); }
+.budget-goto-arrow { transition: transform .2s cubic-bezier(.34, 1.45, .5, 1); }
+.budget-goto:hover .budget-goto-arrow { transform: translate(1.5px, -1.5px); }
+
 /* ── Barra de scroll horizontal flutuante (fixa ao fundo da janela) ──
    Mantém o scroll horizontal de tabelas largas sempre acessível, sem ter de
    rolar a página até ao fundo da tabela. Gerida por useStickyHScrollbar. */

@@ -18,7 +18,7 @@ import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
 import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
+import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, ArrowUpRight, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -2477,11 +2477,24 @@ export default function ReceivablesPage() {
                   typeLabel="Receita"
                   onSelect={(categoryId) => classify.mutate({ id: panelDoc.id, categoryId })}
                 />
-                <InlineBudgetPicker
-                  budget={panelDoc.budget}
-                  budgets={budgets}
-                  onSelect={(budgetId) => classifyBudget.mutate({ id: panelDoc.id, budgetId })}
-                />
+                <span className="inline-flex items-center gap-1">
+                  <InlineBudgetPicker
+                    budget={panelDoc.budget}
+                    budgets={budgets}
+                    onSelect={(budgetId) => classifyBudget.mutate({ id: panelDoc.id, budgetId })}
+                  />
+                  {panelDoc.budget && (
+                    <button
+                      onClick={() => navigate(`/budgets?budget=${panelDoc.budget!.id}`)}
+                      title={`Ir para o budget "${panelDoc.budget.name}"`}
+                      aria-label={`Ir para o budget ${panelDoc.budget.name}`}
+                      style={{ color: panelDoc.budget.color ?? '#3b82f6' }}
+                      className="budget-goto inline-flex items-center justify-center w-6 h-6 rounded-full flex-shrink-0"
+                    >
+                      <ArrowUpRight className="budget-goto-arrow w-3.5 h-3.5" strokeWidth={2.5} />
+                    </button>
+                  )}
+                </span>
                 {panelDoc.promisedPaymentDate && (
                   <span className="text-xs text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3" />{formatDate(panelDoc.promisedPaymentDate)}</span>
                 )}
