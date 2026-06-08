@@ -3,6 +3,7 @@ import type { PrismaClient, TreasuryMovementSource, TreasuryMovementStatus, Pris
 import { Prisma as PrismaRuntime } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { TreasuryBankAccountsService } from '../bank-accounts/bank-accounts.service.js'
+import { resolveDocAmountsFromDb } from '../../../lib/toc-overlay.js'
 
 export interface CsvMovement {
   date: string
@@ -452,12 +453,15 @@ export class TreasuryBankMovementsService {
         if (recon.status === 'CONFIRMED') {
           for (const link of recon.receivables) {
             const rec = link.receivable
-            const newReceived = Math.max(0, Number(rec.receivedAmount) - Number(link.amountAllocated))
+            // total/received reais via overlay TOC: em docs ligados o totalAmount
+            // local é null, pelo que `total - received` gravava pending negativo.
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'receivable', rec)
+            const newReceived = Math.max(0, settled - Number(link.amountAllocated))
             await tx.treasuryReceivable.update({
               where: { id: link.receivableId },
               data: {
                 receivedAmount: newReceived,
-                pendingAmount: Number(rec.totalAmount) - newReceived,
+                pendingAmount: Math.max(0, total - newReceived),
                 status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
                 settledAt: null,
               },
@@ -465,12 +469,14 @@ export class TreasuryBankMovementsService {
           }
           for (const link of recon.payables) {
             const pay = link.payable
-            const newPaid = Math.max(0, Number(pay.paidAmount) - Number(link.amountAllocated))
+            // total/paid reais via overlay TOC (ver nota no bloco dos receivables).
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'payable', pay)
+            const newPaid = Math.max(0, settled - Number(link.amountAllocated))
             await tx.treasuryPayable.update({
               where: { id: link.payableId },
               data: {
                 paidAmount: newPaid,
-                pendingAmount: Number(pay.totalAmount) - newPaid,
+                pendingAmount: Math.max(0, total - newPaid),
                 status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
               },
             })

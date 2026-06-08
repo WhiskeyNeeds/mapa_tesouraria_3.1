@@ -6,6 +6,7 @@ import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
 import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
+import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 
 interface ReceivableListItem {
   id: string
@@ -34,15 +35,6 @@ interface ReceivableListItem {
   _statusToc: TreasuryDocStatus | null
   _statusDiffersFromToc: boolean
   [key: string]: unknown
-}
-
-/** Mapeia status TOC (1/2/3/5) para o enum local. Devolve null para status que
- *  não fazem sentido como receivable (0=rascunho, 4=anulado). */
-function mapTocStatus(tocStatus: number | null | undefined): TreasuryDocStatus | null {
-  if (tocStatus == null || tocStatus === 0 || tocStatus === 4) return null
-  if (tocStatus === 3) return 'SETTLED'
-  if (tocStatus === 2) return 'PARTIAL'
-  return 'OPEN' // 1 ou 5
 }
 
 /** Devolve apenas dados do TOC, para docs TOC sem registo `treasuryReceivable` ligado.
@@ -78,47 +70,6 @@ function mapTocSalesToReceivable(d: TocSalesDocument): ReceivableListItem | null
     _tocRaw: d.raw,
     _statusToc: mappedStatus,
     _statusDiffersFromToc: false,
-  }
-}
-
-/** Combina status local + TOC. Regra: se o utilizador marcou explicitamente
- *  como SETTLED/PARTIAL/VOID o estado local prevalece; OPEN no local segue o
- *  TOC. Devolve também os valores derivados (received/pending) corretos. */
-function resolveStatusOverlay(
-  localStatus: TreasuryDocStatus,
-  localReceived: number | Prisma.Decimal | null | undefined,
-  tocStatus: TreasuryDocStatus,
-  tocGross: number,
-  tocPending: number,
-): { status: TreasuryDocStatus; received: number; pending: number; statusDiffers: boolean } {
-  // Anulação local prevalece sempre.
-  if (localStatus === 'VOID') {
-    return { status: 'VOID', received: 0, pending: 0, statusDiffers: true }
-  }
-  // Recibo emitido no TOConline (status 3 → SETTLED) liquida automaticamente,
-  // mesmo que localmente esteja só "Pago" ou em aberto.
-  if (tocStatus === 'SETTLED') {
-    return { status: 'SETTLED', received: tocGross, pending: 0, statusDiffers: false }
-  }
-  // Liquidada manualmente na plataforma antes de o TOC reportar o recibo.
-  if (localStatus === 'SETTLED') {
-    return { status: 'SETTLED', received: tocGross, pending: 0, statusDiffers: true }
-  }
-  // "Pago": recebimento registado na plataforma, ainda sem recibo no TOC.
-  if (localStatus === 'PAID') {
-    return { status: 'PAID', received: tocGross, pending: 0, statusDiffers: true }
-  }
-  // PARTIAL local → received vem do local (escrito por partialPayment)
-  if (localStatus === 'PARTIAL') {
-    const received = Number(localReceived ?? 0)
-    return { status: 'PARTIAL', received, pending: Math.max(0, tocGross - received), statusDiffers: tocStatus !== 'PARTIAL' }
-  }
-  // OPEN local = padrão → segue o TOC
-  return {
-    status: tocStatus,
-    received: Math.max(0, tocGross - tocPending),
-    pending: tocPending,
-    statusDiffers: false,
   }
 }
 
@@ -177,7 +128,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocSalesDocumen
     dueDate: tocDoc.dueDate ? new Date(tocDoc.dueDate) : local.dueDate,
     totalAmount: gross,
     pendingAmount: merged.pending,
-    receivedAmount: merged.received,
+    receivedAmount: merged.settled,
     status: merged.status,
     origin: 'TOCONLINE',
     tocSalesDocId: local.tocSalesDocId,

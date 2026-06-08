@@ -6,6 +6,7 @@ import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
 import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
+import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 
 interface PayableListItem {
   id: string
@@ -31,13 +32,6 @@ interface PayableListItem {
   _statusToc: TreasuryDocStatus | null
   _statusDiffersFromToc: boolean
   [key: string]: unknown
-}
-
-function mapTocStatus(tocStatus: number | null | undefined): TreasuryDocStatus | null {
-  if (tocStatus == null || tocStatus === 0 || tocStatus === 4) return null
-  if (tocStatus === 3) return 'SETTLED'
-  if (tocStatus === 2) return 'PARTIAL'
-  return 'OPEN'
 }
 
 function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null {
@@ -70,42 +64,6 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
     _tocRaw: d.raw,
     _statusToc: mappedStatus,
     _statusDiffersFromToc: false,
-  }
-}
-
-function resolveStatusOverlay(
-  localStatus: TreasuryDocStatus,
-  localPaid: number | Prisma.Decimal | null | undefined,
-  tocStatus: TreasuryDocStatus,
-  tocGross: number,
-  tocPending: number,
-): { status: TreasuryDocStatus; paid: number; pending: number; statusDiffers: boolean } {
-  // Anulação local prevalece sempre.
-  if (localStatus === 'VOID') {
-    return { status: 'VOID', paid: 0, pending: 0, statusDiffers: true }
-  }
-  // Recibo emitido no TOConline (status 3 → SETTLED) liquida automaticamente,
-  // mesmo que localmente esteja só "Pago" ou em aberto.
-  if (tocStatus === 'SETTLED') {
-    return { status: 'SETTLED', paid: tocGross, pending: 0, statusDiffers: false }
-  }
-  // Liquidada manualmente na plataforma antes de o TOC reportar o recibo.
-  if (localStatus === 'SETTLED') {
-    return { status: 'SETTLED', paid: tocGross, pending: 0, statusDiffers: true }
-  }
-  // "Pago": pagamento registado na plataforma, ainda sem recibo no TOC.
-  if (localStatus === 'PAID') {
-    return { status: 'PAID', paid: tocGross, pending: 0, statusDiffers: true }
-  }
-  if (localStatus === 'PARTIAL') {
-    const paid = Number(localPaid ?? 0)
-    return { status: 'PARTIAL', paid, pending: Math.max(0, tocGross - paid), statusDiffers: tocStatus !== 'PARTIAL' }
-  }
-  return {
-    status: tocStatus,
-    paid: Math.max(0, tocGross - tocPending),
-    pending: tocPending,
-    statusDiffers: false,
   }
 }
 
@@ -158,7 +116,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
     dueDate: tocDoc.dueDate ? new Date(tocDoc.dueDate) : local.dueDate,
     totalAmount: gross,
     pendingAmount: merged.pending,
-    paidAmount: merged.paid,
+    paidAmount: merged.settled,
     status: merged.status,
     origin: 'TOCONLINE',
     tocPurchasesDocId: local.tocPurchasesDocId,

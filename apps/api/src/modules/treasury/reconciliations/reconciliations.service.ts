@@ -1,6 +1,7 @@
 import type { PrismaClient, TreasuryCategoryType } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { ToconlineService } from '../../toconline/toconline.service.js'
+import { resolveDocAmountsFromDb } from '../../../lib/toc-overlay.js'
 
 export interface ReconciliationItem {
   movementIds: string[]
@@ -89,7 +90,11 @@ export class TreasuryReconciliationsService {
 
       if (!doc) throw httpError(404, `Document ${alloc.id} not found`)
       if (alloc.amount <= 0) throw httpError(400, `Allocation amount must be positive`)
-      if (alloc.amount > Number(doc.pendingAmount)) throw httpError(400, `Allocation ${alloc.amount} exceeds pending ${doc.pendingAmount} for ${doc.reference}`)
+      // O pending fiável vem do overlay TOC: para docs ligados ao TOConline os
+      // campos de valor locais estão a null (vivem no espelho toc*Document), por
+      // isso ler doc.pendingAmount cru dava sempre null → 0 e bloqueava tudo.
+      const { pending, reference } = await resolveDocAmountsFromDb(this.prisma, clientId, alloc.type, doc)
+      if (alloc.amount > pending + 0.01) throw httpError(400, `Allocation ${alloc.amount} exceeds pending ${pending} for ${reference}`)
 
       totalAllocated += alloc.amount
       // launchToc forçado a false: a app deixou de lançar recibos/pagamentos no
@@ -196,13 +201,17 @@ export class TreasuryReconciliationsService {
           // Atualização local sempre aplicada (ver nota no bloco dos movimentos).
           const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
           if (rec) {
-            const newReceived = Number(rec.receivedAmount) + alloc.amount
-            const newPending = Number(rec.totalAmount) - newReceived
+            // total/received reais via overlay TOC — em docs ligados os campos
+            // locais estão a null, pelo que somar sobre eles marcaria SETTLED
+            // indevidamente numa reconciliação parcial.
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'receivable', rec)
+            const newReceived = settled + alloc.amount
+            const newPending = Math.max(0, total - newReceived)
             await tx.treasuryReceivable.update({
               where: { id: alloc.id },
               data: {
                 receivedAmount: newReceived,
-                pendingAmount: Math.max(0, newPending),
+                pendingAmount: newPending,
                 status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
                 settledAt: newPending <= 0.01 ? new Date() : null,
               },
@@ -233,13 +242,15 @@ export class TreasuryReconciliationsService {
           // Atualização local sempre aplicada (ver nota no bloco dos movimentos).
           const pay = await tx.treasuryPayable.findUnique({ where: { id: alloc.id } })
           if (pay) {
-            const newPaid = Number(pay.paidAmount) + alloc.amount
-            const newPending = Number(pay.totalAmount) - newPaid
+            // total/paid reais via overlay TOC (ver nota no bloco dos receivables).
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'payable', pay)
+            const newPaid = settled + alloc.amount
+            const newPending = Math.max(0, total - newPaid)
             await tx.treasuryPayable.update({
               where: { id: alloc.id },
               data: {
                 paidAmount: newPaid,
-                pendingAmount: Math.max(0, newPending),
+                pendingAmount: newPending,
                 status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
               },
             })
@@ -291,12 +302,15 @@ export class TreasuryReconciliationsService {
       for (const link of recon.receivables) {
         const rec = await tx.treasuryReceivable.findUnique({ where: { id: link.receivableId } })
         if (rec) {
-          const newReceived = Math.max(0, Number(rec.receivedAmount) - Number(link.amountAllocated))
+          // total/received reais via overlay TOC: em docs ligados o totalAmount
+          // local é null, pelo que `total - received` gravava pending negativo.
+          const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'receivable', rec)
+          const newReceived = Math.max(0, settled - Number(link.amountAllocated))
           await tx.treasuryReceivable.update({
             where: { id: link.receivableId },
             data: {
               receivedAmount: newReceived,
-              pendingAmount: Number(rec.totalAmount) - newReceived,
+              pendingAmount: Math.max(0, total - newReceived),
               status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
               settledAt: null,
             },
@@ -308,12 +322,14 @@ export class TreasuryReconciliationsService {
       for (const link of recon.payables) {
         const pay = await tx.treasuryPayable.findUnique({ where: { id: link.payableId } })
         if (pay) {
-          const newPaid = Math.max(0, Number(pay.paidAmount) - Number(link.amountAllocated))
+          // total/paid reais via overlay TOC (ver nota no bloco dos receivables).
+          const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'payable', pay)
+          const newPaid = Math.max(0, settled - Number(link.amountAllocated))
           await tx.treasuryPayable.update({
             where: { id: link.payableId },
             data: {
               paidAmount: newPaid,
-              pendingAmount: Number(pay.totalAmount) - newPaid,
+              pendingAmount: Math.max(0, total - newPaid),
               status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
             },
           })
