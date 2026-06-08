@@ -432,6 +432,20 @@ function ExpandedDetails({ ev, clientId, direction }: { ev: TimelineEvent; clien
     const changes = (p as DiffPayload).changes!
     const visible = Object.entries(changes).filter(([field]) => !field.startsWith('_'))
     if (visible.length === 0) return null
+
+    // If it's a single change to categoryId or budgetId, show a short human sentence.
+    if (visible.length === 1) {
+      const [field, { from, to }] = visible[0]
+      if (field === 'categoryId' || field === 'budgetId') {
+        return (
+          <div className="mt-2 pt-2 border-t border-gray-100 text-xs">
+            <div className="text-sm text-gray-900 font-medium">{field === 'categoryId' ? 'Categoria alterada' : 'Budget alterado'}</div>
+            <div className="text-xs text-gray-600">Mudou de <span className="font-medium text-gray-800">{displayValue(field, from)}</span> para <span className="font-medium text-gray-800">{displayValue(field, to)}</span></div>
+          </div>
+        )
+      }
+    }
+
     return (
       <div className="mt-2 pt-2 border-t border-gray-100 text-xs">
         <table className="w-full">
