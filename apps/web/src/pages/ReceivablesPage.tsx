@@ -2398,7 +2398,10 @@ export default function ReceivablesPage() {
                   <span className="text-primary-700">{panelDoc.entityName || '—'}</span>
                 )}
               </div>
-              <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
+              <div className="mt-2">
+                <div className="text-sm font-semibold text-gray-800">{panelDoc.reference || '—'}</div>
+                <div className="text-xs text-gray-500">Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
+              </div>
               <div className="mt-2 flex items-center gap-2 flex-wrap">
                 <Badge variant={statusVariant(panelDoc.status)}>{statusLabel(panelDoc.status, panelDoc._statusToc === 'SETTLED', true)}</Badge>
                 {panelDoc._statusDiffersFromToc && (
