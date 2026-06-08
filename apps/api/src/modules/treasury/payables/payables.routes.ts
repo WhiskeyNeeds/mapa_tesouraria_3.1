@@ -22,7 +22,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
   fastify.get(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as {
-      status?: string; origin?: TreasuryDocOrigin; categoryId?: string; uncategorized?: string
+      status?: string; origin?: TreasuryDocOrigin; categoryId?: string; uncategorized?: string; budgetId?: string; unbudgeted?: string
       entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string; paymentDateFrom?: string; paymentDateTo?: string
       isRecurrent?: string; overdue?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
@@ -35,6 +35,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
       ...q,
       status: statusValue,
       uncategorized: q.uncategorized === 'true',
+      unbudgeted: q.unbudgeted === 'true',
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
       overdue: q.overdue === 'true',
       sortBy: validSortBy,
@@ -157,10 +158,18 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.patch(`${prefix}/bulk-category`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    const { ids, categoryId } = request.body as { ids: string[]; categoryId: string }
+    const { ids, categoryId } = request.body as { ids: string[]; categoryId: string | null }
     if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
-    if (!categoryId) return reply.status(400).send({ message: 'Categoria em falta' })
+    if (categoryId === undefined) return reply.status(400).send({ message: 'Categoria em falta' })
     return reply.send(await svc.bulkSetCategory(clientId, request.user.sub, ids, categoryId))
+  })
+
+  fastify.patch(`${prefix}/bulk-budget`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids, budgetId } = request.body as { ids: string[]; budgetId: string | null }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    if (budgetId === undefined) return reply.status(400).send({ message: 'Budget em falta' })
+    return reply.send(await svc.bulkSetBudget(clientId, request.user.sub, ids, budgetId))
   })
 
   fastify.patch(`${prefix}/bulk-status`, { onRequest: auth }, async (request, reply) => {

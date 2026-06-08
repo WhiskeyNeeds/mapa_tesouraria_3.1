@@ -15,6 +15,7 @@ import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import DateRangePopover from '@/components/ui/DateRangePopover'
 import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
+import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
@@ -78,6 +79,7 @@ interface Payable {
   promisedPaymentDate?: string | null
   parentId?: string | null
   category?: { id: string; name: string; color: string } | null
+  budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
   _src?: 'local' | 'toc'
   _tocRaw?: TocPurchaseDoc | null
@@ -86,7 +88,7 @@ interface Payable {
 }
 interface Category { id: string; name: string; type: string; color?: string | null }
 interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
-interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
+interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string; color?: string | null }
 interface TocSupplier { id: string | number; business_name?: string; tax_registration_number?: string;[key: string]: unknown }
 
 const emptyForm = {
@@ -240,7 +242,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
   if (isLoading) {
     return (
       <tr>
-        <td colSpan={11} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+        <td colSpan={12} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
           <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar pagamentos...
         </td>
       </tr>
@@ -250,7 +252,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
   if (!payments.length) {
     return (
       <tr>
-        <td colSpan={11} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+        <td colSpan={12} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
           Sem pagamentos associados
         </td>
       </tr>
@@ -278,6 +280,7 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
           <td className="px-3 py-2 text-xs text-gray-500">{pm.date ? formatDate(pm.date) : '—'}</td>
           <td className="px-3 py-2" />
           <td className="px-3 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(pm.gross_total)}</td>
+          <td className="px-3 py-2" />
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
@@ -317,7 +320,8 @@ export default function PayablesPage() {
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isOverdueFilter, setIsOverdueFilter] = useState(false)
   const [uncategorizedFilter, setUncategorizedFilter] = useState(false)
-  const [activeCard, setActiveCard] = useState<'uncategorized' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline' | null>(null)
+  const [unbudgetedFilter, setUnbudgetedFilter] = useState(false)
+  const [activeCard, setActiveCard] = useState<'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline' | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
   const [editRow, setEditRow] = useState<Payable | null>(null)
   const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
@@ -329,6 +333,7 @@ export default function PayablesPage() {
   // Seleção para atribuição de categoria em massa (âmbito: página visível).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkCategoryId, setBulkCategoryId] = useState('')
+  const [bulkBudgetId, setBulkBudgetId] = useState('')
   const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras'>('fornecedores')
   const [outrasSubTab, setOutrasSubTab] = useState<'fechadas' | 'futuras' | 'programadas' | 'abertas'>('abertas')
   // Filtros das "Outras Operações" são independentes por sub-separador: cada uma
@@ -382,12 +387,12 @@ export default function PayablesPage() {
 
   const { data: kpis } = useQuery({
     queryKey: ['payables-kpis', selectedClientId],
-    queryFn: () => api.get<{ totalPending: number; countOpen: number; countOverdue: number; paidThisMonth: number; aging: Record<string, number>; cards: { uncategorized: number; pending: number; overdue: number; dueThisWeek: number; pastPaymentDeadline: number } }>(`/treasury/${selectedClientId}/payables/kpis`),
+    queryFn: () => api.get<{ totalPending: number; countOpen: number; countOverdue: number; paidThisMonth: number; aging: Record<string, number>; cards: { uncategorized: number; unbudgeted: number; pending: number; overdue: number; dueThisWeek: number; pastPaymentDeadline: number } }>(`/treasury/${selectedClientId}/payables/kpis`),
     enabled: !!selectedClientId,
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['payables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, uncategorizedFilter],
+    queryKey: ['payables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, uncategorizedFilter, unbudgetedFilter],
     queryFn: () => {
       // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
       // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
@@ -414,6 +419,7 @@ export default function PayablesPage() {
         if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
         if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
         if (uncategorizedFilter) params.set('uncategorized', 'true')
+        if (unbudgetedFilter) params.set('unbudgeted', 'true')
       }
       if (sortBy !== 'dueDate' || sortDir !== 'asc') { params.set('sortBy', sortBy); params.set('sortDir', sortDir) }
       return api.get<{ total: number; items: Payable[] }>(`/treasury/${selectedClientId}/payables?${params}`)
@@ -515,14 +521,28 @@ export default function PayablesPage() {
   })
 
   const bulkCategory = useMutation({
-    mutationFn: ({ ids, categoryId }: { ids: string[]; categoryId: string }) =>
+    mutationFn: ({ ids, categoryId }: { ids: string[]; categoryId: string | null }) =>
       api.patch<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/payables/bulk-category`, { ids, categoryId }),
-    onSuccess: (res) => {
+    onSuccess: (res, { categoryId }) => {
       qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      const verb = categoryId === null ? 'Categoria removida de' : 'Categoria aplicada a'
       toast.success(res.failed > 0
-        ? `Categoria aplicada a ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
-        : `Categoria aplicada a ${res.updated} documento(s).`)
+        ? `${verb} ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `${verb} ${res.updated} documento(s).`)
       setSelectedIds(new Set()); setBulkCategoryId('')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const bulkBudget = useMutation({
+    mutationFn: ({ ids, budgetId }: { ids: string[]; budgetId: string | null }) =>
+      api.patch<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/payables/bulk-budget`, { ids, budgetId }),
+    onSuccess: (res, { budgetId }) => {
+      qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      const verb = budgetId === null ? 'Budget removido de' : 'Budget aplicado a'
+      toast.success(res.failed > 0
+        ? `${verb} ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `${verb} ${res.updated} documento(s).`)
+      setSelectedIds(new Set()); setBulkBudgetId('')
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -548,6 +568,16 @@ export default function PayablesPage() {
     },
     onError: (e) => toast.error((e as Error).message),
   })
+  // Atribuição unitária de budget (picker inline na célula, gémeo da categoria).
+  const classifyBudget = useMutation({
+    mutationFn: ({ id, budgetId }: { id: string; budgetId: string | null }) =>
+      api.patch(`/treasury/${selectedClientId}/payables/${id}`, { budgetId }),
+    onSuccess: (_, { budgetId }) => {
+      qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      toast.success(budgetId === null ? 'Budget removido.' : 'Budget atribuído.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
   const toggleSelect = (id: string) => setSelectedIds((prev) => {
     const next = new Set(prev)
     if (next.has(id)) next.delete(id); else next.add(id)
@@ -559,7 +589,7 @@ export default function PayablesPage() {
     return next
   })
   // A seleção é por página visível: limpa ao trocar de separador, sub-separador ou página.
-  useEffect(() => { setSelectedIds(new Set()); setBulkCategoryId('') }, [activeTab, outrasSubTab, page])
+  useEffect(() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkBudgetId('') }, [activeTab, outrasSubTab, page])
 
   const payPayable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/pay`, {}),
@@ -747,9 +777,9 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter || unbudgetedFilter)
   function clearFilters() {
-    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setActiveCard(null); setPage(1)
+    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setActiveCard(null); setPage(1)
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -804,15 +834,29 @@ export default function PayablesPage() {
     <div className="sticky -top-6 z-20 px-3 py-3 bg-primary-50 border-b border-primary-100 flex items-center gap-3 flex-wrap">
       <span className="text-sm font-medium text-primary-800">{selectedIds.size} selecionado(s)</span>
       <select className="input w-auto text-sm py-1" value={bulkCategoryId} onChange={(e) => setBulkCategoryId(e.target.value)}>
-        <option value="">Atribuir categoria…</option>
+        <option value="" disabled hidden>Atribuir categoria…</option>
+        <option value="__none__">Remover categoria</option>
         {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
       </select>
       <button
         className="btn-primary text-sm py-1.5 px-3"
         disabled={!bulkCategoryId || bulkCategory.isPending}
-        onClick={() => bulkCategory.mutate({ ids: [...selectedIds], categoryId: bulkCategoryId })}
+        onClick={() => bulkCategory.mutate({ ids: [...selectedIds], categoryId: bulkCategoryId === '__none__' ? null : bulkCategoryId })}
       >
         {bulkCategory.isPending ? 'A aplicar…' : 'Aplicar'}
+      </button>
+      <span className="w-px h-5 bg-primary-200" />
+      <select className="input w-auto text-sm py-1" value={bulkBudgetId} onChange={(e) => setBulkBudgetId(e.target.value)}>
+        <option value="" disabled hidden>Atribuir budget…</option>
+        <option value="__none__">Remover budget</option>
+        {budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
+      <button
+        className="btn-primary text-sm py-1.5 px-3"
+        disabled={!bulkBudgetId || bulkBudget.isPending}
+        onClick={() => bulkBudget.mutate({ ids: [...selectedIds], budgetId: bulkBudgetId === '__none__' ? null : bulkBudgetId })}
+      >
+        {bulkBudget.isPending ? 'A aplicar…' : 'Aplicar'}
       </button>
       <span className="w-px h-5 bg-primary-200" />
       <button
@@ -829,7 +873,7 @@ export default function PayablesPage() {
       >
         Reverter p/ Em Aberto
       </button>
-      <button className="text-sm text-gray-500 hover:text-gray-700" onClick={() => { setSelectedIds(new Set()); setBulkCategoryId('') }}>Limpar seleção</button>
+      <button className="text-sm text-gray-500 hover:text-gray-700" onClick={() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkBudgetId('') }}>Limpar seleção</button>
     </div>
   )
 
@@ -848,13 +892,14 @@ export default function PayablesPage() {
   }
   const resetCardFilters = () => {
     setActiveCard(null); setStatusFilter('OPEN,PARTIAL'); setIsOverdueFilter(false)
-    setUncategorizedFilter(false); setPaymentDateFrom(''); setPaymentDateTo(''); setPage(1)
+    setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo(''); setPage(1)
   }
-  const applyCard = (card: 'uncategorized' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline') => {
+  const applyCard = (card: 'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline') => {
     if (activeCard === card) { resetCardFilters(); return }
     setActiveTab('fornecedores'); setPage(1); setActiveCard(card)
-    setIsOverdueFilter(false); setUncategorizedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
+    setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
     if (card === 'uncategorized') { setUncategorizedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
+    else if (card === 'unbudgeted') { setUnbudgetedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
     else if (card === 'pending') { setStatusFilter('OPEN,PARTIAL') }
     else if (card === 'overdue') { setStatusFilter(''); setIsOverdueFilter(true) }
     else if (card === 'thisWeek') { const w = cardWeekRange(); setStatusFilter('OPEN,PARTIAL'); setPaymentDateFrom(w.start); setPaymentDateTo(w.end) }
@@ -942,6 +987,7 @@ export default function PayablesPage() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                     {([
                       ['uncategorized', 'Sem categoria', kpis.cards.uncategorized],
+                      ['unbudgeted', 'Sem budget', kpis.cards.unbudgeted],
                       ['pending', 'Pendentes / Em aberto', kpis.cards.pending],
                       ['overdue', 'Vencidas', kpis.cards.overdue],
                       ['thisWeek', 'A pagar esta semana', kpis.cards.dueThisWeek],
@@ -1040,10 +1086,10 @@ export default function PayablesPage() {
                   {renderBulkBar()}
 
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full table-fixed text-sm">
                       <thead>
                         <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                          <th className="px-3 py-3 select-none">
+                          <th className="w-12 px-3 py-3 select-none">
                             <input
                               type="checkbox"
                               className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
@@ -1051,7 +1097,7 @@ export default function PayablesPage() {
                               onChange={(e) => toggleSelectMany(fornecedoresVisibleIds, e.target.checked)}
                             />
                           </th>
-                          <th className="px-2 py-3" />
+                          <th className="w-12 px-2 py-3" />
                           <th onClick={() => toggleSort('reference')} className="text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
                           <th onClick={() => toggleSort('entityName')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
                             Fornecedor <SortIcon field="entityName" />
@@ -1072,6 +1118,7 @@ export default function PayablesPage() {
                             Estado <SortIcon field="status" />
                           </th>
                           <th className="text-left px-3 py-3">Categoria</th>
+                          <th className="text-left px-3 py-3">Budget</th>
                           <th className="w-16 px-3 py-3" />
                         </tr>
                       </thead>
@@ -1102,7 +1149,7 @@ export default function PayablesPage() {
                                     <div className="text-xs text-gray-400">{p.documentDate ? formatDate(p.documentDate) : ''}{p.description ? ` · ${p.description}` : ''}</div>
                                   </div>
                                 </td>
-                                <td className="px-3 py-3 text-gray-700">
+                                <td className="px-3 py-3 text-gray-700 truncate">
                                   {p.tocSupplierId ? (
                                     <button
                                       onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`, { state: { from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' } }) }}
@@ -1157,6 +1204,13 @@ export default function PayablesPage() {
                                     categories={categories}
                                     typeLabel="Despesa"
                                     onSelect={(categoryId) => classify.mutate({ id: p.id, categoryId })}
+                                  />
+                                </td>
+                                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                  <InlineBudgetPicker
+                                    budget={p.budget}
+                                    budgets={budgets}
+                                    onSelect={(budgetId) => classifyBudget.mutate({ id: p.id, budgetId })}
                                   />
                                 </td>
                                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1298,7 +1352,7 @@ export default function PayablesPage() {
                                     </div>
                                   </div>
                                 </td>
-                                <td className="px-3 py-3 text-gray-700">
+                                <td className="px-3 py-3 text-gray-700 truncate">
                                   {d.supplier_id != null ? (
                                     <button
                                       onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${d.supplier_id}`, { state: { from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' } }) }}
@@ -1334,6 +1388,13 @@ export default function PayablesPage() {
                                     onSelect={(categoryId) => classify.mutate({ id: row.item.id, categoryId })}
                                   />
                                 </td>
+                                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                  <InlineBudgetPicker
+                                    budget={row.item.budget}
+                                    budgets={budgets}
+                                    onSelect={(budgetId) => classifyBudget.mutate({ id: row.item.id, budgetId })}
+                                  />
+                                </td>
                                 <td className="px-3 py-3" />
                               </tr>
                               {isExpanded && (
@@ -1359,6 +1420,7 @@ export default function PayablesPage() {
                                       <td className="px-3 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
                                       <td className="px-3 py-2" />
                                       <td className="px-3 py-2" />
+                                      <td className="px-3 py-2" />
                                     </tr>
                                   ))}
                                   {paymentCount > 0 && (
@@ -1375,7 +1437,7 @@ export default function PayablesPage() {
                           )
                         })}
                         {rows.length === 0 && (
-                          <tr><td colSpan={11} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
+                          <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
                         )}
                       </tbody>
                       {rows.length > 0 && (() => {
@@ -1391,7 +1453,7 @@ export default function PayablesPage() {
                                 <td className="px-3 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
                                 <td className="px-3 py-2 text-right text-gray-400">—</td>
                                 <td className="px-3 py-2 text-right text-red-700">{formatCurrency(combinedKpis.totalPending)}</td>
-                                <td colSpan={2} />
+                                <td colSpan={3} />
                               </tr>
                             </tfoot>
                           )
@@ -1405,7 +1467,7 @@ export default function PayablesPage() {
                               <td colSpan={6} className="px-3 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
                               <td className="px-3 py-2 text-right">{formatCurrency(totalAmt)}</td>
                               <td className="px-3 py-2 text-right text-red-700">{formatCurrency(pendingAmt)}</td>
-                              <td colSpan={3} />
+                              <td colSpan={4} />
                             </tr>
                           </tfoot>
                         )
@@ -1500,10 +1562,10 @@ export default function PayablesPage() {
                   </div>
                   {renderBulkBar()}
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                    <table className="w-full table-fixed text-sm">
                       <thead>
                         <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                          <th className="px-3 py-3 select-none">
+                          <th className="w-12 px-3 py-3 select-none">
                             <input
                               type="checkbox"
                               className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
@@ -1511,7 +1573,7 @@ export default function PayablesPage() {
                               onChange={(e) => toggleSelectMany(outrasVisibleIds, e.target.checked)}
                             />
                           </th>
-                          <th className="px-2 py-3" />
+                          <th className="w-12 px-2 py-3" />
                           <th onClick={() => toggleSort('reference')} className="text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
                           <th onClick={() => toggleSort('entityName')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Fornecedor <SortIcon field="entityName" /></th>
                           <th onClick={() => toggleSort('dueDate')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Vencimento <SortIcon field="dueDate" /></th>
@@ -1520,6 +1582,7 @@ export default function PayablesPage() {
                           <th onClick={() => toggleSort('pendingAmount')} className="text-center px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
                           <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                           <th className="text-left px-3 py-3">Categoria</th>
+                          <th className="text-left px-3 py-3">Budget</th>
                           <th className="w-16 px-3 py-3" />
                         </tr>
                       </thead>
@@ -1556,7 +1619,7 @@ export default function PayablesPage() {
                                     <div className="text-xs text-gray-400">{p.documentDate ? formatDate(p.documentDate) : ''}{p.description ? ` · ${p.description}` : ''}</div>
                                   </div>
                                 </td>
-                                <td className="px-3 py-3 text-gray-700">
+                                <td className="px-3 py-3 text-gray-700 truncate">
                                   {p.tocSupplierId ? (
                                     <button
                                       onClick={(e) => { e.stopPropagation(); navigate(`/empresa/fornecedores/${p.tocSupplierId}`, { state: { from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' } }) }}
@@ -1592,6 +1655,13 @@ export default function PayablesPage() {
                                     categories={categories}
                                     typeLabel="Despesa"
                                     onSelect={(categoryId) => classify.mutate({ id: p.id, categoryId })}
+                                  />
+                                </td>
+                                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                  <InlineBudgetPicker
+                                    budget={p.budget}
+                                    budgets={budgets}
+                                    onSelect={(budgetId) => classifyBudget.mutate({ id: p.id, budgetId })}
                                   />
                                 </td>
                                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1647,7 +1717,7 @@ export default function PayablesPage() {
                           }
 
                           if (outrasRows.length === 0) {
-                            return <tr><td colSpan={11} className="px-3 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
+                            return <tr><td colSpan={12} className="px-3 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
                           }
 
                           return outrasRows.map(renderRow)

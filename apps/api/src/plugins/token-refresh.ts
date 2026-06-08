@@ -35,6 +35,7 @@ const tokenRefreshPlugin: FastifyPluginAsync = fp(async (fastify) => {
       })
 
       for (const s of settings) {
+        if (s.importFileRetentionDays <= 0) continue // 0 = manter sempre, sem purga
         const cutoff = new Date(Date.now() - s.importFileRetentionDays * 24 * 60 * 60 * 1000)
         const { count } = await fastify.prisma.treasuryBankImport.deleteMany({
           where: {

@@ -3,8 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
+import { useTheme } from '@/contexts/ThemeContext'
 import Modal from '@/components/ui/Modal'
-import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Pencil, Archive, RotateCcw } from 'lucide-react'
+import { Plus, CheckCircle, AlertCircle, Clock, Unplug, ExternalLink, PlugZap, Copy, Check, Trash2, Pencil, Archive, RotateCcw, Sun, Moon } from 'lucide-react'
 import { formatDatetime } from '@/lib/utils'
 import BudgetRulesTab from '@/components/settings/BudgetRulesTab'
 import DunningTracksTab from '@/components/settings/DunningTracksTab'
@@ -22,9 +23,10 @@ interface ToconlineConfig {
 
 export default function SettingsPage() {
   const { selectedClientId, isTocEnabled, setIsTocEnabled } = useAuth()
+  const { theme, toggleTheme } = useTheme()
   const qc = useQueryClient()
   const toast = useToast()
-  const [tab, setTab] = useState<'categories' | 'settings' | 'toconline' | 'dunning'>('categories')
+  const [tab, setTab] = useState<'categories' | 'settings' | 'toconline' | 'dunning'>('settings')
   const [showNewCat, setShowNewCat] = useState(false)
   const [newCat, setNewCat] = useState({ name: '', type: 'EXPENSE', color: '#6b7280' })
   const [editCat, setEditCat] = useState<Category | null>(null)
@@ -180,9 +182,9 @@ export default function SettingsPage() {
   })
 
   const tabs = [
+    { id: 'settings', label: 'Configurações' },
     { id: 'categories', label: 'Categorias' },
     { id: 'dunning', label: 'Réguas de Cobrança' },
-    { id: 'settings', label: 'Configurações' },
     { id: 'toconline', label: 'TOConline' },
   ] as const
 
@@ -525,38 +527,23 @@ export default function SettingsPage() {
       {tab === 'settings' && (
         <div className="card p-6 space-y-6 max-w-xl">
           <div>
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Reconciliação</h3>
-            <div className="space-y-3">
-              <label className="flex items-center gap-3">
-                <input type="checkbox" checked={settingsForm.reconciliationDryRun ?? true} onChange={(e) => setSettingsForm({ ...settingsForm, reconciliationDryRun: e.target.checked })} className="rounded" />
-                <div>
-                  <span className="text-sm text-gray-700">Modo dry-run</span>
-                  <p className="text-xs text-gray-400">Simula a reconciliação sem escrever no TOConline</p>
-                </div>
-              </label>
-              <label className="flex items-center gap-3">
-                <input type="checkbox" checked={settingsForm.autoMatchEnabled ?? false} onChange={(e) => setSettingsForm({ ...settingsForm, autoMatchEnabled: e.target.checked })} className="rounded" />
-                <div>
-                  <span className="text-sm text-gray-700">Correspondência automática</span>
-                  <p className="text-xs text-gray-400">Sugere automaticamente pares movimento ↔ documento na reconciliação</p>
-                </div>
-              </label>
-              {settingsForm.autoMatchEnabled && (
-                <div className="ml-7">
-                  <label className="label">Limiar de confiança</label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range" min={0.5} max={1} step={0.05}
-                      value={settingsForm.autoMatchThreshold ?? 0.95}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, autoMatchThreshold: parseFloat(e.target.value) })}
-                      className="w-40"
-                    />
-                    <span className="text-sm font-medium text-gray-700">
-                      {Math.round((settingsForm.autoMatchThreshold ?? 0.95) * 100)}%
-                    </span>
-                  </div>
-                </div>
-              )}
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Aparência</h3>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="text-sm text-gray-700">Tema</span>
+                <p className="text-xs text-gray-400">Alternar entre tema claro e tema escuro</p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleTheme}
+                role="switch"
+                aria-checked={theme === 'dark'}
+                className={`relative inline-flex h-7 w-14 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none ${theme === 'dark' ? 'bg-primary-600' : 'bg-gray-200'}`}
+              >
+                <span className={`pointer-events-none inline-flex h-6 w-6 transform items-center justify-center rounded-full bg-white shadow transition-transform duration-200 ${theme === 'dark' ? 'translate-x-7' : 'translate-x-0.5'}`}>
+                  {theme === 'dark' ? <Moon className="w-3.5 h-3.5 text-primary-600" /> : <Sun className="w-3.5 h-3.5 text-amber-500" />}
+                </span>
+              </button>
             </div>
           </div>
 
@@ -583,9 +570,39 @@ export default function SettingsPage() {
 
           <div>
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Retenção de ficheiros</h3>
-            <div>
-              <label className="label">Dias de retenção dos ficheiros importados</label>
-              <input type="number" className="input w-32" value={settingsForm.importFileRetentionDays ?? 30} min={7} max={365} onChange={(e) => setSettingsForm({ ...settingsForm, importFileRetentionDays: parseInt(e.target.value) })} />
+            <div className="space-y-3">
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={(settingsForm.importFileRetentionDays ?? 30) > 0}
+                  onChange={(e) => setSettingsForm({ ...settingsForm, importFileRetentionDays: e.target.checked ? 30 : 0 })}
+                  className="rounded"
+                />
+                <div>
+                  <span className="text-sm text-gray-700">Eliminar ficheiros importados antigos</span>
+                  <p className="text-xs text-gray-400">
+                    {(settingsForm.importFileRetentionDays ?? 30) > 0
+                      ? 'Os ficheiros importados são removidos automaticamente após o período definido'
+                      : 'Manter sempre — os ficheiros importados nunca são removidos'}
+                  </p>
+                </div>
+              </label>
+              {(settingsForm.importFileRetentionDays ?? 30) > 0 && (
+                <div className="ml-7">
+                  <label className="label">Período de retenção</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range" min={7} max={365} step={1}
+                      value={settingsForm.importFileRetentionDays ?? 30}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, importFileRetentionDays: parseInt(e.target.value) })}
+                      className="w-56"
+                    />
+                    <span className="text-sm font-medium text-gray-700 whitespace-nowrap">
+                      {settingsForm.importFileRetentionDays ?? 30} dias
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

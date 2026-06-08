@@ -1315,6 +1315,19 @@ export default function BanksPage() {
                 </p>
               </div>
 
+              <div>
+                <label className="label">Saldo mínimo (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="input w-40"
+                  value={newAccount.minBalance}
+                  onChange={(e) => setNewAccount({ ...newAccount, minBalance: e.target.value })}
+                  placeholder="Sem mínimo"
+                />
+                <p className="text-xs text-gray-400 mt-1">Deixe vazio para desativar o alerta de saldo baixo.</p>
+              </div>
+
               {createAccount.isError && (
                 <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
                   {(createAccount.error as Error).message}

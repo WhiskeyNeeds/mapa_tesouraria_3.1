@@ -24,6 +24,7 @@ interface ReceivableListItem {
   parentId: string | null
   promisedPaymentDate: Date | null
   category: { id: string; name: string; color: string | null; launchToc: boolean } | null
+  budget: { id: string; name: string; color: string | null } | null
   children: unknown[]
   _src: 'local' | 'toc'
   _tocRaw: Prisma.JsonValue | null
@@ -71,6 +72,7 @@ function mapTocSalesToReceivable(d: TocSalesDocument): ReceivableListItem | null
     parentId: null,
     promisedPaymentDate: null,
     category: null,
+    budget: null,
     children: [],
     _src: 'toc',
     _tocRaw: d.raw,
@@ -123,6 +125,7 @@ function resolveStatusOverlay(
 type LocalReceivableRow = Prisma.TreasuryReceivableGetPayload<{
   include: {
     category: { select: { id: true; name: true; color: true; launchToc: true } }
+    budget: { select: { id: true; name: true; color: true } }
     children: true
   }
 }>
@@ -152,6 +155,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocSalesDocumen
       parentId: local.parentId,
       promisedPaymentDate: local.promisedPaymentDate,
       category: local.category,
+      budget: local.budget,
       children: local.children,
       _src: local.tocSalesDocId ? 'toc' : 'local',
       _tocRaw: null,
@@ -182,6 +186,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocSalesDocumen
     parentId: local.parentId,
     promisedPaymentDate: local.promisedPaymentDate,
     category: local.category,
+    budget: local.budget,
     children: local.children,
     _src: 'toc',
     _tocRaw: tocDoc.raw,
@@ -206,6 +211,8 @@ export class TreasuryReceivablesService {
     origin?: TreasuryDocOrigin
     categoryId?: string
     uncategorized?: boolean
+    budgetId?: string
+    unbudgeted?: boolean
     entityName?: string
     dueDateFrom?: string
     dueDateTo?: string
@@ -230,7 +237,7 @@ export class TreasuryReceivablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocCustomerId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocCustomerId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusList: TreasuryDocStatus[] | undefined = overdue
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -245,6 +252,7 @@ export class TreasuryReceivablesService {
       deletedAt: null,
       NOT: { parentId: { not: null }, recurrenceId: null },
       ...(categoryId ? { categoryId } : {}),
+      ...(budgetId ? { budgetId } : {}),
       ...(paymentDateFrom || paymentDateTo ? {
         promisedPaymentDate: {
           ...(paymentDateFrom ? { gte: new Date(paymentDateFrom) } : {}),
@@ -259,12 +267,13 @@ export class TreasuryReceivablesService {
         where: localWhere,
         include: {
           category: { select: { id: true, name: true, color: true, launchToc: true } },
+          budget: { select: { id: true, name: true, color: true } },
           children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
         },
       }),
       // Filtros locais excluem todos os docs TOC porque não têm equivalente
       // na fonte; nesse caso a lista TOC fica vazia.
-      (categoryId || isRecurrent !== undefined || paymentDateFrom || paymentDateTo)
+      (categoryId || budgetId || isRecurrent !== undefined || paymentDateFrom || paymentDateTo)
         ? Promise.resolve([] as TocSalesDocument[])
         : this.prisma.tocSalesDocument.findMany({
             where: {
@@ -301,7 +310,10 @@ export class TreasuryReceivablesService {
     }
 
     // 3. Aplicar filtros de status / texto / datas / overdue em memória
-    const now = new Date()
+    // "Vencido" = prazo já passou (antes de hoje); um documento com vencimento
+    // hoje ainda não está vencido. Usar meia-noite de hoje mantém este filtro
+    // alinhado com a contagem do cartão "Vencidas" (que compara contra hoje 00:00).
+    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
     const docDateFromTs = docDateFrom ? new Date(docDateFrom).getTime() : null
     const docDateToTs = docDateTo ? new Date(new Date(docDateTo).getTime() + 86400000).getTime() : null
     const dueDateFromTs = dueDateFrom ? new Date(dueDateFrom).getTime() : null
@@ -313,6 +325,7 @@ export class TreasuryReceivablesService {
       if (bucket === 'clientes' && item.tocSalesDocId == null) return false
       if (statusList && !statusList.includes(item.status)) return false
       if (uncategorized && item.category != null) return false
+      if (unbudgeted && item.budget != null) return false
       if (origin && item.origin !== origin) return false
       if (entityQuery) {
         const en = (item.entityName ?? '').toLowerCase()
@@ -320,7 +333,7 @@ export class TreasuryReceivablesService {
         if (!en.includes(entityQuery) && !rf.includes(entityQuery)) return false
       }
       if (tocCustomerId && item.tocCustomerId !== tocCustomerId) return false
-      if (overdue && (item.dueDate == null || item.dueDate >= now)) return false
+      if (overdue && (item.dueDate == null || item.dueDate >= startOfToday)) return false
       if (dueDateFromTs != null && (item.dueDate == null || item.dueDate.getTime() < dueDateFromTs)) return false
       if (dueDateToTs != null && (item.dueDate == null || item.dueDate.getTime() >= dueDateToTs)) return false
       if (docDateFromTs != null && (item.documentDate == null || item.documentDate.getTime() < docDateFromTs)) return false
@@ -718,17 +731,40 @@ export class TreasuryReceivablesService {
   /** Atribuição de categoria em massa. Reaproveita `update()` por documento (que
    *  resolve docs TOC para um registo local, valida a categoria, faz cascade às
    *  parcelas e regista auditoria). Resiliente: documentos que falhem não abortam
-   *  os restantes. Devolve a contagem de sucessos e os erros por id. */
-  async bulkSetCategory(clientId: string, userId: string, ids: string[], categoryId: string) {
-    const category = await this.prisma.treasuryCategory.findFirst({ where: { id: categoryId, clientId, deletedAt: null } })
-    if (!category) throw httpError(404, 'Category not found')
-    if (category.type !== 'REVENUE') throw httpError(400, `Categoria '${category.name}' é de Despesa; não pode ser associada a contas a receber`)
+   *  os restantes. Devolve a contagem de sucessos e os erros por id.
+   *  `categoryId: null` remove a categoria (reverter categorização em massa). */
+  async bulkSetCategory(clientId: string, userId: string, ids: string[], categoryId: string | null) {
+    if (categoryId !== null) {
+      const category = await this.prisma.treasuryCategory.findFirst({ where: { id: categoryId, clientId, deletedAt: null } })
+      if (!category) throw httpError(404, 'Category not found')
+      if (category.type !== 'REVENUE') throw httpError(400, `Categoria '${category.name}' é de Despesa; não pode ser associada a contas a receber`)
+    }
 
     let updated = 0
     const errors: Array<{ id: string; error: string }> = []
     for (const id of ids) {
       try {
         await this.update(clientId, userId, id, { categoryId })
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
+  /** Atribuição de budget em massa. Espelha `bulkSetCategory`: reutiliza
+   *  `update()` por documento (resolve docs TOC, valida compatibilidade do
+   *  budget, regista auditoria). Resiliente a falhas individuais.
+   *  `budgetId: null` remove o budget. */
+  async bulkSetBudget(clientId: string, userId: string, ids: string[], budgetId: string | null) {
+    if (budgetId !== null) await this.budgetsSvc.assertCompatible(clientId, budgetId, 'REVENUE')
+
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        await this.update(clientId, userId, id, { budgetId })
         updated++
       } catch (err) {
         errors.push({ id, error: err instanceof Error ? err.message : String(err) })
@@ -1317,15 +1353,19 @@ export class TreasuryReceivablesService {
     // Contadores dos cartões compactos clicáveis. Calculados sobre o dataset
     // completo (com overlay TOC) reutilizando list(), garantindo coerência com
     // o que cada filtro mostra na tabela.
-    const cardItems = (await this.list(clientId, { limit: 1_000_000, page: 1 })).items
+    // Os cartões aplicam os seus presets ao separador Clientes, por isso a
+    // contagem tem de partilhar o mesmo universo (bucket 'clientes'); caso
+    // contrário o badge incluiria "Outras Operações" que o filtro não mostra.
+    const cardItems = (await this.list(clientId, { limit: 1_000_000, page: 1, bucket: 'clientes' })).items
     const startToday = new Date(); startToday.setHours(0, 0, 0, 0)
     const wd = startToday.getDay() // 0=Dom … 6=Sáb
     const weekStart = new Date(startToday); weekStart.setDate(startToday.getDate() + (wd === 0 ? -6 : 1 - wd))
     const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7) // exclusivo
     const isPending = (s: string) => s === 'OPEN' || s === 'PARTIAL'
-    let cUncat = 0, cPending = 0, cOverdue = 0, cWeek = 0, cPastPay = 0
+    let cUncat = 0, cUnbudgeted = 0, cPending = 0, cOverdue = 0, cWeek = 0, cPastPay = 0
     for (const it of cardItems) {
       if (it.status !== 'VOID' && it.category == null) cUncat++
+      if (it.status !== 'VOID' && it.budget == null) cUnbudgeted++
       if (isPending(it.status)) {
         cPending++
         if (it.dueDate != null && it.dueDate < startToday) cOverdue++
@@ -1344,6 +1384,7 @@ export class TreasuryReceivablesService {
       aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
       cards: {
         uncategorized: cUncat,
+        unbudgeted: cUnbudgeted,
         pending: cPending,
         overdue: cOverdue,
         dueThisWeek: cWeek,
