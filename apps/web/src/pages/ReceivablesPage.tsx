@@ -1146,9 +1146,7 @@ export default function ReceivablesPage() {
                         </div>
                         <p className="text-xl font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(kpisRange?.settledThisMonth ?? combinedKpis.settledThisMonth)}</p>
                       </div>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 ring-1 ring-white/25 text-[10.5px] font-semibold flex-shrink-0">
-                        {receivedDays === null ? 'este mês' : (receivedDays === 'ALL' ? 'Todo periodo' : `${receivedDays}d`)}
-                      </span>
+                      
                     </div>
                   </div>
                 </div>
