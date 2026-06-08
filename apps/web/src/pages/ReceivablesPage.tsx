@@ -1030,11 +1030,14 @@ export default function ReceivablesPage() {
     ...kpis,
     countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
   } : null
-  const [receivedDays, setReceivedDays] = useState<number>(30)
+  const [receivedDays, setReceivedDays] = useState<number | 'ALL' | null>(null)
   const { data: kpisRange } = useQuery({
     queryKey: ['receivables-kpis-range', selectedClientId, receivedDays],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/receivables/kpis?days=${receivedDays}`),
-    enabled: !!selectedClientId,
+    queryFn: () => {
+      if (receivedDays === 'ALL') return api.get(`/treasury/${selectedClientId}/receivables/kpis?all=true`)
+      return api.get(`/treasury/${selectedClientId}/receivables/kpis?days=${receivedDays}`)
+    },
+    enabled: !!selectedClientId && receivedDays != null,
   })
 
   return (
@@ -1111,10 +1114,14 @@ export default function ReceivablesPage() {
                         <div className="flex items-center gap-2">
                           <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Recebido</p>
                           <div className="inline-flex bg-white/10 rounded-lg p-0.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setReceivedDays(receivedDays === 'ALL' ? null : 'ALL') }}
+                              className={`px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === 'ALL' ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
+                            >Todo periodo</button>
                             {[30, 60, 90].map((d) => (
                               <button
                                 key={d}
-                                onClick={(e) => { e.stopPropagation(); setReceivedDays(d) }}
+                                onClick={(e) => { e.stopPropagation(); setReceivedDays(receivedDays === d ? null : d) }}
                                 className={`px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === d ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
                               >{d}d</button>
                             ))}
@@ -1123,7 +1130,7 @@ export default function ReceivablesPage() {
                         <p className="text-xl font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(kpisRange?.settledThisMonth ?? combinedKpis.settledThisMonth)}</p>
                       </div>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 ring-1 ring-white/25 text-[10.5px] font-semibold flex-shrink-0">
-                        <TrendingUp className="w-3.5 h-3.5" />{receivedDays}d
+                        <TrendingUp className="w-3.5 h-3.5" />{receivedDays === null ? 'este mês' : (receivedDays === 'ALL' ? 'Todo periodo' : `${receivedDays}d`)}
                       </span>
                     </div>
                   </div>
