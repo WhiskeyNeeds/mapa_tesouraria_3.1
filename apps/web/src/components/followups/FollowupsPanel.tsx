@@ -392,7 +392,7 @@ function TimelineItem({ ev, expanded, onToggleExpand, onComplete, onLogCall, onD
             )}
           </div>
         </div>
-            {ev.description && (
+        {ev.description && (
           <div className="text-xs text-gray-600 whitespace-pre-wrap mb-1">{ev.description}</div>
         )}
         <div className="flex items-center justify-between text-[11px] text-gray-400">

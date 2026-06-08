@@ -77,15 +77,15 @@ export function auditTitle(action: string, payload: unknown): string {
     case 'payable.update': {
       const changes = (p as DiffPayload).changes ?? {}
       const fields = Object.keys(changes).map(fieldLabel)
-      
-          // Ignore internal/overlay fields (starting with underscore) from the short title
-          const visibleFields = Object.keys(changes).filter((f) => !f.startsWith('_')).map(fieldLabel)
-          // Use visibleFields for title generation
-          const fieldsToShow = visibleFields
-          if (fieldsToShow.length === 0) return 'Editada'
-          if (fieldsToShow.length === 1) return `${fieldsToShow[0]} alterada`
-          if (fieldsToShow.length <= 3) return `Alterado: ${fieldsToShow.join(', ')}`
-          return `${fieldsToShow.length} campos alterados`
+
+      // Ignore internal/overlay fields (starting with underscore) from the short title
+      const visibleFields = Object.keys(changes).filter((f) => !f.startsWith('_')).map(fieldLabel)
+      // Use visibleFields for title generation
+      const fieldsToShow = visibleFields
+      if (fieldsToShow.length === 0) return 'Editada'
+      if (fieldsToShow.length === 1) return `${fieldsToShow[0]} alterada`
+      if (fieldsToShow.length <= 3) return `Alterado: ${fieldsToShow.join(', ')}`
+      return `${fieldsToShow.length} campos alterados`
     }
     case 'receivable.delete':
     case 'payable.delete':
