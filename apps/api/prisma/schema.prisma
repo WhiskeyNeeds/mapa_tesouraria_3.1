@@ -465,6 +465,10 @@ model TreasuryReceivable {
   recurrenceId        String?
   parentId            String?
   promisedPaymentDate DateTime?
+  // Instante em que o documento foi marcado como PAID/SETTLED (data de
+  // liquidação). Usado pela janela do KPI "Recebido". Reposto a null quando o
+  // estado regressa a OPEN/PARTIAL/VOID.
+  settledAt           DateTime?
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)

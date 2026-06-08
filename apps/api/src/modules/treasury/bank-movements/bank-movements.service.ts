@@ -459,6 +459,7 @@ export class TreasuryBankMovementsService {
                 receivedAmount: newReceived,
                 pendingAmount: Number(rec.totalAmount) - newReceived,
                 status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
+                settledAt: null,
               },
             })
           }

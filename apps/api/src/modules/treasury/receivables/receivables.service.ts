@@ -222,6 +222,9 @@ export class TreasuryReceivablesService {
     paymentDateTo?: string
     isRecurrent?: boolean
     overdue?: boolean
+    // "Passou prazo pagamento": pendentes cuja data prometida de pagamento — ou,
+    // na ausência desta, a data de vencimento de origem — já passou.
+    pastPaymentDeadline?: boolean
     tocCustomerId?: string
     // Separa os documentos por separador da UI: 'clientes' = ligados ao TOConline
     // (tocSalesDocId != null); 'outras' = operações locais (tocSalesDocId == null).
@@ -237,8 +240,8 @@ export class TreasuryReceivablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocCustomerId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
-    const statusList: TreasuryDocStatus[] | undefined = overdue
+    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocCustomerId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const statusList: TreasuryDocStatus[] | undefined = (overdue || pastPaymentDeadline)
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
 
@@ -334,6 +337,10 @@ export class TreasuryReceivablesService {
       }
       if (tocCustomerId && item.tocCustomerId !== tocCustomerId) return false
       if (overdue && (item.dueDate == null || item.dueDate >= startOfToday)) return false
+      if (pastPaymentDeadline) {
+        const effPay = item.promisedPaymentDate ?? item.dueDate
+        if (effPay == null || effPay >= startOfToday) return false
+      }
       if (dueDateFromTs != null && (item.dueDate == null || item.dueDate.getTime() < dueDateFromTs)) return false
       if (dueDateToTs != null && (item.dueDate == null || item.dueDate.getTime() >= dueDateToTs)) return false
       if (docDateFromTs != null && (item.documentDate == null || item.documentDate.getTime() < docDateFromTs)) return false
@@ -819,9 +826,14 @@ export class TreasuryReceivablesService {
       ? pendingDates.reduce((min, d) => d < min ? d : min, pendingDates[0])
       : null
 
+    // settledAt do pai: preserva a data original se já estava liquidado; marca
+    // agora quando passa a PAID/SETTLED; repõe null se regressa a OPEN/PARTIAL.
+    const parent = await this.prisma.treasuryReceivable.findUnique({ where: { id: parentId }, select: { settledAt: true } })
+    const settledAt = (status === 'SETTLED' || status === 'PAID') ? (parent?.settledAt ?? new Date()) : null
+
     await this.prisma.treasuryReceivable.update({
       where: { id: parentId },
-      data: { status, receivedAmount, pendingAmount, promisedPaymentDate },
+      data: { status, receivedAmount, pendingAmount, promisedPaymentDate, settledAt },
     })
   }
 
@@ -850,13 +862,14 @@ export class TreasuryReceivablesService {
           pendingAmount: item.tocSalesDocId ? null : 0,
           receivedAmount: item.tocSalesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
+          settledAt: new Date(),
         },
       })
       // Cascade: settling a parent settles all its non-recurring open/partial children at once.
       if (splitChildren.length > 0) {
         await tx.$executeRaw`
           UPDATE "treasury_receivables"
-          SET "status" = 'SETTLED', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "updatedAt" = NOW()
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = NOW(), "updatedAt" = NOW()
           WHERE "parentId" = ${id}
             AND "recurrenceId" IS NULL
             AND "deletedAt" IS NULL
@@ -897,13 +910,14 @@ export class TreasuryReceivablesService {
           pendingAmount: item.tocSalesDocId ? null : 0,
           receivedAmount: item.tocSalesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
+          settledAt: new Date(),
         },
       })
       // Cascade: marcar a mãe como paga marca as parcelas em aberto/parciais.
       if (splitChildren.length > 0) {
         await tx.$executeRaw`
           UPDATE "treasury_receivables"
-          SET "status" = 'PAID', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "updatedAt" = NOW()
+          SET "status" = 'PAID', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = NOW(), "updatedAt" = NOW()
           WHERE "parentId" = ${id}
             AND "recurrenceId" IS NULL
             AND "deletedAt" IS NULL
@@ -943,13 +957,14 @@ export class TreasuryReceivablesService {
           status: 'OPEN',
           pendingAmount: item.tocSalesDocId ? null : item.totalAmount,
           receivedAmount: item.tocSalesDocId ? null : 0,
+          settledAt: null,
         },
       })
       // Cascade: reverting the parent reverts every PAID/SETTLED non-recurring child.
       if (settledChildren.length > 0) {
         await tx.$executeRaw`
           UPDATE "treasury_receivables"
-          SET "status" = 'OPEN', "pendingAmount" = "totalAmount", "receivedAmount" = 0, "updatedAt" = NOW()
+          SET "status" = 'OPEN', "pendingAmount" = "totalAmount", "receivedAmount" = 0, "settledAt" = NULL, "updatedAt" = NOW()
           WHERE "parentId" = ${id}
             AND "recurrenceId" IS NULL
             AND "deletedAt" IS NULL
@@ -985,7 +1000,7 @@ export class TreasuryReceivablesService {
     const newStatus = newPending < 0.005 ? 'SETTLED' : 'PARTIAL'
     const result = await this.prisma.treasuryReceivable.update({
       where: { id },
-      data: { receivedAmount: newReceived, pendingAmount: newPending, status: newStatus },
+      data: { receivedAmount: newReceived, pendingAmount: newPending, status: newStatus, settledAt: newStatus === 'SETTLED' ? new Date() : null },
     })
     await audit(this.prisma, {
       clientId, userId,
@@ -1008,7 +1023,7 @@ export class TreasuryReceivablesService {
       throw httpError(409, 'Fatura liquidada no TOConline (recibo emitido) — não é possível anulá-la aqui.')
     }
     if (item.status === 'SETTLED') throw httpError(409, 'Cannot void a settled receivable')
-    const result = await this.prisma.treasuryReceivable.update({ where: { id }, data: { status: 'VOID' } })
+    const result = await this.prisma.treasuryReceivable.update({ where: { id }, data: { status: 'VOID', settledAt: null } })
     await audit(this.prisma, {
       clientId, userId,
       action: 'receivable.void',
@@ -1269,8 +1284,16 @@ export class TreasuryReceivablesService {
     return { classified, skipped: unclassified.length - classified }
   }
 
-  async getKpis(clientId: string) {
+  async getKpis(clientId: string, opts: { days?: number; all?: boolean } = {}) {
     const now = new Date()
+    // Janela do "Recebido": 'all' = desde sempre; days = últimos N dias a contar
+    // de hoje; sem opção = mês civil atual (default histórico, usado pela query
+    // principal de KPIs que não passa parâmetros).
+    const settledFrom = opts.all
+      ? null
+      : opts.days != null
+        ? new Date(now.getTime() - opts.days * 86400000)
+        : new Date(now.getFullYear(), now.getMonth(), 1)
     // Após overlay TOC, os receivables com tocSalesDocId são "anotações" sobre
     // docs TOC — os dados da fatura vivem no espelho tocSalesDocument. KPIs:
     //   - locais SEM tocLink (puramente locais: manuais, splits, recurrences)
@@ -1305,7 +1328,7 @@ export class TreasuryReceivablesService {
       this.prisma.treasuryReceivable.aggregate({
         where: {
           clientId, deletedAt: null, status: { in: ['PAID', 'SETTLED'] },
-          updatedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) },
+          ...(settledFrom ? { settledAt: { gte: settledFrom } } : {}),
         },
         _sum: { totalAmount: true },
       }),
@@ -1369,10 +1392,11 @@ export class TreasuryReceivablesService {
       if (isPending(it.status)) {
         cPending++
         if (it.dueDate != null && it.dueDate < startToday) cOverdue++
-        if (it.promisedPaymentDate != null) {
-          if (it.promisedPaymentDate >= weekStart && it.promisedPaymentDate < weekEnd) cWeek++
-          if (it.promisedPaymentDate < startToday) cPastPay++
-        }
+        if (it.promisedPaymentDate != null && it.promisedPaymentDate >= weekStart && it.promisedPaymentDate < weekEnd) cWeek++
+        // "Passou prazo pagamento": usa a data prometida ou, na falta dela, a data
+        // de vencimento de origem. Itens vencidos sem compromisso registado entram.
+        const effPay = it.promisedPaymentDate ?? it.dueDate
+        if (effPay != null && effPay < startToday) cPastPay++
       }
     }
 

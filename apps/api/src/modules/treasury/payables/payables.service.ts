@@ -203,6 +203,9 @@ export class TreasuryPayablesService {
     paymentDateTo?: string
     isRecurrent?: boolean
     overdue?: boolean
+    // "Passou prazo pagamento": pendentes cuja data prometida de pagamento — ou,
+    // na ausência desta, a data de vencimento de origem — já passou.
+    pastPaymentDeadline?: boolean
     tocSupplierId?: string
     // 'fornecedores' = ligados ao TOConline (tocPurchasesDocId != null);
     // 'outras' = operações locais (tocPurchasesDocId == null). Cada separador
@@ -218,8 +221,8 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
-    const statusList: TreasuryDocStatus[] | undefined = overdue
+    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocSupplierId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const statusList: TreasuryDocStatus[] | undefined = (overdue || pastPaymentDeadline)
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
 
@@ -308,6 +311,10 @@ export class TreasuryPayablesService {
       }
       if (tocSupplierId && item.tocSupplierId !== tocSupplierId) return false
       if (overdue && (item.dueDate == null || item.dueDate >= startOfToday)) return false
+      if (pastPaymentDeadline) {
+        const effPay = item.promisedPaymentDate ?? item.dueDate
+        if (effPay == null || effPay >= startOfToday) return false
+      }
       if (dueDateFromTs != null && (item.dueDate == null || item.dueDate.getTime() < dueDateFromTs)) return false
       if (dueDateToTs != null && (item.dueDate == null || item.dueDate.getTime() >= dueDateToTs)) return false
       if (docDateFromTs != null && (item.documentDate == null || item.documentDate.getTime() < docDateFromTs)) return false
@@ -1343,10 +1350,11 @@ export class TreasuryPayablesService {
       if (isPending(it.status)) {
         cPending++
         if (it.dueDate != null && it.dueDate < startToday) cOverdue++
-        if (it.promisedPaymentDate != null) {
-          if (it.promisedPaymentDate >= weekStart && it.promisedPaymentDate < weekEnd) cWeek++
-          if (it.promisedPaymentDate < startToday) cPastPay++
-        }
+        if (it.promisedPaymentDate != null && it.promisedPaymentDate >= weekStart && it.promisedPaymentDate < weekEnd) cWeek++
+        // "Passou prazo pagamento": usa a data prometida ou, na falta dela, a data
+        // de vencimento de origem. Itens vencidos sem compromisso registado entram.
+        const effPay = it.promisedPaymentDate ?? it.dueDate
+        if (effPay != null && effPay < startToday) cPastPay++
       }
     }
 

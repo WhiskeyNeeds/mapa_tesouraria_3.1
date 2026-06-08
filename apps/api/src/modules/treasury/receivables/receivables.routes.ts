@@ -38,6 +38,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       paymentDateTo?: string
       isRecurrent?: string
       overdue?: string
+      pastPaymentDeadline?: string
       tocCustomerId?: string
       bucket?: 'clientes' | 'outras'
       sortBy?: string
@@ -57,6 +58,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       unbudgeted: q.unbudgeted === 'true',
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
       overdue: q.overdue === 'true',
+      pastPaymentDeadline: q.pastPaymentDeadline === 'true',
       docDateFrom: q.docDateFrom,
       docDateTo: q.docDateTo,
       sortBy: validSortBy,
@@ -68,7 +70,12 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
 
   fastify.get(`${prefix}/kpis`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.send(await svc.getKpis(clientId))
+    const q = request.query as { days?: string; all?: string }
+    const days = q.days ? parseInt(q.days) : undefined
+    return reply.send(await svc.getKpis(clientId, {
+      all: q.all === 'true',
+      days: days != null && Number.isFinite(days) ? days : undefined,
+    }))
   })
 
   fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
