@@ -7,7 +7,6 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel } from '@/lib/utils'
 import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
-import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import TocSyncStatus from '@/components/ui/TocSyncStatus'
@@ -15,8 +14,9 @@ import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import DateRangePopover from '@/components/ui/DateRangePopover'
 import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
+import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye } from 'lucide-react'
+import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff, TrendingUp } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -79,6 +79,7 @@ interface Receivable {
   promisedPaymentDate?: string | null
   parentId?: string | null
   category?: { id: string; name: string; color: string } | null
+  budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; receivedAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
   _src?: 'local' | 'toc'
   _tocRaw?: TocSalesDoc | null
@@ -86,7 +87,7 @@ interface Receivable {
   _statusDiffersFromToc?: boolean
 }
 interface Category { id: string; name: string; type: string; color?: string | null }
-interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string }
+interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string; color?: string | null }
 interface TocCustomer { id: string | number; business_name?: string; tax_identification_number?: string;[key: string]: unknown }
 
 const emptyForm = {
@@ -108,6 +109,17 @@ const emptyOutrasForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
   dueDate: '', totalAmount: '', budgetId: '',
 }
+
+// Identidade visual de cada cartão de ação rápida: ícone semântico + paleta.
+// Classes estáticas (literais) para o Tailwind as detetar no purge.
+const cardMeta = {
+  uncategorized: { label: 'Sem categoria', Icon: Tags, chip: 'bg-amber-100 text-amber-600', chipActive: 'bg-amber-500 text-white', bar: 'bg-amber-400', activeBg: 'bg-amber-50 border-amber-200', num: 'text-amber-700' },
+  unbudgeted: { label: 'Sem budget', Icon: Wallet, chip: 'bg-violet-100 text-violet-600', chipActive: 'bg-violet-500 text-white', bar: 'bg-violet-400', activeBg: 'bg-violet-50 border-violet-200', num: 'text-violet-700' },
+  pending: { label: 'Pendentes / Em aberto', Icon: FileClock, chip: 'bg-blue-100 text-blue-600', chipActive: 'bg-blue-500 text-white', bar: 'bg-blue-400', activeBg: 'bg-blue-50 border-blue-200', num: 'text-blue-700' },
+  overdue: { label: 'Vencidas', Icon: AlertTriangle, chip: 'bg-red-100 text-red-600', chipActive: 'bg-red-500 text-white', bar: 'bg-red-400', activeBg: 'bg-red-50 border-red-200', num: 'text-red-700' },
+  thisWeek: { label: 'A receber esta semana', Icon: CalendarClock, chip: 'bg-teal-100 text-teal-600', chipActive: 'bg-teal-500 text-white', bar: 'bg-teal-400', activeBg: 'bg-teal-50 border-teal-200', num: 'text-teal-700' },
+  pastDeadline: { label: 'Passou prazo pagamento', Icon: TimerOff, chip: 'bg-orange-100 text-orange-600', chipActive: 'bg-orange-500 text-white', bar: 'bg-orange-400', activeBg: 'bg-orange-50 border-orange-200', num: 'text-orange-700' },
+} as const
 
 
 type Row = { _src: 'local'; r: Receivable } | { _src: 'toc'; d: TocSalesDoc; item: Receivable }
@@ -250,7 +262,7 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
   if (isLoading) {
     return (
       <tr>
-        <td colSpan={11} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+        <td colSpan={12} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
           <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar recibos...
         </td>
       </tr>
@@ -260,7 +272,7 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
   if (!receipts.length) {
     return (
       <tr>
-        <td colSpan={11} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
+        <td colSpan={12} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
           Sem recibos associados
         </td>
       </tr>
@@ -288,6 +300,7 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
           <td className="px-3 py-2 text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</td>
           <td className="px-3 py-2" />
           <td className="px-3 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(rc.gross_total)}</td>
+          <td className="px-3 py-2" />
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
@@ -327,7 +340,8 @@ export default function ReceivablesPage() {
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isOverdueFilter, setIsOverdueFilter] = useState(false)
   const [uncategorizedFilter, setUncategorizedFilter] = useState(false)
-  const [activeCard, setActiveCard] = useState<'uncategorized' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline' | null>(null)
+  const [unbudgetedFilter, setUnbudgetedFilter] = useState(false)
+  const [activeCard, setActiveCard] = useState<'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline' | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
   const [editRow, setEditRow] = useState<Receivable | null>(null)
   const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
@@ -339,6 +353,7 @@ export default function ReceivablesPage() {
   // Seleção para atribuição de categoria em massa (âmbito: página visível).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkCategoryId, setBulkCategoryId] = useState('')
+  const [bulkBudgetId, setBulkBudgetId] = useState('')
   const [activeTab, setActiveTab] = useState<'clientes' | 'outras'>('clientes')
   const [outrasSubTab, setOutrasSubTab] = useState<'fechadas' | 'futuras' | 'programadas' | 'abertas'>('abertas')
   // Filtros das "Outras Operações" são independentes por sub-separador: cada uma
@@ -396,12 +411,12 @@ export default function ReceivablesPage() {
 
   const { data: kpis } = useQuery({
     queryKey: ['receivables-kpis', selectedClientId],
-    queryFn: () => api.get<{ totalPending: number; countOpen: number; countOverdue: number; settledThisMonth: number; aging: Record<string, number>; cards: { uncategorized: number; pending: number; overdue: number; dueThisWeek: number; pastPaymentDeadline: number } }>(`/treasury/${selectedClientId}/receivables/kpis`),
+    queryFn: () => api.get<{ totalPending: number; countOpen: number; countOverdue: number; settledThisMonth: number; aging: Record<string, number>; cards: { uncategorized: number; unbudgeted: number; pending: number; overdue: number; dueThisWeek: number; pastPaymentDeadline: number } }>(`/treasury/${selectedClientId}/receivables/kpis`),
     enabled: !!selectedClientId,
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['receivables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, uncategorizedFilter],
+    queryKey: ['receivables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, uncategorizedFilter, unbudgetedFilter],
     queryFn: () => {
       // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
       // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
@@ -428,6 +443,7 @@ export default function ReceivablesPage() {
         if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
         if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
         if (uncategorizedFilter) params.set('uncategorized', 'true')
+        if (unbudgetedFilter) params.set('unbudgeted', 'true')
       }
       if (sortBy !== 'dueDate' || sortDir !== 'asc') { params.set('sortBy', sortBy); params.set('sortDir', sortDir) }
       return api.get<{ total: number; items: Receivable[] }>(`/treasury/${selectedClientId}/receivables?${params}`)
@@ -548,14 +564,28 @@ export default function ReceivablesPage() {
   })
 
   const bulkCategory = useMutation({
-    mutationFn: ({ ids, categoryId }: { ids: string[]; categoryId: string }) =>
+    mutationFn: ({ ids, categoryId }: { ids: string[]; categoryId: string | null }) =>
       api.patch<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/receivables/bulk-category`, { ids, categoryId }),
-    onSuccess: (res) => {
+    onSuccess: (res, { categoryId }) => {
       qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      const verb = categoryId === null ? 'Categoria removida de' : 'Categoria aplicada a'
       toast.success(res.failed > 0
-        ? `Categoria aplicada a ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
-        : `Categoria aplicada a ${res.updated} documento(s).`)
+        ? `${verb} ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `${verb} ${res.updated} documento(s).`)
       setSelectedIds(new Set()); setBulkCategoryId('')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const bulkBudget = useMutation({
+    mutationFn: ({ ids, budgetId }: { ids: string[]; budgetId: string | null }) =>
+      api.patch<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/receivables/bulk-budget`, { ids, budgetId }),
+    onSuccess: (res, { budgetId }) => {
+      qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      const verb = budgetId === null ? 'Budget removido de' : 'Budget aplicado a'
+      toast.success(res.failed > 0
+        ? `${verb} ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `${verb} ${res.updated} documento(s).`)
+      setSelectedIds(new Set()); setBulkBudgetId('')
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -581,6 +611,16 @@ export default function ReceivablesPage() {
     },
     onError: (e) => toast.error((e as Error).message),
   })
+  // Atribuição unitária de budget (picker inline na célula, gémeo da categoria).
+  const classifyBudget = useMutation({
+    mutationFn: ({ id, budgetId }: { id: string; budgetId: string | null }) =>
+      api.patch(`/treasury/${selectedClientId}/receivables/${id}`, { budgetId }),
+    onSuccess: (_, { budgetId }) => {
+      qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      toast.success(budgetId === null ? 'Budget removido.' : 'Budget atribuído.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
   const toggleSelect = (id: string) => setSelectedIds((prev) => {
     const next = new Set(prev)
     if (next.has(id)) next.delete(id); else next.add(id)
@@ -592,7 +632,7 @@ export default function ReceivablesPage() {
     return next
   })
   // A seleção é por página visível: limpa ao trocar de separador, sub-separador ou página.
-  useEffect(() => { setSelectedIds(new Set()); setBulkCategoryId('') }, [activeTab, outrasSubTab, page])
+  useEffect(() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkBudgetId('') }, [activeTab, outrasSubTab, page])
 
   const payReceivable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/pay`, {}),
@@ -848,9 +888,9 @@ export default function ReceivablesPage() {
     } catch { /* ignora erros silenciosamente */ }
   }
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter || unbudgetedFilter)
   function clearFilters() {
-    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setActiveCard(null); setPage(1)
+    setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setActiveCard(null); setPage(1)
   }
 
   function toggleSort(field: typeof sortBy) {
@@ -905,15 +945,29 @@ export default function ReceivablesPage() {
     <div className="sticky -top-6 z-20 px-3 py-3 bg-primary-50 border-b border-primary-100 flex items-center gap-3 flex-wrap">
       <span className="text-sm font-medium text-primary-800">{selectedIds.size} selecionado(s)</span>
       <select className="input w-auto text-sm py-1" value={bulkCategoryId} onChange={(e) => setBulkCategoryId(e.target.value)}>
-        <option value="">Atribuir categoria…</option>
+        <option value="" disabled hidden>Atribuir categoria…</option>
+        <option value="__none__">Remover categoria</option>
         {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
       </select>
       <button
         className="btn-primary text-sm py-1.5 px-3"
         disabled={!bulkCategoryId || bulkCategory.isPending}
-        onClick={() => bulkCategory.mutate({ ids: [...selectedIds], categoryId: bulkCategoryId })}
+        onClick={() => bulkCategory.mutate({ ids: [...selectedIds], categoryId: bulkCategoryId === '__none__' ? null : bulkCategoryId })}
       >
         {bulkCategory.isPending ? 'A aplicar…' : 'Aplicar'}
+      </button>
+      <span className="w-px h-5 bg-primary-200" />
+      <select className="input w-auto text-sm py-1" value={bulkBudgetId} onChange={(e) => setBulkBudgetId(e.target.value)}>
+        <option value="" disabled hidden>Atribuir budget…</option>
+        <option value="__none__">Remover budget</option>
+        {budgets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
+      <button
+        className="btn-primary text-sm py-1.5 px-3"
+        disabled={!bulkBudgetId || bulkBudget.isPending}
+        onClick={() => bulkBudget.mutate({ ids: [...selectedIds], budgetId: bulkBudgetId === '__none__' ? null : bulkBudgetId })}
+      >
+        {bulkBudget.isPending ? 'A aplicar…' : 'Aplicar'}
       </button>
       <span className="w-px h-5 bg-primary-200" />
       <button
@@ -930,7 +984,7 @@ export default function ReceivablesPage() {
       >
         Reverter p/ Em Aberto
       </button>
-      <button className="text-sm text-gray-500 hover:text-gray-700" onClick={() => { setSelectedIds(new Set()); setBulkCategoryId('') }}>Limpar seleção</button>
+      <button className="text-sm text-gray-500 hover:text-gray-700" onClick={() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkBudgetId('') }}>Limpar seleção</button>
     </div>
   )
 
@@ -949,13 +1003,14 @@ export default function ReceivablesPage() {
   }
   const resetCardFilters = () => {
     setActiveCard(null); setStatusFilter('OPEN,PARTIAL'); setIsOverdueFilter(false)
-    setUncategorizedFilter(false); setPaymentDateFrom(''); setPaymentDateTo(''); setPage(1)
+    setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo(''); setPage(1)
   }
-  const applyCard = (card: 'uncategorized' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline') => {
+  const applyCard = (card: 'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline') => {
     if (activeCard === card) { resetCardFilters(); return }
     setActiveTab('clientes'); setPage(1); setActiveCard(card)
-    setIsOverdueFilter(false); setUncategorizedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
+    setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
     if (card === 'uncategorized') { setUncategorizedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
+    else if (card === 'unbudgeted') { setUnbudgetedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
     else if (card === 'pending') { setStatusFilter('OPEN,PARTIAL') }
     else if (card === 'overdue') { setStatusFilter(''); setIsOverdueFilter(true) }
     else if (card === 'thisWeek') { const w = cardWeekRange(); setStatusFilter('OPEN,PARTIAL'); setPaymentDateFrom(w.start); setPaymentDateTo(w.end) }
@@ -984,41 +1039,73 @@ export default function ReceivablesPage() {
             </div>
 
             {combinedKpis && (
-              <>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  <KpiCard title="Total Pendente" value={formatCurrency(combinedKpis.totalPending)} icon={<ArrowDownToLine className="w-6 h-6 text-green-500" />} />
-                  <KpiCard title="Em aberto" value={String(combinedKpis.countOpen)} />
-                  <KpiCard
-                    title="Vencidas"
-                    value={String(combinedKpis.countOverdue)}
-                    className={combinedKpis.countOverdue > 0 ? 'border-red-200' : ''}
-                  />
-                  <KpiCard title="Recebido este mês" value={formatCurrency(combinedKpis.settledThisMonth)} />
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                {/* Cartões de ação rápida (filtros): grelha 3×2 com ícone semântico,
+                    barra de acento e micro-interação de hover/estado ativo. */}
+                <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-3 gap-3 content-start">
+                  {kpis?.cards && ([
+                    ['uncategorized', kpis.cards.uncategorized],
+                    ['unbudgeted', kpis.cards.unbudgeted],
+                    ['pending', kpis.cards.pending],
+                    ['overdue', kpis.cards.overdue],
+                    ['thisWeek', kpis.cards.dueThisWeek],
+                    ['pastDeadline', kpis.cards.pastPaymentDeadline],
+                  ] as const).map(([key, count], i) => {
+                    const c = cardMeta[key]
+                    const active = activeCard === key
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => applyCard(key)}
+                        style={{ animationDelay: `${i * 45}ms` }}
+                        title={active ? 'Clique para limpar o filtro' : `Filtrar: ${c.label}`}
+                        className={`group relative overflow-hidden rounded-xl border px-3.5 py-3 text-left flex items-center gap-3 animate-fade-in transition-all duration-200 ${active ? `${c.activeBg} shadow-card-md` : 'bg-white border-gray-100 hover:-translate-y-0.5 hover:shadow-card-md hover:border-gray-200'}`}
+                      >
+                        <span className={`absolute inset-y-0 left-0 w-1 ${c.bar} transition-opacity duration-200 ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-70'}`} />
+                        <span className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors duration-200 ${active ? c.chipActive : c.chip}`}>
+                          <c.Icon className="w-4 h-4" strokeWidth={2.2} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-gray-400 leading-tight truncate">{c.label}</div>
+                          <div className={`text-xl font-bold tabular-nums leading-snug ${active ? c.num : 'text-gray-900'}`}>{count}</div>
+                        </div>
+                        {active && (
+                          <span className="absolute top-1.5 right-1.5 text-gray-300 group-hover:text-gray-500 transition-colors">
+                            <X className="w-3.5 h-3.5" />
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
-                {kpis?.cards && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                    {([
-                      ['uncategorized', 'Sem categoria', kpis.cards.uncategorized],
-                      ['pending', 'Pendentes / Em aberto', kpis.cards.pending],
-                      ['overdue', 'Vencidas', kpis.cards.overdue],
-                      ['thisWeek', 'A receber esta semana', kpis.cards.dueThisWeek],
-                      ['pastDeadline', 'Passou prazo pagamento', kpis.cards.pastPaymentDeadline],
-                    ] as const).map(([key, label, count]) => {
-                      const active = activeCard === key
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => applyCard(key)}
-                          className={`rounded-xl border px-3 py-2 text-left flex items-center justify-between gap-2 transition-all ${active ? 'border-primary-300 bg-primary-50 shadow-sm' : 'border-gray-100 bg-white hover:border-gray-200 hover:shadow-card-md'}`}
-                        >
-                          <span className="text-[11px] font-medium text-gray-500 leading-tight">{label}</span>
-                          <span className={`text-lg font-bold tabular-nums ${active ? 'text-primary-700' : 'text-gray-900'}`}>{count}</span>
-                        </button>
-                      )
-                    })}
+
+                {/* Cartão-herói: Total Pendente + Recebido este mês. Em lg fica absoluto
+                    a preencher a célula → altura = 2 cartões de ação empilhados. */}
+                <div className="relative animate-fade-in" style={{ animationDelay: '120ms' }}>
+                  <div className="relative lg:absolute lg:inset-0 overflow-hidden rounded-xl p-4 flex flex-col justify-between text-white shadow-card-md bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-700">
+                    <div className="pointer-events-none absolute -top-10 -right-8 w-40 h-40 rounded-full bg-white/15 blur-2xl" />
+                    <div className="pointer-events-none absolute inset-0 opacity-[0.08]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '13px 13px' }} />
+                    <div className="relative flex items-start gap-3">
+                      <span className="w-9 h-9 rounded-lg bg-white/15 ring-1 ring-white/25 flex items-center justify-center flex-shrink-0">
+                        <ArrowDownToLine className="w-5 h-5" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Total Pendente</p>
+                        <p className="text-[1.6rem] font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(combinedKpis.totalPending)}</p>
+                      </div>
+                    </div>
+                    <div className="relative flex items-end justify-between gap-2 border-t border-white/20 pt-2.5">
+                      <div className="min-w-0">
+                        <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Recebido este mês</p>
+                        <p className="text-xl font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(combinedKpis.settledThisMonth)}</p>
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 ring-1 ring-white/25 text-[10.5px] font-semibold flex-shrink-0">
+                        <TrendingUp className="w-3.5 h-3.5" />este mês
+                      </span>
+                    </div>
                   </div>
-                )}
-              </>
+                </div>
+              </div>
             )}
 
             <div>
@@ -1104,10 +1191,10 @@ export default function ReceivablesPage() {
                     {renderBulkBar()}
 
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
+                      <table className="w-full table-fixed text-sm">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                            <th className="px-3 py-3 select-none">
+                            <th className="w-12 px-3 py-3 select-none">
                               <input
                                 type="checkbox"
                                 className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
@@ -1115,9 +1202,9 @@ export default function ReceivablesPage() {
                                 onChange={(e) => toggleSelectMany(clientesVisibleIds, e.target.checked)}
                               />
                             </th>
-                            <th className="px-2 py-3" />
+                            <th className="w-12 px-2 py-3" />
                             <th onClick={() => toggleSort('reference')} className="text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
-                            <th onClick={() => toggleSort('entityName')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
+                            <th onClick={() => toggleSort('entityName')} className="w-[20rem] text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Cliente <SortIcon field="entityName" />
                             </th>
                             <th onClick={() => toggleSort('dueDate')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
@@ -1136,6 +1223,7 @@ export default function ReceivablesPage() {
                               Estado <SortIcon field="status" />
                             </th>
                             <th className="text-left px-3 py-3">Categoria</th>
+                            <th className="text-left px-3 py-3">Budget</th>
                             <th className="w-16 px-3 py-3" />
                           </tr>
                         </thead>
@@ -1166,7 +1254,7 @@ export default function ReceivablesPage() {
                                       <div className="text-xs text-gray-400">{r.documentDate ? formatDate(r.documentDate) : ''}{r.description ? ` · ${r.description}` : ''}</div>
                                     </div>
                                   </td>
-                                  <td className="px-3 py-3 text-gray-700">
+                                  <td className="w-[20rem] px-3 py-3 text-gray-700 truncate">
                                     {r.tocCustomerId ? (
                                       <button
                                         onClick={(e) => { e.stopPropagation(); navigate(`/empresa/clientes/${r.tocCustomerId}`, { state: { from: '/contas-a-receber', fromLabel: 'Contas a Receber' } }) }}
@@ -1221,6 +1309,13 @@ export default function ReceivablesPage() {
                                       categories={categories}
                                       typeLabel="Receita"
                                       onSelect={(categoryId) => classify.mutate({ id: r.id, categoryId })}
+                                    />
+                                  </td>
+                                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                    <InlineBudgetPicker
+                                      budget={r.budget}
+                                      budgets={budgets}
+                                      onSelect={(budgetId) => classifyBudget.mutate({ id: r.id, budgetId })}
                                     />
                                   </td>
                                   <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1365,7 +1460,7 @@ export default function ReceivablesPage() {
                                       </div>
                                     </div>
                                   </td>
-                                  <td className="px-3 py-3 text-gray-700">
+                                  <td className="px-3 py-3 text-gray-700 truncate">
                                     {d.customer_id != null ? (
                                       <button
                                         onClick={(e) => { e.stopPropagation(); navigate(`/empresa/clientes/${d.customer_id}`, { state: { from: '/contas-a-receber', fromLabel: 'Contas a Receber' } }) }}
@@ -1401,6 +1496,13 @@ export default function ReceivablesPage() {
                                       onSelect={(categoryId) => classify.mutate({ id: row.item.id, categoryId })}
                                     />
                                   </td>
+                                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                    <InlineBudgetPicker
+                                      budget={row.item.budget}
+                                      budgets={budgets}
+                                      onSelect={(budgetId) => classifyBudget.mutate({ id: row.item.id, budgetId })}
+                                    />
+                                  </td>
                                   <td className="px-3 py-3" />
                                 </tr>
                                 {isExpanded && (
@@ -1426,6 +1528,7 @@ export default function ReceivablesPage() {
                                         <td className="px-3 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
                                         <td className="px-3 py-2" />
                                         <td className="px-3 py-2" />
+                                        <td className="px-3 py-2" />
                                       </tr>
                                     ))}
                                     {receiptCount > 0 && (
@@ -1442,7 +1545,7 @@ export default function ReceivablesPage() {
                             )
                           })}
                           {rows.length === 0 && (
-                            <tr><td colSpan={11} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
+                            <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
                           )}
                         </tbody>
                         {rows.length > 0 && (() => {
@@ -1458,7 +1561,7 @@ export default function ReceivablesPage() {
                                   <td className="px-3 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
                                   <td className="px-3 py-2 text-right text-gray-400">—</td>
                                   <td className="px-3 py-2 text-right text-green-700">{formatCurrency(combinedKpis.totalPending)}</td>
-                                  <td colSpan={2} />
+                                  <td colSpan={3} />
                                 </tr>
                               </tfoot>
                             )
@@ -1472,7 +1575,7 @@ export default function ReceivablesPage() {
                                 <td colSpan={6} className="px-3 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
                                 <td className="px-3 py-2 text-right">{formatCurrency(totalAmt)}</td>
                                 <td className="px-3 py-2 text-right text-green-700">{formatCurrency(pendingAmt)}</td>
-                                <td colSpan={3} />
+                                <td colSpan={4} />
                               </tr>
                             </tfoot>
                           )
@@ -1566,10 +1669,10 @@ export default function ReceivablesPage() {
                     </div>
                     {renderBulkBar()}
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
+                      <table className="w-full table-fixed text-sm">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
-                            <th className="px-3 py-3 select-none">
+                            <th className="w-12 px-3 py-3 select-none">
                               <input
                                 type="checkbox"
                                 className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
@@ -1577,15 +1680,16 @@ export default function ReceivablesPage() {
                                 onChange={(e) => toggleSelectMany(outrasVisibleIds, e.target.checked)}
                               />
                             </th>
-                            <th className="px-2 py-3" />
+                            <th className="w-12 px-2 py-3" />
                             <th onClick={() => toggleSort('reference')} className="text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
-                            <th onClick={() => toggleSort('entityName')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Cliente <SortIcon field="entityName" /></th>
+                            <th onClick={() => toggleSort('entityName')} className="w-[20rem] text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Cliente <SortIcon field="entityName" /></th>
                             <th onClick={() => toggleSort('dueDate')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Vencimento <SortIcon field="dueDate" /></th>
                             <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left pl-3 pr-1 py-3 cursor-pointer hover:text-gray-700 select-none">Pagamento <SortIcon field="promisedPaymentDate" /></th>
                             <th onClick={() => toggleSort('totalAmount')} className="text-center pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Total <SortIcon field="totalAmount" /></th>
                             <th onClick={() => toggleSort('pendingAmount')} className="text-center px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
                             <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                             <th className="text-left px-3 py-3">Categoria</th>
+                            <th className="text-left px-3 py-3">Budget</th>
                             <th className="w-16 px-3 py-3" />
                           </tr>
                         </thead>
@@ -1622,7 +1726,7 @@ export default function ReceivablesPage() {
                                       <div className="text-xs text-gray-400">{r.documentDate ? formatDate(r.documentDate) : ''}{r.description ? ` · ${r.description}` : ''}</div>
                                     </div>
                                   </td>
-                                  <td className="px-3 py-3 text-gray-700">{r.tocCustomerId ? (
+                                  <td className="w-[20rem] px-3 py-3 text-gray-700 truncate">{r.tocCustomerId ? (
                                     <button
                                       onClick={(e) => { e.stopPropagation(); navigate(`/empresa/clientes/${r.tocCustomerId}`) }}
                                       className="text-primary-600 hover:underline text-left"
@@ -1659,6 +1763,13 @@ export default function ReceivablesPage() {
                                     />
                                   </td>
                                   <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                    <InlineBudgetPicker
+                                      budget={r.budget}
+                                      budgets={budgets}
+                                      onSelect={(budgetId) => classifyBudget.mutate({ id: r.id, budgetId })}
+                                    />
+                                  </td>
+                                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                       <button
                                         title="Editar"
@@ -1687,7 +1798,7 @@ export default function ReceivablesPage() {
                             }
 
                             if (outrasRows.length === 0) {
-                              return <tr><td colSpan={11} className="px-3 py-10 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira.</td></tr>
+                              return <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira.</td></tr>
                             }
 
                             return outrasRows.map(renderRow)
