@@ -319,6 +319,7 @@ export default function PayablesPage() {
   const [form, setForm] = useState(emptyForm)
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isOverdueFilter, setIsOverdueFilter] = useState(false)
+  const [pastDeadlineFilter, setPastDeadlineFilter] = useState(false)
   const [uncategorizedFilter, setUncategorizedFilter] = useState(false)
   const [unbudgetedFilter, setUnbudgetedFilter] = useState(false)
   const [activeCard, setActiveCard] = useState<'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline' | null>(null)
@@ -392,7 +393,7 @@ export default function PayablesPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['payables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, uncategorizedFilter, unbudgetedFilter],
+    queryKey: ['payables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, pastDeadlineFilter, uncategorizedFilter, unbudgetedFilter],
     queryFn: () => {
       // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
       // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
@@ -418,6 +419,7 @@ export default function PayablesPage() {
         if (docDateTo) params.set('docDateTo', docDateTo)
         if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
         if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
+        if (pastDeadlineFilter) params.set('pastPaymentDeadline', 'true')
         if (uncategorizedFilter) params.set('uncategorized', 'true')
         if (unbudgetedFilter) params.set('unbudgeted', 'true')
       }
@@ -777,7 +779,7 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter || unbudgetedFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || pastDeadlineFilter || uncategorizedFilter || unbudgetedFilter)
   function clearFilters() {
     setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setActiveCard(null); setPage(1)
   }
@@ -831,7 +833,7 @@ export default function PayablesPage() {
 
   // Barra de ação de categorização em massa, partilhada pelos dois separadores.
   const renderBulkBar = () => selectedIds.size === 0 ? null : (
-    <div className="sticky -top-6 z-20 px-3 py-3 bg-primary-50 border-b border-primary-100 flex items-center gap-3 flex-wrap">
+    <div className="sticky -top-4 lg:-top-6 z-20 px-3 py-3 bg-primary-50 border-b border-primary-100 flex items-center gap-3 flex-wrap">
       <span className="text-sm font-medium text-primary-800">{selectedIds.size} selecionado(s)</span>
       <select className="input w-auto text-sm py-1" value={bulkCategoryId} onChange={(e) => setBulkCategoryId(e.target.value)}>
         <option value="" disabled hidden>Atribuir categoria…</option>
@@ -891,21 +893,20 @@ export default function PayablesPage() {
     return { start: ymd(start), end: ymd(end) }
   }
   const resetCardFilters = () => {
-    setActiveCard(null); setStatusFilter('OPEN,PARTIAL'); setIsOverdueFilter(false)
+    setActiveCard(null); setStatusFilter('OPEN,PARTIAL'); setIsOverdueFilter(false); setPastDeadlineFilter(false)
     setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo(''); setPage(1)
   }
   const applyCard = (card: 'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline') => {
     if (activeCard === card) { resetCardFilters(); return }
     setActiveTab('fornecedores'); setPage(1); setActiveCard(card)
-    setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
+    setIsOverdueFilter(false); setPastDeadlineFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
     if (card === 'uncategorized') { setUncategorizedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
     else if (card === 'unbudgeted') { setUnbudgetedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
     else if (card === 'pending') { setStatusFilter('OPEN,PARTIAL') }
     else if (card === 'overdue') { setStatusFilter(''); setIsOverdueFilter(true) }
     else if (card === 'thisWeek') { const w = cardWeekRange(); setStatusFilter('OPEN,PARTIAL'); setPaymentDateFrom(w.start); setPaymentDateTo(w.end) }
     else if (card === 'pastDeadline') {
-      const y = new Date(); y.setDate(y.getDate() - 1)
-      setStatusFilter('OPEN,PARTIAL'); setPaymentDateTo(`${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`)
+      setStatusFilter('OPEN,PARTIAL'); setPastDeadlineFilter(true)
     }
   }
 
@@ -960,8 +961,8 @@ export default function PayablesPage() {
 
   return (
     <>
-      <div className="flex -m-6 h-[calc(100vh-4rem)]">
-        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-6">
+      <div className="flex -m-4 lg:-m-6 h-[calc(100vh-4rem)]">
+        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-4 lg:p-6">
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h1 className="text-2xl font-bold text-gray-900">Contas a Pagar</h1>
@@ -2182,7 +2183,7 @@ export default function PayablesPage() {
 
         {/* ── Painel lateral de detalhes ── */}
         {panelDoc && (
-          <div className="w-80 xl:w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden">
+          <div className="fixed inset-0 z-50 w-full bg-white flex flex-col overflow-hidden lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:w-80 xl:w-96 lg:flex-shrink-0 lg:h-[calc(100vh-4rem)] lg:border-l lg:border-gray-200">
             {/* Cabeçalho */}
             <div className="p-5 border-b border-gray-100">
               <div className="flex items-start justify-between mb-3">

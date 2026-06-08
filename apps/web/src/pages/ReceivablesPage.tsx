@@ -16,9 +16,17 @@ import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
+import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
 import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
+
+/** Separa o montante formatado do símbolo de moeda para os estilizar à parte. */
+function splitMoney(value: number): { amount: string; symbol: string } {
+  const s = formatCurrency(value)
+  const m = s.match(/^(.*?)[\s  ]*(€)[\s  ]*$/)
+  return m ? { amount: m[1].trim(), symbol: m[2] } : { amount: s, symbol: '' }
+}
 
 interface TocSalesDoc {
   id: number
@@ -339,6 +347,7 @@ export default function ReceivablesPage() {
   const [form, setForm] = useState(emptyForm)
   const [recForm, setRecForm] = useState(emptyRecurrence)
   const [isOverdueFilter, setIsOverdueFilter] = useState(false)
+  const [pastDeadlineFilter, setPastDeadlineFilter] = useState(false)
   const [uncategorizedFilter, setUncategorizedFilter] = useState(false)
   const [unbudgetedFilter, setUnbudgetedFilter] = useState(false)
   const [activeCard, setActiveCard] = useState<'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline' | null>(null)
@@ -416,7 +425,7 @@ export default function ReceivablesPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['receivables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, uncategorizedFilter, unbudgetedFilter],
+    queryKey: ['receivables', selectedClientId, activeTab, statusFilter, entitySearch, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, sortBy, sortDir, page, isOverdueFilter, pastDeadlineFilter, uncategorizedFilter, unbudgetedFilter],
     queryFn: () => {
       // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
       // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
@@ -442,6 +451,7 @@ export default function ReceivablesPage() {
         if (docDateTo) params.set('docDateTo', docDateTo)
         if (paymentDateFrom) params.set('paymentDateFrom', paymentDateFrom)
         if (paymentDateTo) params.set('paymentDateTo', paymentDateTo)
+        if (pastDeadlineFilter) params.set('pastPaymentDeadline', 'true')
         if (uncategorizedFilter) params.set('uncategorized', 'true')
         if (unbudgetedFilter) params.set('unbudgeted', 'true')
       }
@@ -755,6 +765,10 @@ export default function ReceivablesPage() {
       api.patch(`/treasury/${selectedClientId}/receivables/${id}/promised-date`, { date }),
     onSuccess: (_, { date }) => {
       qc.invalidateQueries({ queryKey: ['receivables'] })
+      // A data prometida alimenta os cartões "A receber esta semana" e "Passou
+      // prazo pagamento" — refrescar os KPIs para a contagem mudar de imediato.
+      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
+      qc.invalidateQueries({ queryKey: ['activity'] })
       setPanelDoc((d) => d ? { ...d, promisedPaymentDate: date } : d)
       setPanelSection(null)
       toast.success(date ? 'Data prometida definida.' : 'Data prometida removida.')
@@ -894,7 +908,7 @@ export default function ReceivablesPage() {
     } catch { /* ignora erros silenciosamente */ }
   }
 
-  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || uncategorizedFilter || unbudgetedFilter)
+  const hasFilters = !!(statusFilter || entitySearch || dueDateFrom || dueDateTo || docDateFrom || docDateTo || paymentDateFrom || paymentDateTo || isOverdueFilter || pastDeadlineFilter || uncategorizedFilter || unbudgetedFilter)
   function clearFilters() {
     setStatusFilter(''); setEntitySearch(''); setDueDateFrom(''); setDueDateTo(''); setDocDateFrom(''); setDocDateTo(''); setPaymentDateFrom(''); setPaymentDateTo(''); setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setActiveCard(null); setPage(1)
   }
@@ -948,7 +962,7 @@ export default function ReceivablesPage() {
 
   // Barra de ação de categorização em massa, partilhada pelos dois separadores.
   const renderBulkBar = () => selectedIds.size === 0 ? null : (
-    <div className="sticky -top-6 z-20 px-3 py-3 bg-primary-50 border-b border-primary-100 flex items-center gap-3 flex-wrap">
+    <div className="sticky -top-4 lg:-top-6 z-20 px-3 py-3 bg-primary-50 border-b border-primary-100 flex items-center gap-3 flex-wrap">
       <span className="text-sm font-medium text-primary-800">{selectedIds.size} selecionado(s)</span>
       <select className="input w-auto text-sm py-1" value={bulkCategoryId} onChange={(e) => setBulkCategoryId(e.target.value)}>
         <option value="" disabled hidden>Atribuir categoria…</option>
@@ -1008,21 +1022,20 @@ export default function ReceivablesPage() {
     return { start: ymd(start), end: ymd(end) }
   }
   const resetCardFilters = () => {
-    setActiveCard(null); setStatusFilter('OPEN,PARTIAL'); setIsOverdueFilter(false)
+    setActiveCard(null); setStatusFilter('OPEN,PARTIAL'); setIsOverdueFilter(false); setPastDeadlineFilter(false)
     setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo(''); setPage(1)
   }
   const applyCard = (card: 'uncategorized' | 'unbudgeted' | 'pending' | 'overdue' | 'thisWeek' | 'pastDeadline') => {
     if (activeCard === card) { resetCardFilters(); return }
     setActiveTab('clientes'); setPage(1); setActiveCard(card)
-    setIsOverdueFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
+    setIsOverdueFilter(false); setPastDeadlineFilter(false); setUncategorizedFilter(false); setUnbudgetedFilter(false); setPaymentDateFrom(''); setPaymentDateTo('')
     if (card === 'uncategorized') { setUncategorizedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
     else if (card === 'unbudgeted') { setUnbudgetedFilter(true); setStatusFilter('OPEN,PARTIAL,PAID,SETTLED') }
     else if (card === 'pending') { setStatusFilter('OPEN,PARTIAL') }
     else if (card === 'overdue') { setStatusFilter(''); setIsOverdueFilter(true) }
     else if (card === 'thisWeek') { const w = cardWeekRange(); setStatusFilter('OPEN,PARTIAL'); setPaymentDateFrom(w.start); setPaymentDateTo(w.end) }
     else if (card === 'pastDeadline') {
-      const y = new Date(); y.setDate(y.getDate() - 1)
-      setStatusFilter('OPEN,PARTIAL'); setPaymentDateTo(`${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`)
+      setStatusFilter('OPEN,PARTIAL'); setPastDeadlineFilter(true)
     }
   }
 
@@ -1033,37 +1046,24 @@ export default function ReceivablesPage() {
   // Always keep one selection active; default to 30 days.
   const [receivedDays, setReceivedDays] = useState<number | 'ALL'>(30)
   const { data: kpisRange } = useQuery({
-    queryKey: ['receivables-kpis-range', selectedClientId, receivedDays],
+    // Aninhada sob o prefixo 'receivables-kpis' para que as invalidações de
+    // pagar/liquidar/reconciliar (que invalidam ['receivables-kpis']) também
+    // refresquem o valor "Recebido" por janela.
+    queryKey: ['receivables-kpis', selectedClientId, 'range', receivedDays],
     queryFn: () => {
-      if (receivedDays === 'ALL') return api.get(`/treasury/${selectedClientId}/receivables/kpis?all=true`)
-      return api.get(`/treasury/${selectedClientId}/receivables/kpis?days=${receivedDays}`)
+      const qs = receivedDays === 'ALL' ? 'all=true' : `days=${receivedDays}`
+      return api.get<{ settledThisMonth: number }>(`/treasury/${selectedClientId}/receivables/kpis?${qs}`)
     },
     enabled: !!selectedClientId,
   })
 
-  // Normalize settled value coming from kpisRange so formatCurrency always receives a number
-  const displayedSettled = (() => {
-    const raw = kpisRange?.settledThisMonth
-    const fallback = combinedKpis?.settledThisMonth ?? 0
-    if (raw == null) return fallback
-    if (typeof raw === 'number') return raw
-    if (typeof raw === 'string') {
-      const n = Number(raw.replace(/[^0-9.-]+/g, ''))
-      return Number.isFinite(n) ? n : fallback
-    }
-    if (typeof raw === 'object') {
-      const obj: any = raw as any
-      if (obj.total != null && !Number.isNaN(Number(obj.total))) return Number(obj.total)
-      if (obj.amount != null && !Number.isNaN(Number(obj.amount))) return Number(obj.amount)
-      if (obj.settledThisMonth != null && !Number.isNaN(Number(obj.settledThisMonth))) return Number(obj.settledThisMonth)
-    }
-    return fallback
-  })()
+  // Valor "Recebido" na janela escolhida (Todo período / 30d / 60d / 90d).
+  const displayedSettled = kpisRange?.settledThisMonth ?? combinedKpis?.settledThisMonth ?? 0
 
   return (
     <>
-      <div className="flex -m-6 h-[calc(100vh-4rem)]">
-        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-6">
+      <div className="flex -m-4 lg:-m-6 h-[calc(100vh-4rem)]">
+        <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-4 lg:p-6">
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h1 className="text-2xl font-bold text-gray-900">Contas a Receber</h1>
@@ -1114,39 +1114,40 @@ export default function ReceivablesPage() {
                   })}
                 </div>
 
-                {/* Cartão-herói: Total Pendente + Recebido este mês. Em lg fica absoluto
-                    a preencher a célula → altura = 2 cartões de ação empilhados. */}
+                {/* Cartão-herói: Total Pendente + Recebido (janela seleccionável).
+                    Em lg fica absoluto a preencher a célula → altura = 2 cartões
+                    de ação empilhados. */}
                 <div className="relative animate-fade-in" style={{ animationDelay: '120ms' }}>
-                  <div className="relative lg:absolute lg:inset-0 overflow-hidden rounded-xl p-4 flex flex-col justify-between text-white shadow-card-md bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-700">
-                    <div className="pointer-events-none absolute -top-10 -right-8 w-40 h-40 rounded-full bg-white/15 blur-2xl" />
-                    <div className="pointer-events-none absolute inset-0 opacity-[0.08]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '13px 13px' }} />
-                    <div className="relative flex items-start gap-3">
-                      <div className="min-w-0">
-                        <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Total Pendente</p>
-                        <p className="text-[1.6rem] font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(combinedKpis.totalPending)}</p>
+                  <div className="group relative lg:absolute lg:inset-0 overflow-hidden rounded-2xl p-5 flex flex-col justify-between text-white shadow-card-lg ring-1 ring-inset ring-white/10 bg-[radial-gradient(135%_135%_at_0%_0%,#38bdf8_0%,#2563eb_44%,#4338ca_84%,#3730a3_100%)]">
+                    {/* Atmosfera: brilhos suaves, grão fino e um reflexo que varre */}
+                    <div className="pointer-events-none absolute -top-14 -right-10 h-48 w-48 rounded-full bg-cyan-300/25 blur-3xl" />
+                    <div className="pointer-events-none absolute -bottom-16 -left-10 h-44 w-44 rounded-full bg-indigo-950/40 blur-3xl" />
+                    <div className="pointer-events-none absolute inset-0 opacity-[0.07]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '13px 13px' }} />
+                    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                      <div className="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-sheen" />
+                    </div>
+
+                    {/* Total pendente */}
+                    <div className="relative">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/65">Total pendente</p>
+                      <div className="mt-1 flex items-baseline gap-1">
+                        <span className="text-[2rem] font-bold tracking-tight tabular-nums leading-none">{splitMoney(combinedKpis.totalPending).amount}</span>
+                        <span className="text-base font-semibold text-white/55">{splitMoney(combinedKpis.totalPending).symbol}</span>
                       </div>
                     </div>
-                    <div className="relative flex items-end justify-between gap-2 border-t border-white/20 pt-2.5">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Recebido</p>
-                          <div className="inline-flex bg-white/10 rounded-lg p-0.5">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setReceivedDays('ALL') }}
-                              className={`min-w-[84px] flex items-center justify-center px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === 'ALL' ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
-                            >Todo periodo</button>
-                            {[30, 60, 90].map((d) => (
-                              <button
-                                key={d}
-                                onClick={(e) => { e.stopPropagation(); setReceivedDays(d) }}
-                                className={`min-w-[48px] flex items-center justify-center px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === d ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
-                              >{d}d</button>
-                            ))}
-                          </div>
-                        </div>
-                        <p className="text-xl font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(kpisRange?.settledThisMonth ?? combinedKpis.settledThisMonth)}</p>
+
+                    {/* Recebido + selector de janela */}
+                    <div className="relative">
+                      <div className="h-px bg-gradient-to-r from-white/0 via-white/25 to-white/0" />
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/65">Recebido</p>
+                        <ReceivedPeriodToggle value={receivedDays} onChange={setReceivedDays} />
                       </div>
-                      
+                      <div className="mt-1.5 flex items-baseline gap-1">
+                        <span key={displayedSettled} className="text-[1.5rem] font-bold tracking-tight tabular-nums leading-none animate-value-in">{splitMoney(displayedSettled).amount}</span>
+                        <span className="text-sm font-semibold text-white/55">{splitMoney(displayedSettled).symbol}</span>
+                      </div>
+                      <p className="mt-1 text-[10px] font-medium text-white/45">{receivedDays === 'ALL' ? 'Todo o período' : `Últimos ${receivedDays} dias`}</p>
                     </div>
                   </div>
                 </div>
@@ -2392,7 +2393,7 @@ export default function ReceivablesPage() {
 
         {/* ── Painel lateral de detalhes ── */}
         {panelDoc && (
-          <div className="w-80 xl:w-96 flex-shrink-0 sticky top-0 h-[calc(100vh-4rem)] border-l border-gray-200 bg-white flex flex-col overflow-hidden animate-slide-in">
+          <div className="fixed inset-0 z-50 w-full bg-white flex flex-col overflow-hidden animate-slide-in lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:w-80 xl:w-96 lg:flex-shrink-0 lg:h-[calc(100vh-4rem)] lg:border-l lg:border-gray-200">
             {/* Faixa de acento fintech removida */}
             {/* Cabeçalho */}
             <div className="p-5 border-b border-gray-100 bg-gradient-to-b from-blue-50/50 to-transparent">
