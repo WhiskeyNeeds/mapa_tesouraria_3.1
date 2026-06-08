@@ -150,7 +150,7 @@ export default function BudgetsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Budgets</h1>
           <p className="text-sm text-gray-500 mt-1">Controla o progresso de gastos e receitas alocadas.</p>

@@ -74,6 +74,32 @@
   }
 }
 
+/* ── Barra de scroll horizontal flutuante (fixa ao fundo da janela) ──
+   Mantém o scroll horizontal de tabelas largas sempre acessível, sem ter de
+   rolar a página até ao fundo da tabela. Gerida por useStickyHScrollbar. */
+.hscroll-host { scrollbar-width: none; -ms-overflow-style: none; }
+.hscroll-host::-webkit-scrollbar { height: 0 !important; width: 0 !important; }
+.hscroll-floating {
+  position: fixed;
+  bottom: 0;
+  z-index: 35;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 13px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+  scrollbar-width: thin;
+}
+.hscroll-floating::-webkit-scrollbar { height: 9px; }
+.hscroll-floating::-webkit-scrollbar-track { background: transparent; }
+.hscroll-floating::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.55); border-radius: 9999px; }
+.hscroll-floating::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 0.8); }
+.hscroll-floating-spacer { height: 1px; }
+.dark .hscroll-floating { background: rgba(15, 23, 42, 0.92); border-top-color: rgba(255, 255, 255, 0.08); }
+
 /* ── Modo escuro — remap global de previsualização ──────────────
    Em vez de anotar dark: nas ~800 utilizações de classes claras
    espalhadas pelas páginas, remapeamos aqui as classes mais comuns

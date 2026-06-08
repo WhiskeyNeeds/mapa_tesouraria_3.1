@@ -17,6 +17,7 @@ import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
+import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
 import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
@@ -321,6 +322,10 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
 export default function ReceivablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
   const navigate = useNavigate()
+  // Barra de scroll horizontal fixa ao fundo da janela para as tabelas largas.
+  // As tabelas Clientes/Outras são mutuamente exclusivas, por isso partilham
+  // uma instância (só uma está montada de cada vez).
+  const hScroll = useStickyHScrollbar<HTMLDivElement>()
   const qc = useQueryClient()
   const toast = useToast()
   // Centralised guard for every <input type="date"> on this page: rejects weekend
@@ -1236,7 +1241,7 @@ export default function ReceivablesPage() {
 
                     {renderBulkBar()}
 
-                    <div className="overflow-x-auto">
+                    <div ref={hScroll} className="overflow-x-auto">
                       <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
@@ -1714,7 +1719,7 @@ export default function ReceivablesPage() {
                       )}
                     </div>
                     {renderBulkBar()}
-                    <div className="overflow-x-auto">
+                    <div ref={hScroll} className="overflow-x-auto">
                       <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">

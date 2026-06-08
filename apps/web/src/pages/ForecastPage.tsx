@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
 import KpiCard from '@/components/ui/KpiCard'
 import { AlertTriangle } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, BarChart, Bar, Legend } from 'recharts'
@@ -16,6 +17,7 @@ interface ForecastData {
 export default function ForecastPage() {
   const { selectedClientId } = useAuth()
   const [days, setDays] = useState(90)
+  const hScroll = useStickyHScrollbar<HTMLDivElement>()
 
   const { data } = useQuery<ForecastData>({
     queryKey: ['forecast', selectedClientId, days],
@@ -30,7 +32,7 @@ export default function ForecastPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold text-gray-900">Previsão de Tesouraria</h1>
         <div className="flex gap-2">
           {[30, 60, 90, 180].map((d) => (
@@ -95,8 +97,8 @@ export default function ForecastPage() {
 
           <div className="card">
             <div className="px-5 py-4 border-b border-gray-100"><h2 className="font-semibold text-gray-900 text-sm">Detalhe diário</h2></div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div ref={hScroll} className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[720px] lg:min-w-0">
                 <thead>
                   <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                     <th className="text-left px-5 py-3">Data</th>

@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatIbanInput, sanitizeIban, validateIban } from '@/lib/iban'
+import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
 import { Plus, Upload, Building2, FileUp, FileText, FileSpreadsheet, CheckCircle2, Circle, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw, History, RotateCcw } from 'lucide-react'
@@ -201,6 +202,7 @@ interface BalanceCheckResult { accountId: string; accountName: string; gaps: Bal
 export default function BanksPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
+  const hScroll = useStickyHScrollbar<HTMLDivElement>()
   const toast = useToast()
   const [selectedAccount, setSelectedAccount] = useState<string>('')
   const [page, setPage] = useState(1)
@@ -645,9 +647,9 @@ export default function BanksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold text-gray-900">Bancos & Movimentos</h1>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={() => {
             setImportFile(null)
             setImportPdfFile(null)
@@ -911,8 +913,8 @@ export default function BanksPage() {
             </button>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div ref={hScroll} className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[860px] lg:min-w-0">
               <thead>
                 <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                   <th

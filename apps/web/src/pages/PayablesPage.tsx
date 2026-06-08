@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel } from '@/lib/utils'
 import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
+import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
 import KpiCard from '@/components/ui/KpiCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
@@ -293,6 +294,9 @@ function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { cl
 export default function PayablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
   const navigate = useNavigate()
+  // Barra de scroll horizontal fixa ao fundo da janela (tabelas Fornecedores/Outras
+  // são mutuamente exclusivas → partilham uma instância).
+  const hScroll = useStickyHScrollbar<HTMLDivElement>()
   const qc = useQueryClient()
   const toast = useToast()
   // Centralised guard for every <input type="date"> on this page: rejects weekend
@@ -964,7 +968,7 @@ export default function PayablesPage() {
       <div className="flex -m-4 lg:-m-6 h-[calc(100vh-4rem)]">
         <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-4 lg:p-6">
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-gray-900">Contas a Pagar</h1>
               <TocSyncStatus invalidateKeys={[
                 ['payables', selectedClientId ?? ''],
@@ -1086,8 +1090,8 @@ export default function PayablesPage() {
 
                   {renderBulkBar()}
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full table-fixed text-sm">
+                  <div ref={hScroll} className="overflow-x-auto">
+                    <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
                       <thead>
                         <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                           <th className="w-12 px-3 py-3 select-none">
@@ -1491,7 +1495,7 @@ export default function PayablesPage() {
 
             {activeTab === 'outras' && (
               <div className="space-y-4 pt-1">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
                   <div className="inline-flex rounded-lg border border-gray-200 bg-white overflow-hidden text-sm">
                     {([
                       { key: 'abertas', label: 'Abertas' },
@@ -1562,8 +1566,8 @@ export default function PayablesPage() {
                     )}
                   </div>
                   {renderBulkBar()}
-                  <div className="overflow-x-auto">
-                    <table className="w-full table-fixed text-sm">
+                  <div ref={hScroll} className="overflow-x-auto">
+                    <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
                       <thead>
                         <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                           <th className="w-12 px-3 py-3 select-none">
