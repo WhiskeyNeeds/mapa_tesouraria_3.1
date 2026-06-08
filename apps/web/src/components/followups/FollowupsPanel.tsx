@@ -387,7 +387,7 @@ function TimelineItem({ ev, expanded, onToggleExpand, onComplete, onLogCall, onD
             )}
           </div>
         </div>
-        {ev.description && (
+            {ev.description && (
           <div className="text-xs text-gray-600 whitespace-pre-wrap mb-1">{ev.description}</div>
         )}
         <div className="flex items-center justify-between text-[11px] text-gray-400">
@@ -396,19 +396,42 @@ function TimelineItem({ ev, expanded, onToggleExpand, onComplete, onLogCall, onD
           {ev.assignedTo && <span>atribuído a {ev.assignedTo.name}</span>}
         </div>
 
-        {expanded && <ExpandedDetails ev={ev} />}
+        {expanded && <ExpandedDetails ev={ev} clientId={clientId} direction={direction} />}
       </div>
     </li>
   )
 }
 
-function ExpandedDetails({ ev }: { ev: TimelineEvent }) {
+function ExpandedDetails({ ev, clientId, direction }: { ev: TimelineEvent; clientId: string; direction: 'RECEIVABLE' | 'PAYABLE' }) {
   if (!ev.payload) return null
   const p = ev.payload as Record<string, unknown>
+
+  // Fetch categories and budgets to show names instead of ids
+  const type = direction === 'RECEIVABLE' ? 'REVENUE' : 'EXPENSE'
+  const { data: categories = [] } = useQuery({ queryKey: ['followups-categories', clientId, type], queryFn: () => api.get(`/treasury/${clientId}/categories?type=${type}`), enabled: !!clientId })
+  const { data: budgets = [] } = useQuery({ queryKey: ['followups-budgets', clientId, type], queryFn: () => api.get(`/treasury/${clientId}/budgets?type=${type}&status=ACTIVE`), enabled: !!clientId })
+
+  // Helper to render values more nicely
+  const displayValue = (field: string, value: unknown) => {
+    if (value === null || value === undefined) return '—'
+    if (field === 'categoryId') return String(categories.find((c: any) => c.id === value)?.name ?? value)
+    if (field === 'budgetId') return String(budgets.find((b: any) => b.id === value)?.name ?? value)
+    if (typeof value === 'object') {
+      const obj: any = value as any
+      if (obj == null) return '—'
+      if (obj.number) return `TOConline ${obj.number}`
+      if (obj.id) return `TOConline ${obj.id}`
+      if (obj.name) return String(obj.name)
+      try { return JSON.stringify(obj) } catch { return String(obj) }
+    }
+    return formatValue(field, value)
+  }
 
   // Diff (audit.update)
   if ((ev.kind.endsWith('.update')) && (p as DiffPayload).changes) {
     const changes = (p as DiffPayload).changes!
+    const visible = Object.entries(changes).filter(([field]) => !field.startsWith('_'))
+    if (visible.length === 0) return null
     return (
       <div className="mt-2 pt-2 border-t border-gray-100 text-xs">
         <table className="w-full">
@@ -416,11 +439,11 @@ function ExpandedDetails({ ev }: { ev: TimelineEvent }) {
             <tr><th className="text-left font-medium pb-1">Campo</th><th className="text-left font-medium pb-1">Antes</th><th className="text-left font-medium pb-1">Depois</th></tr>
           </thead>
           <tbody>
-            {Object.entries(changes).map(([field, { from, to }]) => (
+            {visible.map(([field, { from, to }]) => (
               <tr key={field} className="border-t border-gray-50">
                 <td className="py-1 font-medium text-gray-700">{fieldLabel(field)}</td>
-                <td className="py-1 text-gray-500">{formatValue(field, from)}</td>
-                <td className="py-1 text-gray-900">{formatValue(field, to)}</td>
+                <td className="py-1 text-gray-500">{displayValue(field, from)}</td>
+                <td className="py-1 text-gray-900">{displayValue(field, to)}</td>
               </tr>
             ))}
           </tbody>
