@@ -1030,11 +1030,14 @@ export default function ReceivablesPage() {
     ...kpis,
     countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
   } : null
-  // Period selector: keep one selected (default 30 days).
-  const [receivedDays, setReceivedDays] = useState<number>(30)
+  // Always keep one selection active; default to 30 days.
+  const [receivedDays, setReceivedDays] = useState<number | 'ALL'>(30)
   const { data: kpisRange } = useQuery({
     queryKey: ['receivables-kpis-range', selectedClientId, receivedDays],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/receivables/kpis?days=${receivedDays}`),
+    queryFn: () => {
+      if (receivedDays === 'ALL') return api.get(`/treasury/${selectedClientId}/receivables/kpis?all=true`)
+      return api.get(`/treasury/${selectedClientId}/receivables/kpis?days=${receivedDays}`)
+    },
     enabled: !!selectedClientId,
   })
 
@@ -1118,9 +1121,6 @@ export default function ReceivablesPage() {
                     <div className="pointer-events-none absolute -top-10 -right-8 w-40 h-40 rounded-full bg-white/15 blur-2xl" />
                     <div className="pointer-events-none absolute inset-0 opacity-[0.08]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '13px 13px' }} />
                     <div className="relative flex items-start gap-3">
-                      <span className="w-9 h-9 rounded-lg bg-white/15 ring-1 ring-white/25 flex items-center justify-center flex-shrink-0">
-                        <ArrowDownToLine className="w-5 h-5" />
-                      </span>
                       <div className="min-w-0">
                         <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Total Pendente</p>
                         <p className="text-[1.6rem] font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(combinedKpis.totalPending)}</p>
@@ -1131,19 +1131,23 @@ export default function ReceivablesPage() {
                         <div className="flex items-center gap-2">
                           <p className="text-[10.5px] font-semibold uppercase tracking-wider text-sky-50/80">Recebido</p>
                           <div className="inline-flex bg-white/10 rounded-lg p-0.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setReceivedDays('ALL') }}
+                              className={`min-w-[84px] flex items-center justify-center px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === 'ALL' ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
+                            >Todo periodo</button>
                             {[30, 60, 90].map((d) => (
                               <button
                                 key={d}
                                 onClick={(e) => { e.stopPropagation(); setReceivedDays(d) }}
-                                className={`min-w-[64px] flex items-center justify-center px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === d ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
+                                className={`min-w-[48px] flex items-center justify-center px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === d ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
                               >{d}d</button>
                             ))}
                           </div>
                         </div>
-                        <p className="text-xl font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(displayedSettled)}</p>
+                        <p className="text-xl font-bold tracking-tight tabular-nums leading-tight">{formatCurrency(kpisRange?.settledThisMonth ?? combinedKpis.settledThisMonth)}</p>
                       </div>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 ring-1 ring-white/25 text-[10.5px] font-semibold flex-shrink-0">
-                        <TrendingUp className="w-3.5 h-3.5" />{`${receivedDays}d`}
+                        <TrendingUp className="w-3.5 h-3.5" />{receivedDays === null ? 'este mês' : (receivedDays === 'ALL' ? 'Todo periodo' : `${receivedDays}d`)}
                       </span>
                     </div>
                   </div>
