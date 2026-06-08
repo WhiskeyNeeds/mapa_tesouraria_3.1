@@ -2426,6 +2426,11 @@ export default function ReceivablesPage() {
                   typeLabel="Receita"
                   onSelect={(categoryId) => classify.mutate({ id: panelDoc.id, categoryId })}
                 />
+                <InlineBudgetPicker
+                  budget={panelDoc.budget}
+                  budgets={budgets}
+                  onSelect={(budgetId) => classifyBudget.mutate({ id: panelDoc.id, budgetId })}
+                />
                 {panelDoc.promisedPaymentDate && (
                   <span className="text-xs text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3" />{formatDate(panelDoc.promisedPaymentDate)}</span>
                 )}
