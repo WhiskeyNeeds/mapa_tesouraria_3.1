@@ -1065,7 +1065,7 @@ export default function ReceivablesPage() {
       <div className="flex -m-4 lg:-m-6 h-[calc(100vh-4rem)]">
         <div className="flex-1 min-w-0 overflow-y-auto overflow-x-auto p-4 lg:p-6">
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-gray-900">Contas a Receber</h1>
               <TocSyncStatus invalidateKeys={[
                 ['receivables', selectedClientId ?? ''],
@@ -1237,7 +1237,7 @@ export default function ReceivablesPage() {
                     {renderBulkBar()}
 
                     <div className="overflow-x-auto">
-                      <table className="w-full table-fixed text-sm">
+                      <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                             <th className="w-12 px-3 py-3 select-none">
@@ -1644,7 +1644,7 @@ export default function ReceivablesPage() {
 
               {activeTab === 'outras' && (
                 <div className="space-y-4 pt-1">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="inline-flex rounded-lg border border-gray-200 bg-white overflow-hidden text-sm">
                       {([
                         { key: 'abertas', label: 'Abertas' },
@@ -1715,7 +1715,7 @@ export default function ReceivablesPage() {
                     </div>
                     {renderBulkBar()}
                     <div className="overflow-x-auto">
-                      <table className="w-full table-fixed text-sm">
+                      <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                             <th className="w-12 px-3 py-3 select-none">
