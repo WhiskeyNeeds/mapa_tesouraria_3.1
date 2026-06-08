@@ -1136,13 +1136,13 @@ export default function ReceivablesPage() {
                           <div className="inline-flex bg-white/10 rounded-lg p-0.5">
                             <button
                               onClick={(e) => { e.stopPropagation(); setReceivedDays('ALL') }}
-                              className={`px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === 'ALL' ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
+                              className={`min-w-[84px] flex items-center justify-center px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === 'ALL' ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
                             >Todo periodo</button>
                             {[30, 60, 90].map((d) => (
                               <button
                                 key={d}
                                 onClick={(e) => { e.stopPropagation(); setReceivedDays(d) }}
-                                className={`px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === d ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
+                                className={`min-w-[48px] flex items-center justify-center px-2 py-1 text-[11px] font-semibold rounded-md ${receivedDays === d ? 'bg-white text-sky-700' : 'text-white/80 hover:bg-white/5'}`}
                               >{d}d</button>
                             ))}
                           </div>
