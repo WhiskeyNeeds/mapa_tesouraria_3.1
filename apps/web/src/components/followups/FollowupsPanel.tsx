@@ -170,10 +170,10 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
               <button
                 key={a.key}
                 onClick={() => setExpandedAction(open ? null : a.key)}
-                className={`flex w-full items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold border transition-all duration-200 ${open ? activeCls : idleCls}`}
+                className={`flex w-full items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold border transition-all duration-200 ${open ? activeCls : idleCls}`}
               >
-                <span className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${chipCls}`}>
-                  <a.icon className="w-4 h-4" />
+                <span className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${chipCls}`}>
+                  <a.icon className="w-3.5 h-3.5" />
                 </span>
                 {a.label}
               </button>
