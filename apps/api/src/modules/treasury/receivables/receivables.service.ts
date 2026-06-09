@@ -7,6 +7,7 @@ import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
+import { compareDocs } from '../../../lib/doc-sort.js'
 
 interface ReceivableListItem {
   id: string
@@ -209,22 +210,12 @@ export class TreasuryReceivablesService {
     // anexado a seguir, só para os itens da página (fase 2).
     const allItems = await this.buildOverlayItems(clientId, filters, { lean: true })
 
-    // 4. Ordenação em memória. Desempate estável por `id`: garante uma ordem
-    // determinística quando a chave principal empata (ex.: mesmo cliente/data),
-    // evitando que a paginação atribua a mesma linha a páginas diferentes (a
-    // ordem dependia antes da ordem física das linhas devolvidas pela BD).
-    const sortKey = sortBy as keyof ReceivableListItem
-    allItems.sort((a, b) => {
-      const rawA = a[sortKey], rawB = b[sortKey]
-      const va = rawA instanceof Date ? rawA.getTime() : rawA
-      const vb = rawB instanceof Date ? rawB.getTime() : rawB
-      if (va == null && vb == null) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-      if (va == null) return sortDir === 'asc' ? 1 : -1
-      if (vb == null) return sortDir === 'asc' ? -1 : 1
-      if (va < vb) return sortDir === 'asc' ? -1 : 1
-      if (va > vb) return sortDir === 'asc' ? 1 : -1
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-    })
+    // 4. Ordenação em memória. A coluna "Pagamento" ordena pela data efetiva
+    // (promisedPaymentDate ?? dueDate); compareDocs desempata de forma estável
+    // (vencimento → nº doc → id), garantindo ordem determinística quando a chave
+    // principal empata e evitando que a paginação atribua a mesma linha a páginas
+    // diferentes (a ordem dependia antes da ordem física das linhas da BD).
+    allItems.sort((a, b) => compareDocs(a, b, sortBy, sortDir))
 
     const total = allItems.length
     const items = allItems.slice((page - 1) * limit, page * limit)

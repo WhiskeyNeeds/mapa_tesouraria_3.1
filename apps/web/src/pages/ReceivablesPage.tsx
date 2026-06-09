@@ -1527,9 +1527,13 @@ export default function ReceivablesPage() {
                                     {dueDate ? formatDate(dueDate) : '—'}
                                   </td>
                                   <td className="pl-3 pr-1 py-3 whitespace-nowrap">{(() => {
-                                    if (!dueDate) return <span className="text-gray-400">—</span>
-                                    const overdue = (row.item.status === 'OPEN' || row.item.status === 'PARTIAL') && new Date(dueDate).getTime() < Date.now()
-                                    return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(dueDate)}</span>
+                                    // Data de pagamento efetiva (prometida ou, na ausência, vencimento).
+                                    // Tem de vir do overlay (row.item), não do due_date cru do TOC, senão
+                                    // a coluna não coincide com a ordenação por data de pagamento do servidor.
+                                    const payDate = row.item.promisedPaymentDate ?? row.item.dueDate ?? dueDate
+                                    if (!payDate) return <span className="text-gray-400">—</span>
+                                    const overdue = (row.item.status === 'OPEN' || row.item.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
+                                    return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
                                   })()}</td>
                                   <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(total)}</td>
                                   <td className="px-3 py-3 text-center font-semibold text-green-700">{formatCurrency(pending)}</td>

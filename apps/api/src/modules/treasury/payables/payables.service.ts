@@ -7,6 +7,7 @@ import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
+import { compareDocs } from '../../../lib/doc-sort.js'
 
 interface PayableListItem {
   id: string
@@ -282,18 +283,7 @@ export class TreasuryPayablesService {
 
     const allItems = [...localWithOverlay, ...tocPureMapped].filter(matches)
 
-    const sortKey = sortBy as keyof PayableListItem
-    allItems.sort((a, b) => {
-      const rawA = a[sortKey], rawB = b[sortKey]
-      const va = rawA instanceof Date ? rawA.getTime() : rawA
-      const vb = rawB instanceof Date ? rawB.getTime() : rawB
-      if (va == null && vb == null) return 0
-      if (va == null) return sortDir === 'asc' ? 1 : -1
-      if (vb == null) return sortDir === 'asc' ? -1 : 1
-      if (va < vb) return sortDir === 'asc' ? -1 : 1
-      if (va > vb) return sortDir === 'asc' ? 1 : -1
-      return 0
-    })
+    allItems.sort((a, b) => compareDocs(a, b, sortBy, sortDir))
 
     const total = allItems.length
     const items = allItems.slice((page - 1) * limit, page * limit)
