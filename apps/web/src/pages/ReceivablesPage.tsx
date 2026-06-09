@@ -1158,8 +1158,8 @@ export default function ReceivablesPage() {
                     {/* Recebido + selector de janela */}
                     <div className="relative">
                       <div className="h-px bg-gradient-to-r from-white/0 via-white/15 to-white/0" />
-                      <div className="mt-2.5 flex items-center justify-between gap-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">Recebido</p>
+                      <div className="mt-2.5 flex items-center justify-between gap-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-white/55">Recebido</p>
                         <ReceivedPeriodToggle value={receivedDays} onChange={setReceivedDays} />
                       </div>
                       <div className="mt-1.5 flex items-baseline gap-1.5">
@@ -1244,18 +1244,20 @@ export default function ReceivablesPage() {
                           <X className="w-3.5 h-3.5" /> Limpar
                         </button>
                       )}
-                      <span className="text-sm text-gray-400 ml-auto">
-                        {data == null && isLoading ? 'A carregar…' : `${data?.total ?? 0} documentos`}
-                      </span>
-                      <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
-                        <Download className="w-4 h-4" />
-                      </button>
+                      <div className="ml-auto flex items-center gap-2 pl-3 border-l border-gray-200">
+                        <span className="text-sm text-gray-400 tabular-nums whitespace-nowrap">
+                          {data == null && isLoading ? 'A carregar…' : `${data?.total ?? 0} documentos`}
+                        </span>
+                        <button onClick={exportCsv} title="Exportar CSV" className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-50 rounded-lg transition-colors">
+                          <Download className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
                     {renderBulkBar()}
 
                     <div ref={hScroll} className="overflow-x-auto">
-                      <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
+                      <table className="w-full table-fixed text-sm min-w-[1180px]">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                             <th className="w-12 px-3 py-3 select-none">
@@ -1267,8 +1269,8 @@ export default function ReceivablesPage() {
                               />
                             </th>
                             <th className="w-12 px-2 py-3" />
-                            <th onClick={() => toggleSort('reference')} className="text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
-                            <th onClick={() => toggleSort('entityName')} className="w-[20rem] text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
+                            <th onClick={() => toggleSort('reference')} className="w-36 text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
+                            <th onClick={() => toggleSort('entityName')} className="w-[13rem] text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Cliente <SortIcon field="entityName" />
                             </th>
                             <th onClick={() => toggleSort('dueDate')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
@@ -1277,10 +1279,10 @@ export default function ReceivablesPage() {
                             <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left pl-3 pr-1 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Pagamento <SortIcon field="promisedPaymentDate" />
                             </th>
-                            <th onClick={() => toggleSort('totalAmount')} className="text-center pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">
+                            <th onClick={() => toggleSort('totalAmount')} className="text-right pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Total <SortIcon field="totalAmount" />
                             </th>
-                            <th onClick={() => toggleSort('pendingAmount')} className="text-center px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
+                            <th onClick={() => toggleSort('pendingAmount')} className="text-right px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Pendente <SortIcon field="pendingAmount" />
                             </th>
                             <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">
@@ -1312,13 +1314,13 @@ export default function ReceivablesPage() {
                                   <td className="pl-1 pr-3 py-3">
                                     <div>
                                       <div className="flex items-center gap-1.5">
-                                        <span className="font-medium text-gray-900">{r.reference}</span>
+                                        <span className="font-medium text-gray-900 whitespace-nowrap tabular-nums">{r.reference}</span>
                                         {r.recurrenceId && <span title="Recorrente"><Repeat2 className="w-3.5 h-3.5 text-primary-400 flex-shrink-0" /></span>}
                                       </div>
                                       <div className="text-xs text-gray-400">{r.documentDate ? formatDate(r.documentDate) : ''}{r.description ? ` · ${r.description}` : ''}</div>
                                     </div>
                                   </td>
-                                  <td className="w-[20rem] px-3 py-3 text-gray-700 truncate">
+                                  <td className="w-[13rem] px-3 py-3 text-gray-700 truncate">
                                     {r.tocCustomerId ? (
                                       <button
                                         onClick={(e) => { e.stopPropagation(); navigate(`/empresa/clientes/${r.tocCustomerId}`, { state: { from: '/contas-a-receber', fromLabel: 'Contas a Receber' } }) }}
@@ -1352,13 +1354,13 @@ export default function ReceivablesPage() {
                                   <td className="pl-3 pr-1 py-3 whitespace-nowrap">{(() => {
                                     const payDate = r.promisedPaymentDate ?? r.dueDate
                                     const overdue = (r.status === 'OPEN' || r.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                    return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                    return <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
                                   })()}</td>
-                                  <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(r.totalAmount)}</td>
-                                  <td className="px-3 py-3 text-center">
-                                    <div className="font-semibold text-green-700">{formatCurrency(r.pendingAmount)}</div>
+                                  <td className="pl-1 pr-3 py-3 text-right tabular-nums whitespace-nowrap text-gray-700">{formatCurrency(r.totalAmount)}</td>
+                                  <td className="px-3 py-3 text-right">
+                                    <div className="font-semibold tabular-nums text-green-700">{formatCurrency(r.pendingAmount)}</div>
                                     {r.status === 'PARTIAL' && Number(r.receivedAmount) > 0 && (
-                                      <div className="text-xs text-gray-400">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
+                                      <div className="text-xs text-gray-400 tabular-nums">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
                                     )}
                                   </td>
                                   <td className="px-3 py-3">
@@ -1518,7 +1520,7 @@ export default function ReceivablesPage() {
                                       )}
                                       <div>
                                         <div className="flex items-center gap-1.5">
-                                          <span className="font-medium text-gray-900">{ref}</span>
+                                          <span className="font-medium text-gray-900 whitespace-nowrap tabular-nums">{ref}</span>
                                         </div>
                                         <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
                                       </div>
@@ -1546,10 +1548,10 @@ export default function ReceivablesPage() {
                                     const payDate = row.item.promisedPaymentDate ?? row.item.dueDate ?? dueDate
                                     if (!payDate) return <span className="text-gray-400">—</span>
                                     const overdue = (row.item.status === 'OPEN' || row.item.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                    return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                    return <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
                                   })()}</td>
-                                  <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(total)}</td>
-                                  <td className="px-3 py-3 text-center font-semibold text-green-700">{formatCurrency(pending)}</td>
+                                  <td className="pl-1 pr-3 py-3 text-right tabular-nums whitespace-nowrap text-gray-700">{formatCurrency(total)}</td>
+                                  <td className="px-3 py-3 text-right tabular-nums font-semibold text-green-700">{formatCurrency(pending)}</td>
                                   <td className="px-3 py-3">
                                     <Badge variant={statusVariant(row.item.status)}>{statusLabel(row.item.status, row.item._statusToc === 'SETTLED')}</Badge>
                                     {row.item._statusDiffersFromToc && (
@@ -1737,7 +1739,7 @@ export default function ReceivablesPage() {
                     </div>
                     {renderBulkBar()}
                     <div ref={hScroll} className="overflow-x-auto">
-                      <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
+                      <table className="w-full table-fixed text-sm min-w-[1180px]">
                         <thead>
                           <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                             <th className="w-12 px-3 py-3 select-none">
@@ -1749,12 +1751,12 @@ export default function ReceivablesPage() {
                               />
                             </th>
                             <th className="w-12 px-2 py-3" />
-                            <th onClick={() => toggleSort('reference')} className="text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
-                            <th onClick={() => toggleSort('entityName')} className="w-[20rem] text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Cliente <SortIcon field="entityName" /></th>
+                            <th onClick={() => toggleSort('reference')} className="w-36 text-left pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Documento <SortIcon field="reference" /></th>
+                            <th onClick={() => toggleSort('entityName')} className="w-[13rem] text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Cliente <SortIcon field="entityName" /></th>
                             <th onClick={() => toggleSort('dueDate')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Vencimento <SortIcon field="dueDate" /></th>
                             <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left pl-3 pr-1 py-3 cursor-pointer hover:text-gray-700 select-none">Pagamento <SortIcon field="promisedPaymentDate" /></th>
-                            <th onClick={() => toggleSort('totalAmount')} className="text-center pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Total <SortIcon field="totalAmount" /></th>
-                            <th onClick={() => toggleSort('pendingAmount')} className="text-center px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
+                            <th onClick={() => toggleSort('totalAmount')} className="text-right pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Total <SortIcon field="totalAmount" /></th>
+                            <th onClick={() => toggleSort('pendingAmount')} className="text-right px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
                             <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                             <th className="text-left px-3 py-3">Categoria</th>
                             <th className="text-left px-3 py-3">Budget</th>
@@ -1794,7 +1796,7 @@ export default function ReceivablesPage() {
                                       <div className="text-xs text-gray-400">{r.documentDate ? formatDate(r.documentDate) : ''}{r.description ? ` · ${r.description}` : ''}</div>
                                     </div>
                                   </td>
-                                  <td className="w-[20rem] px-3 py-3 text-gray-700 truncate">{r.tocCustomerId ? (
+                                  <td className="w-[13rem] px-3 py-3 text-gray-700 truncate">{r.tocCustomerId ? (
                                     <button
                                       onClick={(e) => { e.stopPropagation(); navigate(`/empresa/clientes/${r.tocCustomerId}`) }}
                                       className="text-primary-600 hover:underline text-left"
@@ -1812,13 +1814,13 @@ export default function ReceivablesPage() {
                                   <td className="pl-3 pr-1 py-3 whitespace-nowrap">{(() => {
                                     const payDate = r.promisedPaymentDate ?? r.dueDate
                                     const overdue = (r.status === 'OPEN' || r.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                    return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                    return <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
                                   })()}</td>
-                                  <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(r.totalAmount)}</td>
-                                  <td className="px-3 py-3 text-center">
-                                    <div className="font-semibold text-green-700">{formatCurrency(r.pendingAmount)}</div>
+                                  <td className="pl-1 pr-3 py-3 text-right tabular-nums whitespace-nowrap text-gray-700">{formatCurrency(r.totalAmount)}</td>
+                                  <td className="px-3 py-3 text-right">
+                                    <div className="font-semibold tabular-nums text-green-700">{formatCurrency(r.pendingAmount)}</div>
                                     {r.status === 'PARTIAL' && Number(r.receivedAmount) > 0 && (
-                                      <div className="text-xs text-gray-400">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
+                                      <div className="text-xs text-gray-400 tabular-nums">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
                                     )}
                                   </td>
                                   <td className="px-3 py-3"><Badge variant={statusVariant(r.status)}>{statusLabel(r.status, r._statusToc === 'SETTLED')}</Badge></td>
