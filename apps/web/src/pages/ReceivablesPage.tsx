@@ -122,12 +122,12 @@ const emptyOutrasForm = {
 // Identidade visual de cada cartão de ação rápida: ícone semântico + paleta.
 // Classes estáticas (literais) para o Tailwind as detetar no purge.
 const cardMeta = {
-  uncategorized: { label: 'Sem categoria', Icon: Tags, chip: 'bg-amber-100 text-amber-600', chipActive: 'bg-amber-500 text-white', bar: 'bg-amber-400', activeBg: 'bg-amber-50 border-amber-200', num: 'text-amber-700' },
-  unbudgeted: { label: 'Sem budget', Icon: Wallet, chip: 'bg-violet-100 text-violet-600', chipActive: 'bg-violet-500 text-white', bar: 'bg-violet-400', activeBg: 'bg-violet-50 border-violet-200', num: 'text-violet-700' },
-  pending: { label: 'Pendentes / Em aberto', Icon: FileClock, chip: 'bg-blue-100 text-blue-600', chipActive: 'bg-blue-500 text-white', bar: 'bg-blue-400', activeBg: 'bg-blue-50 border-blue-200', num: 'text-blue-700' },
-  overdue: { label: 'Vencidas', Icon: AlertTriangle, chip: 'bg-red-100 text-red-600', chipActive: 'bg-red-500 text-white', bar: 'bg-red-400', activeBg: 'bg-red-50 border-red-200', num: 'text-red-700' },
-  thisWeek: { label: 'A receber esta semana', Icon: CalendarClock, chip: 'bg-teal-100 text-teal-600', chipActive: 'bg-teal-500 text-white', bar: 'bg-teal-400', activeBg: 'bg-teal-50 border-teal-200', num: 'text-teal-700' },
-  pastDeadline: { label: 'Passou prazo pagamento', Icon: TimerOff, chip: 'bg-orange-100 text-orange-600', chipActive: 'bg-orange-500 text-white', bar: 'bg-orange-400', activeBg: 'bg-orange-50 border-orange-200', num: 'text-orange-700' },
+  uncategorized: { label: 'Sem categoria', Icon: Tags, chip: 'bg-amber-100 text-amber-600', chipActive: 'bg-amber-500 text-white', chipRing: 'ring-amber-200', glow: 'bg-amber-300', bar: 'bg-amber-400', activeBg: 'bg-amber-50 border-amber-200', num: 'text-amber-700' },
+  unbudgeted: { label: 'Sem budget', Icon: Wallet, chip: 'bg-violet-100 text-violet-600', chipActive: 'bg-violet-500 text-white', chipRing: 'ring-violet-200', glow: 'bg-violet-300', bar: 'bg-violet-400', activeBg: 'bg-violet-50 border-violet-200', num: 'text-violet-700' },
+  pending: { label: 'Pendentes / Em aberto', Icon: FileClock, chip: 'bg-blue-100 text-blue-600', chipActive: 'bg-blue-500 text-white', chipRing: 'ring-blue-200', glow: 'bg-blue-300', bar: 'bg-blue-400', activeBg: 'bg-blue-50 border-blue-200', num: 'text-blue-700' },
+  overdue: { label: 'Vencidas', Icon: AlertTriangle, chip: 'bg-red-100 text-red-600', chipActive: 'bg-red-500 text-white', chipRing: 'ring-red-200', glow: 'bg-red-300', bar: 'bg-red-400', activeBg: 'bg-red-50 border-red-200', num: 'text-red-700' },
+  thisWeek: { label: 'A receber esta semana', Icon: CalendarClock, chip: 'bg-teal-100 text-teal-600', chipActive: 'bg-teal-500 text-white', chipRing: 'ring-teal-200', glow: 'bg-teal-300', bar: 'bg-teal-400', activeBg: 'bg-teal-50 border-teal-200', num: 'text-teal-700' },
+  pastDeadline: { label: 'Passou prazo pagamento', Icon: TimerOff, chip: 'bg-orange-100 text-orange-600', chipActive: 'bg-orange-500 text-white', chipRing: 'ring-orange-200', glow: 'bg-orange-300', bar: 'bg-orange-400', activeBg: 'bg-orange-50 border-orange-200', num: 'text-orange-700' },
 } as const
 
 
@@ -1101,13 +1101,17 @@ export default function ReceivablesPage() {
                         title={active ? 'Clique para limpar o filtro' : `Filtrar: ${c.label}`}
                         className={`group relative overflow-hidden rounded-xl border px-3.5 py-3 text-left flex items-center gap-3 animate-fade-in transition-all duration-200 ${active ? `${c.activeBg} shadow-card-md` : 'bg-white border-gray-100 hover:-translate-y-0.5 hover:shadow-card-md hover:border-gray-200'}`}
                       >
-                        <span className={`absolute inset-y-0 left-0 w-1 ${c.bar} transition-opacity duration-200 ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-70'}`} />
-                        <span className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors duration-200 ${active ? c.chipActive : c.chip}`}>
+                        {/* Glow de canto na cor semântica — identidade discreta em repouso,
+                            intensifica no hover/activo. */}
+                        <span className={`pointer-events-none absolute -top-7 -right-5 h-20 w-20 rounded-full ${c.glow} blur-2xl transition-opacity duration-300 ${active ? 'opacity-25' : 'opacity-0 group-hover:opacity-20'}`} />
+                        {/* Barra de acento sempre presente (ténue), cresce no hover/activo. */}
+                        <span className={`absolute inset-y-0 left-0 w-1 ${c.bar} transition-all duration-200 ${active ? 'opacity-100' : 'opacity-30 group-hover:opacity-80'}`} />
+                        <span className={`relative w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ring-1 ring-inset transition-all duration-200 ${active ? `${c.chipActive} ring-transparent shadow-sm` : `${c.chip} ${c.chipRing} group-hover:scale-105`}`}>
                           <c.Icon className="w-4 h-4" strokeWidth={2.2} />
                         </span>
-                        <div className="min-w-0 flex-1">
+                        <div className="relative min-w-0 flex-1">
                           <div className="text-[10.5px] font-semibold uppercase tracking-wide text-gray-400 leading-tight truncate">{c.label}</div>
-                          <div className={`text-xl font-bold tabular-nums leading-snug ${active ? c.num : 'text-gray-900'}`}>{count}</div>
+                          <div className={`text-xl font-bold tabular-nums tracking-tight leading-snug transition-colors duration-200 ${active ? c.num : 'text-gray-900'}`}>{count}</div>
                         </div>
                         {active && (
                           <span className="absolute top-1.5 right-1.5 text-gray-300 group-hover:text-gray-500 transition-colors">
@@ -1123,36 +1127,45 @@ export default function ReceivablesPage() {
                     Em lg fica absoluto a preencher a célula → altura = 2 cartões
                     de ação empilhados. */}
                 <div className="relative animate-fade-in" style={{ animationDelay: '120ms' }}>
-                  <div className="group relative lg:absolute lg:inset-0 overflow-hidden rounded-2xl p-5 flex flex-col justify-between text-white shadow-card-lg ring-1 ring-inset ring-white/10 bg-[radial-gradient(135%_135%_at_0%_0%,#38bdf8_0%,#2563eb_44%,#4338ca_84%,#3730a3_100%)]">
-                    {/* Atmosfera: brilhos suaves, grão fino e um reflexo que varre */}
-                    <div className="pointer-events-none absolute -top-14 -right-10 h-48 w-48 rounded-full bg-cyan-300/25 blur-3xl" />
-                    <div className="pointer-events-none absolute -bottom-16 -left-10 h-44 w-44 rounded-full bg-indigo-950/40 blur-3xl" />
-                    <div className="pointer-events-none absolute inset-0 opacity-[0.07]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '13px 13px' }} />
+                  {/* Cartão-herói "ink": superfície slate profunda (ecoa a sidebar)
+                      com acento esmeralda para o valor realizado. Profundidade
+                      radial em direcção ao canto do brilho, hairline de vidro no
+                      topo e um "€" decorativo muito ténue dão carácter premium. */}
+                  <div className="group relative lg:absolute lg:inset-0 overflow-hidden rounded-2xl px-4 py-3.5 flex flex-col justify-between text-white shadow-card-lg ring-1 ring-inset ring-white/10 bg-[radial-gradient(130%_130%_at_100%_0%,#13294a_0%,#0f172a_42%,#0a0f1d_100%)]">
+                    {/* Atmosfera: brilho esmeralda (canto do acento), profundidade
+                        fria oposta, grão fino, hairline superior e reflexo que varre */}
+                    <div className="pointer-events-none absolute -top-16 -right-12 h-48 w-48 rounded-full bg-emerald-400/20 blur-3xl transition-colors duration-500 group-hover:bg-emerald-400/30" />
+                    <div className="pointer-events-none absolute -bottom-20 -left-12 h-48 w-48 rounded-full bg-blue-900/40 blur-3xl" />
+                    <div className="pointer-events-none absolute inset-0 opacity-[0.05]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '14px 14px' }} />
+                    <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+                    <span className="pointer-events-none absolute -bottom-7 -right-1 text-[7.5rem] font-black leading-none text-white/[0.035] select-none">€</span>
                     <div className="pointer-events-none absolute inset-0 overflow-hidden">
                       <div className="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-sheen" />
                     </div>
 
                     {/* Total pendente */}
                     <div className="relative">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/65">Total pendente</p>
-                      <div className="mt-1 flex items-baseline gap-1">
-                        <span className="text-[2rem] font-bold tracking-tight tabular-nums leading-none">{splitMoney(combinedKpis.totalPending).amount}</span>
-                        <span className="text-base font-semibold text-white/55">{splitMoney(combinedKpis.totalPending).symbol}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-1 w-4 rounded-full bg-gradient-to-r from-emerald-400 to-emerald-400/0" />
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">Total pendente</p>
+                      </div>
+                      <div className="mt-1 flex items-baseline gap-1.5">
+                        <span className="text-[1.7rem] sm:text-[1.85rem] font-bold tracking-tight tabular-nums leading-none bg-gradient-to-b from-white to-white/75 bg-clip-text text-transparent">{splitMoney(combinedKpis.totalPending).amount}</span>
+                        <span className="text-sm font-semibold text-white/40">{splitMoney(combinedKpis.totalPending).symbol}</span>
                       </div>
                     </div>
 
                     {/* Recebido + selector de janela */}
                     <div className="relative">
-                      <div className="h-px bg-gradient-to-r from-white/0 via-white/25 to-white/0" />
-                      <div className="mt-3 flex items-center justify-between gap-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/65">Recebido</p>
+                      <div className="h-px bg-gradient-to-r from-white/0 via-white/15 to-white/0" />
+                      <div className="mt-2.5 flex items-center justify-between gap-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">Recebido</p>
                         <ReceivedPeriodToggle value={receivedDays} onChange={setReceivedDays} />
                       </div>
-                      <div className="mt-1.5 flex items-baseline gap-1">
-                        <span key={displayedSettled} className="text-[1.5rem] font-bold tracking-tight tabular-nums leading-none animate-value-in">{splitMoney(displayedSettled).amount}</span>
-                        <span className="text-sm font-semibold text-white/55">{splitMoney(displayedSettled).symbol}</span>
+                      <div className="mt-1.5 flex items-baseline gap-1.5">
+                        <span key={displayedSettled} className="text-[1.3rem] sm:text-[1.4rem] font-bold tracking-tight tabular-nums leading-none text-emerald-300 animate-value-in">{splitMoney(displayedSettled).amount}</span>
+                        <span className="text-[13px] font-semibold text-emerald-300/50">{splitMoney(displayedSettled).symbol}</span>
                       </div>
-                      <p className="mt-1 text-[10px] font-medium text-white/45">{receivedDays === 'ALL' ? 'Todo o período' : `Últimos ${receivedDays} dias`}</p>
                     </div>
                   </div>
                 </div>
