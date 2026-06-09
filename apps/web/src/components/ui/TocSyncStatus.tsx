@@ -41,21 +41,32 @@ export default function TocSyncStatus({ invalidateKeys = [] }: { invalidateKeys?
     ? Math.round((Date.now() - lastSyncDate) / 60_000)
     : null
 
+  // Estado de sincronização apresentado como chip coerente com a linguagem de
+  // chips da página: âmbar quando há erro, neutro quando está em dia. A ação
+  // "Actualizar" vive dentro do mesmo chip (ícone + texto).
   return (
-    <div className="flex items-center gap-2">
-      {hasError && (
-        <span className="text-xs text-amber-600 font-medium">Erro no sync</span>
-      )}
-      {minutesAgo !== null && !hasError && (
-        <span className="text-xs text-gray-400">
-          Actualizado há {minutesAgo < 1 ? '<1' : minutesAgo} min
-        </span>
-      )}
+    <div
+      className={`inline-flex items-center gap-2 rounded-full border pl-2.5 pr-1 py-1 text-xs transition-colors ${
+        hasError
+          ? 'border-amber-200 bg-amber-50 text-amber-700'
+          : 'border-gray-200 bg-white text-gray-500'
+      }`}
+    >
+      <span className="inline-flex items-center gap-1.5 font-medium">
+        <span className={`h-1.5 w-1.5 rounded-full ${hasError ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+        {hasError
+          ? 'Erro no sync'
+          : minutesAgo !== null
+            ? `Sincronizado há ${minutesAgo < 1 ? '<1' : minutesAgo} min`
+            : 'TOConline'}
+      </span>
       <button
         onClick={() => triggerSync()}
         disabled={isPending}
         title="Actualizar dados TOConline"
-        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-40 transition-colors"
+        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium transition-colors disabled:opacity-40 ${
+          hasError ? 'hover:bg-amber-100 text-amber-700' : 'hover:bg-gray-100 text-gray-600'
+        }`}
       >
         <RefreshCw className={`w-3.5 h-3.5 ${isPending ? 'animate-spin' : ''}`} />
         <span>Actualizar</span>

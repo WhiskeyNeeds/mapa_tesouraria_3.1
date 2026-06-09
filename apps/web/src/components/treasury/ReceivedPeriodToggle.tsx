@@ -59,7 +59,7 @@ function ReceivedPeriodToggleBase({ value, onChange }: { value: ReceivedPeriod; 
             role="tab"
             aria-selected={active}
             onClick={(e) => { e.stopPropagation(); onChange(o.key) }}
-            className={`relative z-10 px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${active ? 'text-indigo-700' : 'text-white/65 hover:text-white'}`}
+            className={`relative z-10 px-2 py-1 text-[11px] font-semibold rounded-md transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60 ${active ? 'text-emerald-700' : 'text-white/65 hover:text-white'}`}
           >
             {o.label}
           </button>
