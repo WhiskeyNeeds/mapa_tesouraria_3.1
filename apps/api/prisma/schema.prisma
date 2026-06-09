@@ -534,6 +534,10 @@ model TreasuryPayable {
   recurrenceId        String?
   parentId            String?
   promisedPaymentDate DateTime?
+  // Marca "Pronta para Pagar": anotação local não destrutiva que faz a fatura
+  // surgir no separador "Futuros Pagamentos" sem sair do seu separador de
+  // origem (Fornecedores/Outras). Limpa automaticamente ao pagar/liquidar.
+  readyToPay          Boolean   @default(false)
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)

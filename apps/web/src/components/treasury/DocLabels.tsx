@@ -1,19 +1,21 @@
-import { Scissors, AlertTriangle } from 'lucide-react'
+import { Scissors, AlertTriangle, Wallet } from 'lucide-react'
 
 interface DocLabelsProps {
   /** Número de parcelas da divisão (0 = não dividido). */
   splitCount: number
   /** TOC + estado "Pago" em Contas a Receber — aguarda recibo no TOConline. */
   awaitingReceipt?: boolean
+  /** Marcada como "Pronta para Pagar" — também consta de Futuros Pagamentos. */
+  readyToPay?: boolean
 }
 
 /**
  * Slot de etiquetas dos documentos, mostrado à esquerda da referência (a seguir
- * ao checkbox). Agrega o badge da divisão (tesoura) e o aviso "Aguarda Recibo".
- * Não renderiza nada quando não há etiquetas a mostrar.
+ * ao checkbox). Agrega o badge da divisão (tesoura), o aviso "Aguarda Recibo" e
+ * a marca "Pronta para Pagar". Não renderiza nada quando não há etiquetas.
  */
-export function DocLabels({ splitCount, awaitingReceipt }: DocLabelsProps) {
-  if (splitCount <= 0 && !awaitingReceipt) return null
+export function DocLabels({ splitCount, awaitingReceipt, readyToPay }: DocLabelsProps) {
+  if (splitCount <= 0 && !awaitingReceipt && !readyToPay) return null
   return (
     <span className="inline-flex items-center gap-1">
       {splitCount > 0 && (
@@ -23,6 +25,14 @@ export function DocLabels({ splitCount, awaitingReceipt }: DocLabelsProps) {
         >
           <Scissors className="w-3 h-3" />
           {splitCount}
+        </span>
+      )}
+      {readyToPay && (
+        <span
+          title="Pronta para Pagar — em Futuros Pagamentos"
+          className="inline-flex items-center px-1 py-0.5 rounded bg-teal-100 text-teal-700"
+        >
+          <Wallet className="w-3 h-3" />
         </span>
       )}
       {awaitingReceipt && (

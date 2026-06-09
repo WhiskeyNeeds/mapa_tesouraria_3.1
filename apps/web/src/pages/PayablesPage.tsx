@@ -18,7 +18,7 @@ import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
-import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye } from 'lucide-react'
+import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye, Wallet } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -78,6 +78,7 @@ interface Payable {
   tocSupplierId?: string | null
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
+  readyToPay?: boolean
   parentId?: string | null
   category?: { id: string; name: string; color: string } | null
   budget?: { id: string; name: string; color?: string | null } | null
@@ -339,7 +340,7 @@ export default function PayablesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkCategoryId, setBulkCategoryId] = useState('')
   const [bulkBudgetId, setBulkBudgetId] = useState('')
-  const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras'>('fornecedores')
+  const [activeTab, setActiveTab] = useState<'fornecedores' | 'outras' | 'futuros'>('fornecedores')
   const [outrasSubTab, setOutrasSubTab] = useState<'fechadas' | 'futuras' | 'programadas' | 'abertas'>('abertas')
   // Filtros das "Outras Operações" são independentes por sub-separador: cada uma
   // das 4 divisões mantém o seu próprio conjunto de filtros (aplicados no cliente).
@@ -402,15 +403,18 @@ export default function PayablesPage() {
       // Cada separador pagina o seu próprio conjunto no servidor (bucket). As
       // "Outras Operações" são poucas (operações manuais) e têm sub-separadores
       // categorizados no cliente, por isso trazemos o conjunto completo.
-      const bucket = activeTab === 'outras' ? 'outras' : 'fornecedores'
+      // "Futuros Pagamentos" atravessa os buckets: não envia bucket, filtra por
+      // readyToPay no servidor (Fornecedores + Outras marcadas).
       const params = new URLSearchParams({
-        bucket,
-        page: bucket === 'outras' ? '1' : String(page),
-        limit: bucket === 'outras' ? '1000' : '25',
+        page: activeTab === 'outras' ? '1' : String(page),
+        limit: activeTab === 'outras' ? '1000' : '25',
       })
+      if (activeTab === 'futuros') params.set('readyToPay', 'true')
+      else params.set('bucket', activeTab === 'outras' ? 'outras' : 'fornecedores')
       // O bucket "outras" traz o conjunto completo sem filtros: a filtragem é
-      // feita no cliente, de forma independente por sub-separador.
-      if (bucket !== 'outras') {
+      // feita no cliente, de forma independente por sub-separador. Fornecedores
+      // e Futuros Pagamentos aplicam os filtros da barra no servidor.
+      if (activeTab !== 'outras') {
         if (isOverdueFilter) {
           params.set('overdue', 'true')
         } else {
@@ -717,6 +721,17 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  const setReadyToPay = useMutation({
+    mutationFn: ({ id, ready }: { id: string; ready: boolean }) =>
+      api.patch(`/treasury/${selectedClientId}/payables/${id}/ready-to-pay`, { ready }),
+    onSuccess: (_, { ready }) => {
+      qc.invalidateQueries({ queryKey: ['payables'] })
+      setPanelDoc((d) => d ? { ...d, readyToPay: ready } : d)
+      toast.success(ready ? 'Adicionada a Futuros Pagamentos.' : 'Removida de Futuros Pagamentos.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
   const unsplitPayable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/unsplit`, {}),
     onSuccess: (_, id) => {
@@ -1016,7 +1031,7 @@ export default function PayablesPage() {
             )}
 
             {/* Tabs */}
-            <div className="flex gap-1 border-b border-gray-200">
+            <div className="flex items-center gap-1 border-b border-gray-200">
               {([['fornecedores', 'Fornecedores'], ['outras', 'Outras Operações']] as const).map(([id, label]) => (
                 <button
                   key={id}
@@ -1027,9 +1042,17 @@ export default function PayablesPage() {
                   {label}
                 </button>
               ))}
+              <span className="w-px h-5 bg-gray-300 mx-1 self-center" aria-hidden="true" />
+              <button
+                onClick={() => { setActiveTab('futuros'); setPage(1) }}
+                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === 'futuros' ? 'border-primary-600 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+              >
+                Futuros Pagamentos
+              </button>
             </div>
 
-            {activeTab === 'fornecedores' && (
+            {(activeTab === 'fornecedores' || activeTab === 'futuros') && (
               <div className="space-y-4 pt-1">
 
                 <div className="card">
@@ -1143,7 +1166,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} />
+                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div>
@@ -1333,7 +1356,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(row.item.children ?? []).filter((c) => !c.recurrenceId).length} />
+                                  <DocLabels splitCount={(row.item.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={row.item.readyToPay} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div className="flex items-start gap-1.5">
@@ -1446,7 +1469,7 @@ export default function PayablesPage() {
                           )
                         })}
                         {rows.length === 0 && (
-                          <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
+                          <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : activeTab === 'futuros' ? 'Sem faturas marcadas como prontas para pagar' : 'Sem documentos'}</td></tr>
                         )}
                       </tbody>
                       {rows.length > 0 && (() => {
@@ -1618,7 +1641,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} />
+                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div>
@@ -2410,6 +2433,30 @@ export default function PayablesPage() {
                       </button>
                     )
                   })()}
+
+                  {/* Pronta para Pagar — toggle do separador Futuros Pagamentos */}
+                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (
+                    <button
+                      onClick={() => setReadyToPay.mutate({ id: panelDoc.id, ready: !panelDoc.readyToPay })}
+                      disabled={setReadyToPay.isPending}
+                      className={`w-full flex items-center gap-3 p-3.5 rounded-xl border text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed ${panelDoc.readyToPay
+                        ? 'border-teal-300 bg-teal-50 hover:bg-teal-100'
+                        : 'border-gray-200 hover:bg-teal-50 hover:border-teal-200'
+                        }`}
+                    >
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${panelDoc.readyToPay ? 'bg-teal-200' : 'bg-teal-100 group-hover:bg-teal-200'}`}>
+                        <Wallet className="w-4 h-4 text-teal-700" />
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900 text-sm">
+                          {panelDoc.readyToPay ? 'Remover de Futuros Pagamentos' : 'Pronta para Pagar'}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {panelDoc.readyToPay ? 'Marcada — consta de Futuros Pagamentos' : 'Adicionar a Futuros Pagamentos'}
+                        </div>
+                      </div>
+                    </button>
+                  )}
 
                   {/* Data prometida — bloqueada em faturas pagas/liquidadas */}
                   <div className="rounded-xl border border-gray-200 overflow-hidden">

@@ -25,6 +25,7 @@ interface PayableListItem {
   recurrenceId: string | null
   parentId: string | null
   promisedPaymentDate: Date | null
+  readyToPay: boolean
   category: { id: string; name: string; color: string | null; launchToc: boolean } | null
   budget: { id: string; name: string; color: string | null } | null
   children: unknown[]
@@ -58,6 +59,7 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
     recurrenceId: null,
     parentId: null,
     promisedPaymentDate: null,
+    readyToPay: false,
     category: null,
     budget: null,
     children: [],
@@ -94,6 +96,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
       recurrenceId: local.recurrenceId,
       parentId: local.parentId,
       promisedPaymentDate: local.promisedPaymentDate,
+      readyToPay: local.readyToPay,
       category: local.category,
       budget: local.budget,
       children: local.children,
@@ -125,6 +128,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
     recurrenceId: local.recurrenceId,
     parentId: local.parentId,
     promisedPaymentDate: local.promisedPaymentDate,
+    readyToPay: local.readyToPay,
     category: local.category,
     budget: local.budget,
     children: local.children,
@@ -170,6 +174,9 @@ export class TreasuryPayablesService {
     // 'outras' = operações locais (tocPurchasesDocId == null). Cada separador
     // ordena/pagina o seu próprio conjunto no servidor.
     bucket?: 'fornecedores' | 'outras'
+    // "Futuros Pagamentos": faturas marcadas como Pronta para Pagar. Atravessa os
+    // buckets (Fornecedores + Outras) — quando ligado, ignora a restrição de bucket.
+    readyToPay?: boolean
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
@@ -180,7 +187,7 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocSupplierId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocSupplierId, bucket, readyToPay, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusList: TreasuryDocStatus[] | undefined = (overdue || pastPaymentDeadline)
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -259,6 +266,13 @@ export class TreasuryPayablesService {
     const matches = (item: PayableListItem) => {
       if (bucket === 'outras' && item.tocPurchasesDocId != null) return false
       if (bucket === 'fornecedores' && item.tocPurchasesDocId == null) return false
+      // "Futuros Pagamentos": só faturas marcadas e ainda por pagar. Faturas
+      // pagas/liquidadas/anuladas saem do separador (a flag é limpa ao pagar,
+      // mas guardamos esta rede de segurança para docs TOC liquidados via sync).
+      if (readyToPay) {
+        if (!item.readyToPay) return false
+        if (item.status === 'PAID' || item.status === 'SETTLED' || item.status === 'VOID') return false
+      }
       if (statusList && !statusList.includes(item.status)) return false
       if (uncategorized && item.category != null) return false
       if (unbudgeted && item.budget != null) return false
@@ -792,13 +806,14 @@ export class TreasuryPayablesService {
           pendingAmount: item.tocPurchasesDocId ? null : 0,
           paidAmount: item.tocPurchasesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
+          readyToPay: false,
         },
       })
       // Cascade: settling a parent settles all its non-recurring open/partial children at once.
       if (splitChildren.length > 0) {
         await tx.$executeRaw`
           UPDATE "treasury_payables"
-          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "updatedAt" = NOW()
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "updatedAt" = NOW()
           WHERE "parentId" = ${id}
             AND "recurrenceId" IS NULL
             AND "deletedAt" IS NULL
@@ -839,13 +854,14 @@ export class TreasuryPayablesService {
           pendingAmount: item.tocPurchasesDocId ? null : 0,
           paidAmount: item.tocPurchasesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
+          readyToPay: false,
         },
       })
       // Cascade: marcar a mãe como paga marca as parcelas em aberto/parciais.
       if (splitChildren.length > 0) {
         await tx.$executeRaw`
           UPDATE "treasury_payables"
-          SET "status" = 'PAID', "pendingAmount" = 0, "paidAmount" = "totalAmount", "updatedAt" = NOW()
+          SET "status" = 'PAID', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "updatedAt" = NOW()
           WHERE "parentId" = ${id}
             AND "recurrenceId" IS NULL
             AND "deletedAt" IS NULL
@@ -1029,6 +1045,27 @@ export class TreasuryPayablesService {
         from: item.promisedPaymentDate?.toISOString() ?? null,
         to: newDate?.toISOString() ?? null,
       },
+    })
+    return result
+  }
+
+  /** Marca/desmarca "Pronta para Pagar" (separador Futuros Pagamentos). Anotação
+   *  local não destrutiva — não altera o estado nem move a fatura do seu bucket. */
+  async setReadyToPay(clientId: string, userId: string, id: string, ready: boolean) {
+    id = await this.resolveLocalPayableId(clientId, userId, id)
+    const item = await this.getById(clientId, id)
+    if (ready && (item.status === 'PAID' || item.status === 'SETTLED' || item.status === 'VOID')) {
+      throw httpError(409, 'Apenas faturas por pagar podem ser marcadas como prontas para pagar')
+    }
+    const result = await this.prisma.treasuryPayable.update({
+      where: { id },
+      data: { readyToPay: ready },
+    })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'payable.set_ready_to_pay',
+      entityType: 'Payable', entityId: id,
+      payload: { from: item.readyToPay, to: ready },
     })
     return result
   }

@@ -12,7 +12,7 @@ import {
   isWeekend, shiftToWorkday,
   statusLabel, statusVariant,
 } from '@/lib/utils'
-import { CreditCard, Clock, Scissors, CheckCircle, ChevronLeft, X } from 'lucide-react'
+import { CreditCard, Clock, Scissors, CheckCircle, ChevronLeft, X, Wallet } from 'lucide-react'
 import Badge from '@/components/ui/Badge'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 
@@ -36,6 +36,7 @@ interface Doc {
   pendingAmount: number
   status: string
   origin: string
+  readyToPay?: boolean
   recurrenceId?: string | null
   parentId?: string | null
   tocPurchasesDocId?: string | null
@@ -121,6 +122,16 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
       invalidate()
       setSection(null)
       toast.success(date ? 'Data prometida definida' : 'Data prometida removida')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const setReadyToPayMut = useMutation({
+    mutationFn: (ready: boolean) =>
+      api.patch(`/treasury/${selectedClientId}/${seg}/${currentId}/ready-to-pay`, { ready }),
+    onSuccess: (_, ready) => {
+      invalidate()
+      toast.success(ready ? 'Adicionada a Futuros Pagamentos' : 'Removida de Futuros Pagamentos')
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -335,6 +346,30 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
                     {isExpense ? 'Marcar como liquidada' : 'Marcar como recebida'}
                   </div>
                   <div className="text-xs text-gray-500">Registar recibo / liquidação total</div>
+                </div>
+              </button>
+            )}
+
+            {/* Pronta para Pagar — toggle do separador Futuros Pagamentos (só payables) */}
+            {isExpense && isOpen && (
+              <button
+                onClick={() => setReadyToPayMut.mutate(!doc.readyToPay)}
+                disabled={setReadyToPayMut.isPending}
+                className={`w-full flex items-center gap-3 p-3.5 rounded-xl border text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed ${doc.readyToPay
+                  ? 'border-teal-300 bg-teal-50 hover:bg-teal-100'
+                  : 'border-gray-200 hover:bg-teal-50 hover:border-teal-200'
+                  }`}
+              >
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${doc.readyToPay ? 'bg-teal-200' : 'bg-teal-100 group-hover:bg-teal-200'}`}>
+                  <Wallet className="w-4 h-4 text-teal-700" />
+                </div>
+                <div>
+                  <div className="font-medium text-gray-900 text-sm">
+                    {doc.readyToPay ? 'Remover de Futuros Pagamentos' : 'Pronta para Pagar'}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {doc.readyToPay ? 'Marcada — consta de Futuros Pagamentos' : 'Adicionar a Futuros Pagamentos'}
+                  </div>
                 </div>
               </button>
             )}

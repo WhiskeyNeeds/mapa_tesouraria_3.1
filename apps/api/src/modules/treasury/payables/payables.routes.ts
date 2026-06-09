@@ -24,7 +24,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const q = request.query as {
       status?: string; origin?: TreasuryDocOrigin; categoryId?: string; uncategorized?: string; budgetId?: string; unbudgeted?: string
       entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string; paymentDateFrom?: string; paymentDateTo?: string
-      isRecurrent?: string; overdue?: string; pastPaymentDeadline?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; sortBy?: string; sortDir?: string; page?: string; limit?: string
+      isRecurrent?: string; overdue?: string; pastPaymentDeadline?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; readyToPay?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
     const statusValue = q.status?.includes(',')
       ? (q.status.split(',') as TreasuryDocStatus[])
@@ -39,6 +39,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
       overdue: q.overdue === 'true',
       pastPaymentDeadline: q.pastPaymentDeadline === 'true',
+      readyToPay: q.readyToPay === 'true' ? true : undefined,
       sortBy: validSortBy,
       sortDir: validSortDir,
       page: q.page ? parseInt(q.page) : undefined,
@@ -229,6 +230,13 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const { date } = request.body as { date: string | null }
     return reply.send(await svc.setPromisedDate(clientId, request.user.sub, id, date))
+  })
+
+  fastify.patch(`${prefix}/:id/ready-to-pay`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const { ready } = request.body as { ready: boolean }
+    if (typeof ready !== 'boolean') return reply.status(400).send({ message: 'Campo "ready" em falta' })
+    return reply.send(await svc.setReadyToPay(clientId, request.user.sub, id, ready))
   })
 
   fastify.post(`${prefix}/:id/split`, { onRequest: auth }, async (request, reply) => {
