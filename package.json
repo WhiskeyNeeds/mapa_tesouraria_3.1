@@ -2,7 +2,9 @@
   "name": "mapa-tesouraria",
   "version": "1.0.0",
   "private": true,
-  "workspaces": ["apps/*"],
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=apps/api\" \"npm run dev --workspace=apps/web\"",
     "dev:api": "npm run dev --workspace=apps/api",
@@ -13,6 +15,8 @@
     "db:seed": "npm run db:seed --workspace=apps/api"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^25.9.2",
     "concurrently": "^9.1.0"
   }
 }

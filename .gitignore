@@ -4,3 +4,10 @@ node_modules
 
 # Compiled output — reproducível com npm run build
 apps/api/dist
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
