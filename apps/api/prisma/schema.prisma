@@ -492,6 +492,7 @@ model TreasuryReceivable {
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
+  @@index([clientId, status, settledAt])
   @@index([clientId, categoryId])
   @@index([clientId, origin])
   @@index([clientId, budgetId])
@@ -1135,12 +1136,21 @@ model TocSalesDocument {
   grossTotal   Decimal? @db.Decimal(18, 2)
   pendingTotal Decimal? @db.Decimal(18, 2)
   receiptsIds  Int[]
+  // Campos extraídos do `raw` para evitar carregar o blob JSON inteiro em
+  // queries de listagem/KPIs — ler `raw` para 1000s de linhas é a origem da
+  // lentidão. Preenchidos no sync (extractSalesDocFields) e por backfill nas
+  // migrações. O `raw` mantém-se e é carregado só para os itens da página
+  // (detalhe/reconciliação na UI). `documentType` em minúsculas.
+  documentType String?
+  documentNo   String?
+  customerName String?
   raw          Json
   syncedAt     DateTime @default(now())
 
   @@unique([clientId, tocId])
   @@index([clientId, customerId])
   @@index([clientId, date])
+  @@index([clientId, status])
   @@map("toc_sales_documents")
 }
 

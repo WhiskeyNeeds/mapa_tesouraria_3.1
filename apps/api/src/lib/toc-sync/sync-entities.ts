@@ -79,6 +79,10 @@ export function extractSalesDocFields(clientId: string, item: Raw) {
     grossTotal: num(item.gross_total),
     pendingTotal: num(item.pending_total),
     receiptsIds: intArr(item.receipts_ids),
+    documentType: str(item.document_type)?.toLowerCase() ?? null,
+    // Sem trim: espelha `raw->>'...'` do backfill (valor verbatim ou null).
+    documentNo: typeof item.document_no === 'string' ? item.document_no : null,
+    customerName: typeof item.customer_business_name === 'string' ? item.customer_business_name : null,
     raw: item as object,
     syncedAt: new Date(),
   }

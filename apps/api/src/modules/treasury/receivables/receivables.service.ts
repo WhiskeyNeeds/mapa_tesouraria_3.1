@@ -37,20 +37,29 @@ interface ReceivableListItem {
   [key: string]: unknown
 }
 
+/** Subconjunto de TocSalesDocument suficiente para overlay/mapeamento. `raw`
+ *  é opcional: em queries lean (KPIs/contagem) não é carregado, e os campos
+ *  que dele dependem (reference/entityName/_tocRaw) ficam null — esses não são
+ *  usados nas contagens, só na listagem (que carrega o raw). O discriminador
+ *  `document_type` passou a vir da coluna `documentType` (sempre presente). */
+type TocDocForOverlay = Pick<
+  TocSalesDocument,
+  'tocId' | 'customerId' | 'status' | 'date' | 'dueDate' | 'grossTotal' | 'pendingTotal' | 'documentType' | 'documentNo' | 'customerName'
+> & { raw?: Prisma.JsonValue }
+
 /** Devolve apenas dados do TOC, para docs TOC sem registo `treasuryReceivable` ligado.
  *  Usa ID prefixado `toc-{tocId}` para que ações on-demand consigam criar
  *  o registo de ligação no momento. */
-function mapTocSalesToReceivable(d: TocSalesDocument): ReceivableListItem | null {
+function mapTocSalesToReceivable(d: TocDocForOverlay): ReceivableListItem | null {
   const mappedStatus = mapTocStatus(d.status)
   if (mappedStatus == null) return null
   const gross = Number(d.grossTotal ?? 0)
   const pending = Number(d.pendingTotal ?? gross)
   const received = Math.max(0, gross - pending)
-  const raw = (d.raw ?? {}) as Record<string, unknown>
   return {
     id: `toc-${d.tocId}`,
-    reference: (raw.document_no as string) ?? null,
-    entityName: (raw.customer_business_name as string) ?? null,
+    reference: d.documentNo ?? null,
+    entityName: d.customerName ?? null,
     documentDate: d.date ? new Date(d.date) : null,
     dueDate: d.dueDate ? new Date(d.dueDate) : null,
     totalAmount: gross,
@@ -67,7 +76,7 @@ function mapTocSalesToReceivable(d: TocSalesDocument): ReceivableListItem | null
     budget: null,
     children: [],
     _src: 'toc',
-    _tocRaw: d.raw,
+    _tocRaw: d.raw ?? null,
     _statusToc: mappedStatus,
     _statusDiffersFromToc: false,
   }
@@ -85,7 +94,7 @@ type LocalReceivableRow = Prisma.TreasuryReceivableGetPayload<{
  *  campos da fatura (dueDate, totalAmount, pendingAmount, status…) com os
  *  valores actuais do `tocSalesDocument`. Anotações locais (categoryId,
  *  budgetId, promisedPaymentDate, splits, recurrenceId) ficam do local. */
-function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocSalesDocument): ReceivableListItem | null {
+function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverlay): ReceivableListItem | null {
   if (!tocDoc) {
     // Sem espelho TOC: registo manual ou ligação cujo doc TOC foi removido do
     // sync. Devolve os campos do local tal como estão.
@@ -119,11 +128,10 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocSalesDocumen
   const gross = Number(tocDoc.grossTotal ?? 0)
   const tocPending = Number(tocDoc.pendingTotal ?? gross)
   const merged = resolveStatusOverlay(local.status, local.receivedAmount, tocMapped, gross, tocPending)
-  const raw = (tocDoc.raw ?? {}) as Record<string, unknown>
   return {
     id: local.id,
-    reference: (raw.document_no as string) ?? local.reference,
-    entityName: (raw.customer_business_name as string) ?? local.entityName,
+    reference: tocDoc.documentNo ?? local.reference,
+    entityName: tocDoc.customerName ?? local.entityName,
     documentDate: tocDoc.date ? new Date(tocDoc.date) : local.documentDate,
     dueDate: tocDoc.dueDate ? new Date(tocDoc.dueDate) : local.dueDate,
     totalAmount: gross,
@@ -140,10 +148,40 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocSalesDocumen
     budget: local.budget,
     children: local.children,
     _src: 'toc',
-    _tocRaw: tocDoc.raw,
+    _tocRaw: tocDoc.raw ?? null,
     _statusToc: tocMapped,
     _statusDiffersFromToc: merged.statusDiffers,
   }
+}
+
+type ReceivableListFilters = {
+  status?: TreasuryDocStatus | TreasuryDocStatus[]
+  origin?: TreasuryDocOrigin
+  categoryId?: string
+  uncategorized?: boolean
+  budgetId?: string
+  unbudgeted?: boolean
+  entityName?: string
+  dueDateFrom?: string
+  dueDateTo?: string
+  docDateFrom?: string
+  docDateTo?: string
+  paymentDateFrom?: string
+  paymentDateTo?: string
+  isRecurrent?: boolean
+  overdue?: boolean
+  // "Passou prazo pagamento": pendentes cuja data prometida de pagamento — ou,
+  // na ausência desta, a data de vencimento de origem — já passou.
+  pastPaymentDeadline?: boolean
+  tocCustomerId?: string
+  // Separa os documentos por separador da UI: 'clientes' = ligados ao TOConline
+  // (tocSalesDocId != null); 'outras' = operações locais (tocSalesDocId == null).
+  // Permite que cada separador ordene/pagine o seu próprio conjunto no servidor.
+  bucket?: 'clientes' | 'outras'
+  sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
+  sortDir?: 'asc' | 'desc'
+  page?: number
+  limit?: number
 }
 
 export class TreasuryReceivablesService {
@@ -157,41 +195,75 @@ export class TreasuryReceivablesService {
     this.recurrencesSvc = new TreasuryRecurrencesService(prisma)
   }
 
-  async list(clientId: string, filters: {
-    status?: TreasuryDocStatus | TreasuryDocStatus[]
-    origin?: TreasuryDocOrigin
-    categoryId?: string
-    uncategorized?: boolean
-    budgetId?: string
-    unbudgeted?: boolean
-    entityName?: string
-    dueDateFrom?: string
-    dueDateTo?: string
-    docDateFrom?: string
-    docDateTo?: string
-    paymentDateFrom?: string
-    paymentDateTo?: string
-    isRecurrent?: boolean
-    overdue?: boolean
-    // "Passou prazo pagamento": pendentes cuja data prometida de pagamento — ou,
-    // na ausência desta, a data de vencimento de origem — já passou.
-    pastPaymentDeadline?: boolean
-    tocCustomerId?: string
-    // Separa os documentos por separador da UI: 'clientes' = ligados ao TOConline
-    // (tocSalesDocId != null); 'outras' = operações locais (tocSalesDocId == null).
-    // Permite que cada separador ordene/pagine o seu próprio conjunto no servidor.
-    bucket?: 'clientes' | 'outras'
-    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
-    sortDir?: 'asc' | 'desc'
-    page?: number
-    limit?: number
-  }) {
+  async list(clientId: string, filters: ReceivableListFilters) {
     // Materialise pending recurrence instances within the 180-day horizon so the list
     // surfaces the "Futuras" tab content without waiting on a dashboard view to trigger
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocCustomerId, bucket, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, sortBy = 'dueDate', sortDir = 'asc' } = filters
+
+    // Universo (overlay TOC + filtros) partilhado com getKpis. lean:true — não
+    // carrega o blob `raw` (origem da lentidão). reference/entityName vêm das
+    // colunas, por isso ordenação/filtro continuam corretos. O `_tocRaw` é
+    // anexado a seguir, só para os itens da página (fase 2).
+    const allItems = await this.buildOverlayItems(clientId, filters, { lean: true })
+
+    // 4. Ordenação em memória. Desempate estável por `id`: garante uma ordem
+    // determinística quando a chave principal empata (ex.: mesmo cliente/data),
+    // evitando que a paginação atribua a mesma linha a páginas diferentes (a
+    // ordem dependia antes da ordem física das linhas devolvidas pela BD).
+    const sortKey = sortBy as keyof ReceivableListItem
+    allItems.sort((a, b) => {
+      const rawA = a[sortKey], rawB = b[sortKey]
+      const va = rawA instanceof Date ? rawA.getTime() : rawA
+      const vb = rawB instanceof Date ? rawB.getTime() : rawB
+      if (va == null && vb == null) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+      if (va == null) return sortDir === 'asc' ? 1 : -1
+      if (vb == null) return sortDir === 'asc' ? -1 : 1
+      if (va < vb) return sortDir === 'asc' ? -1 : 1
+      if (va > vb) return sortDir === 'asc' ? 1 : -1
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    })
+
+    const total = allItems.length
+    const items = allItems.slice((page - 1) * limit, page * limit)
+
+    // Fase 2: carrega o `raw` apenas dos docs TOC presentes nesta página e
+    // anexa-o como `_tocRaw` (usado pelo detalhe/reconciliação na UI). Evita
+    // transferir os 1000s de blobs do dataset completo.
+    const pageTocIds = [...new Set(
+      items.map((it) => it.tocSalesDocId).filter((s): s is string => !!s).map(Number).filter((n) => !Number.isNaN(n)),
+    )]
+    if (pageTocIds.length) {
+      const raws = await this.prisma.tocSalesDocument.findMany({
+        where: { clientId, tocId: { in: pageTocIds } },
+        select: { tocId: true, raw: true },
+      })
+      const rawById = new Map(raws.map((r) => [r.tocId, r.raw]))
+      for (const it of items) {
+        if (it.tocSalesDocId) {
+          const r = rawById.get(Number(it.tocSalesDocId))
+          if (r !== undefined) it._tocRaw = r
+        }
+      }
+    }
+
+    return { total, page, limit, items }
+  }
+
+  /** Constrói o universo de itens (receivables locais com overlay TOC + docs TOC
+   *  puros) e aplica os filtros, devolvendo a lista NÃO ordenada/paginada.
+   *  Partilhado entre `list()` (lean:false — devolve _tocRaw à UI) e `getKpis()`
+   *  (lean:true — só contagens; não carrega o blob `raw`, ~26× mais rápido).
+   *  Pressupõe que `processForClient` já correu (list e getKpis fazem-no antes). */
+  private async buildOverlayItems(
+    clientId: string,
+    filters: ReceivableListFilters,
+    opts: { lean?: boolean } = {},
+  ): Promise<ReceivableListItem[]> {
+    const { lean = false } = opts
+    const { status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocCustomerId, bucket } = filters
     const statusList: TreasuryDocStatus[] | undefined = (overdue || pastPaymentDeadline)
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -216,6 +288,11 @@ export class TreasuryReceivablesService {
       ...(isRecurrent !== undefined ? { recurrenceId: isRecurrent ? { not: null } : null } : {}),
     }
 
+    // Em modo lean não carregamos o blob `raw` (origem da lentidão): só as
+    // colunas necessárias ao overlay/contagem. `document_type` vem da coluna
+    // `documentType`. reference/entityName/_tocRaw ficam null — não usados nas
+    // contagens.
+    const tocWhere = { clientId, ...(tocCustomerId ? { customerId: Number(tocCustomerId) } : {}) }
     const [localRows, allTocDocs] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
         where: localWhere,
@@ -228,13 +305,13 @@ export class TreasuryReceivablesService {
       // Filtros locais excluem todos os docs TOC porque não têm equivalente
       // na fonte; nesse caso a lista TOC fica vazia.
       (categoryId || budgetId || isRecurrent !== undefined || paymentDateFrom || paymentDateTo)
-        ? Promise.resolve([] as TocSalesDocument[])
-        : this.prisma.tocSalesDocument.findMany({
-            where: {
-              clientId,
-              ...(tocCustomerId ? { customerId: Number(tocCustomerId) } : {}),
-            },
-          }),
+        ? Promise.resolve([] as TocDocForOverlay[])
+        : lean
+          ? this.prisma.tocSalesDocument.findMany({
+              where: tocWhere,
+              select: { tocId: true, customerId: true, status: true, date: true, dueDate: true, grossTotal: true, pendingTotal: true, documentType: true, documentNo: true, customerName: true },
+            }) as Promise<TocDocForOverlay[]>
+          : this.prisma.tocSalesDocument.findMany({ where: tocWhere }) as Promise<TocDocForOverlay[]>,
     ])
 
     // Mapa tocId → tocSalesDocument para overlay rápido
@@ -256,8 +333,8 @@ export class TreasuryReceivablesService {
     if (origin !== 'LOCAL' && bucket !== 'outras') {
       for (const d of allTocDocs) {
         if (importedTocIds.has(String(d.tocId))) continue
-        const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
-        if (!SALES_INVOICE_TYPES.has(docType)) continue
+        // document_type via coluna (em minúsculas), evita ler/parsear o raw
+        if (!SALES_INVOICE_TYPES.has(d.documentType ?? '')) continue
         const item = mapTocSalesToReceivable(d)
         if (item) tocPureMapped.push(item)
       }
@@ -299,26 +376,7 @@ export class TreasuryReceivablesService {
       return true
     }
 
-    const allItems = [...localWithOverlay, ...tocPureMapped].filter(matches)
-
-    // 4. Ordenação em memória
-    const sortKey = sortBy as keyof ReceivableListItem
-    allItems.sort((a, b) => {
-      const rawA = a[sortKey], rawB = b[sortKey]
-      const va = rawA instanceof Date ? rawA.getTime() : rawA
-      const vb = rawB instanceof Date ? rawB.getTime() : rawB
-      if (va == null && vb == null) return 0
-      if (va == null) return sortDir === 'asc' ? 1 : -1
-      if (vb == null) return sortDir === 'asc' ? -1 : 1
-      if (va < vb) return sortDir === 'asc' ? -1 : 1
-      if (va > vb) return sortDir === 'asc' ? 1 : -1
-      return 0
-    })
-
-    const total = allItems.length
-    const items = allItems.slice((page - 1) * limit, page * limit)
-
-    return { total, page, limit, items }
+    return [...localWithOverlay, ...tocPureMapped].filter(matches)
   }
 
   /**
@@ -1299,7 +1357,7 @@ export class TreasuryReceivablesService {
     const todayStr = now.toISOString().slice(0, 10)
     const tocDocs = await this.prisma.tocSalesDocument.findMany({
       where: { clientId, status: { in: [1, 2, 5] } },
-      select: { tocId: true, dueDate: true, status: true, pendingTotal: true, grossTotal: true, raw: true },
+      select: { tocId: true, dueDate: true, status: true, pendingTotal: true, grossTotal: true, documentType: true },
     })
     // Docs TOC liquidados/pagos/anulados localmente (overlay) deixam de ser
     // pendentes — excluídos dos totais (decisão: "Pago" não conta como pendente).
@@ -1314,8 +1372,7 @@ export class TreasuryReceivablesService {
     let tocOverdue = 0
     for (const d of tocDocs) {
       if (overriddenTocIds.has(d.tocId)) continue
-      const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
-      if (!SALES_INVOICE_TYPES.has(docType)) continue
+      if (!SALES_INVOICE_TYPES.has(d.documentType ?? '')) continue
       const pending = Number(d.pendingTotal ?? d.grossTotal ?? 0)
       if (pending <= 0) continue
       tocTotalPending += pending
@@ -1325,12 +1382,15 @@ export class TreasuryReceivablesService {
     }
 
     // Contadores dos cartões compactos clicáveis. Calculados sobre o dataset
-    // completo (com overlay TOC) reutilizando list(), garantindo coerência com
-    // o que cada filtro mostra na tabela.
+    // completo (com overlay TOC) reutilizando o mesmo construtor da lista,
+    // garantindo coerência com o que cada filtro mostra na tabela.
     // Os cartões aplicam os seus presets ao separador Clientes, por isso a
     // contagem tem de partilhar o mesmo universo (bucket 'clientes'); caso
     // contrário o badge incluiria "Outras Operações" que o filtro não mostra.
-    const cardItems = (await this.list(clientId, { limit: 1_000_000, page: 1, bucket: 'clientes' })).items
+    // lean:true → não carrega o blob `raw` (só contamos status/category/budget/
+    // datas), evitando o varrimento pesado que tornava este KPI lento.
+    await this.recurrencesSvc.processForClient(clientId, 180)
+    const cardItems = await this.buildOverlayItems(clientId, { bucket: 'clientes' }, { lean: true })
     const startToday = new Date(); startToday.setHours(0, 0, 0, 0)
     const wd = startToday.getDay() // 0=Dom … 6=Sáb
     const weekStart = new Date(startToday); weekStart.setDate(startToday.getDate() + (wd === 0 ? -6 : 1 - wd))
