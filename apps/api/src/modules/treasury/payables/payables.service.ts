@@ -1217,7 +1217,10 @@ export class TreasuryPayablesService {
               entityName: item.entityName,
               entityNif: item.entityNif ?? undefined,
               tocSupplierId: item.tocSupplierId ?? undefined,
-              tocPurchasesDocId: item.tocPurchasesDocId ?? undefined,
+              // Abordagem A: as parcelas NÃO herdam o tocPurchasesDocId da mãe.
+              // São documentos locais com referência sufixada (-1, -2…) e valor
+              // próprio; assim o overlay TOC não as reescreve com o nº/valor da
+              // fatura inteira. A mãe mantém a ligação ao TOConline.
               reference: `${refBase}-${i + 1}`,
               description: inst.description ?? item.description ?? undefined,
               documentDate: item.documentDate,

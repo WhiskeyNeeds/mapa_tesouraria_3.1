@@ -79,3 +79,39 @@ describe('unsettle gating por settledVia', () => {
     await expect(svc.unsettle('c1', 'u1', 'r1')).rejects.toThrow(/reconcilia/i)
   })
 })
+
+describe('split (parcelas locais — Abordagem A)', () => {
+  it('cria parcelas com referência sufixada, valor próprio e SEM tocSalesDocId', async () => {
+    const created: Array<{ data: Record<string, unknown> }> = []
+    const tx = {
+      treasuryReceivable: {
+        create: vi.fn(async (args: { data: Record<string, unknown> }) => { created.push(args); return { id: `child${created.length}`, ...args.data } }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      treasuryAuditLog: { create: vi.fn().mockResolvedValue({}) },
+    }
+    const prisma = { $transaction: vi.fn(async (cb: (t: unknown) => unknown) => cb(tx)) }
+    const svc = new TreasuryReceivablesService(prisma as never, {} as never, {} as never)
+    vi.spyOn(svc as never as { resolveLocalReceivableId: () => Promise<string> }, 'resolveLocalReceivableId').mockResolvedValue('m1')
+    vi.spyOn(svc, 'getById').mockResolvedValue({
+      id: 'm1', status: 'OPEN', parentId: null, reference: 'FT 2022/20', totalAmount: 100,
+      tocSalesDocId: '555', tocCustomerId: '9', entityName: 'ACME', entityNif: null, origin: 'TOCONLINE',
+      currency: 'EUR', documentDate: new Date('2022-01-01'), dueDate: new Date('2022-02-01'),
+      categoryId: null, description: null, children: [],
+    } as never)
+
+    await svc.split('c1', 'u1', 'm1', [
+      { promisedPaymentDate: '2022-03-01', amount: 60 },
+      { promisedPaymentDate: '2022-04-01', amount: 40 },
+    ])
+
+    expect(created).toHaveLength(2)
+    expect(created[0].data.reference).toBe('FT 2022/20-1')
+    expect(created[1].data.reference).toBe('FT 2022/20-2')
+    expect(created[0].data.totalAmount).toBe(60)
+    expect(created[1].data.totalAmount).toBe(40)
+    // Abordagem A: parcelas são documentos locais — não herdam a ligação ao TOConline.
+    expect(created[0].data.tocSalesDocId).toBeUndefined()
+    expect(created[1].data.tocSalesDocId).toBeUndefined()
+  })
+})
