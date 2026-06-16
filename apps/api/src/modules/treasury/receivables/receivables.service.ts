@@ -10,6 +10,7 @@ import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 import { compareDocs } from '../../../lib/doc-sort.js'
 import { computeNextInternalReference, internalReferencePrefix } from '../../../lib/internal-reference.js'
 import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
+import { earliestPendingDueAt } from '../../../lib/pending-action.js'
 
 interface ReceivableListItem {
   id: string
@@ -37,6 +38,8 @@ interface ReceivableListItem {
    *  localmente" quando _statusLocal difere de _statusToc. */
   _statusToc: TreasuryDocStatus | null
   _statusDiffersFromToc: boolean
+  /** dueAt (ISO) mais antigo das CALL_TASK PENDING com prazo — alimenta o "!" de ação pendente. null se não houver. */
+  _pendingActionDueAt?: string | null
   [key: string]: unknown
 }
 
@@ -240,6 +243,19 @@ export class TreasuryReceivablesService {
           if (r !== undefined) it._tocRaw = r
         }
       }
+    }
+
+    // Sinaliza as faturas (da página atual) com ação pendente com prazo
+    // (CALL_TASK PENDING com dueAt) — o frontend mostra o "!" âmbar/vermelho.
+    // Só ids locais (cuid) têm follow-ups; itens TOC puros (id `toc-…`) nunca casam.
+    const localIds = items.map((i) => i.id).filter((id) => !id.startsWith('toc-'))
+    if (localIds.length > 0) {
+      const pendingTasks = await this.prisma.treasuryFollowup.findMany({
+        where: { clientId, receivableId: { in: localIds }, kind: 'CALL_TASK', status: 'PENDING' },
+        select: { receivableId: true, dueAt: true },
+      })
+      const dueByDoc = earliestPendingDueAt(pendingTasks.map((t) => ({ docId: t.receivableId, dueAt: t.dueAt })))
+      for (const item of items) item._pendingActionDueAt = dueByDoc.get(item.id) ?? null
     }
 
     return { total, page, limit, items }
