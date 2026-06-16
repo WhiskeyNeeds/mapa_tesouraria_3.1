@@ -234,6 +234,8 @@ export class FollowupsService {
     assignedToId?: string | null
     importance?: TreasuryFollowupImportance
     phone?: string
+    plannedType?: 'TASK' | 'CALL'
+    extraPayload?: Record<string, unknown>
   }) {
     if (!input.receivableId && !input.payableId) throw httpError(400, 'receivableId ou payableId obrigatório')
     if (!input.title.trim()) throw httpError(400, 'Título obrigatório')
@@ -252,7 +254,14 @@ export class FollowupsService {
         description: input.description?.trim() || null,
         dueAt: input.dueAt ? new Date(input.dueAt) : null,
         assignedToId: input.assignedToId ?? null,
-        payload: input.phone ? { phone: input.phone } : undefined,
+        payload: (() => {
+          const p = {
+            ...(input.phone ? { phone: input.phone } : {}),
+            ...(input.plannedType ? { plannedType: input.plannedType } : {}),
+            ...(input.extraPayload ?? {}),
+          }
+          return Object.keys(p).length > 0 ? p : undefined
+        })(),
       },
     })
   }
