@@ -5,7 +5,7 @@ import { useToast } from '@/contexts/ToastContext'
 import {
   Mail, Phone, NotebookPen, StickyNote, Clock, CheckCircle2, AlertCircle, Bell,
   Plus, Trash2, PencilLine, FilePlus2, XCircle, CalendarClock,
-  Split, Undo2, CircleDollarSign, CreditCard,
+  Split, Undo2, CreditCard,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { FollowupDoc, FollowupDirection, TimelineEvent } from './types'

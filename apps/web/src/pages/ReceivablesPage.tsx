@@ -18,7 +18,7 @@ import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
 import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, ArrowUpRight, Pencil, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, ArrowUpRight, Pencil, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -87,7 +87,7 @@ interface Receivable {
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   parentId?: string | null
-  category?: { id: string; name: string; color: string } | null
+  category?: { id: string; name: string; color?: string | null } | null
   budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; receivedAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
   _src?: 'local' | 'toc'
