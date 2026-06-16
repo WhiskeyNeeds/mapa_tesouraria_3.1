@@ -108,6 +108,7 @@ interface Payable {
   _tocRaw?: TocPurchaseDoc | null
   _statusToc?: string | null
   _statusDiffersFromToc?: boolean
+  _pendingActionDueAt?: string | null
 }
 interface Category { id: string; name: string; type: string; color?: string | null }
 interface BudgetCategory { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; isArchived: boolean }
@@ -1266,7 +1267,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} needsContact={p.needsContact} />
+                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} needsContact={p.needsContact} pendingActionDueAt={p._pendingActionDueAt} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div>
@@ -1385,7 +1386,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(row.item.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={row.item.readyToPay} needsContact={row.item.needsContact} />
+                                  <DocLabels splitCount={(row.item.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={row.item.readyToPay} needsContact={row.item.needsContact} pendingActionDueAt={row.item._pendingActionDueAt} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div className="flex items-start gap-1.5">
@@ -1670,7 +1671,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} needsContact={p.needsContact} />
+                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} needsContact={p.needsContact} pendingActionDueAt={p._pendingActionDueAt} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div>
@@ -2208,49 +2209,7 @@ export default function PayablesPage() {
                   )}
                   <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Conta a Pagar</div>
                 </div>
-                <div className="flex flex-col items-end gap-2">
-                  <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
-                  {panelDoc.origin !== 'TOCONLINE' && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        title="Editar"
-                        onClick={() => {
-                          setEditId(panelDoc.id)
-                          setEditRow(panelDoc)
-                          setEditForm({
-                            categoryId: panelDoc.category?.id ?? '',
-                            entityName: panelDoc.entityName,
-                            reference: panelDoc.reference,
-                            documentDate: panelDoc.documentDate?.slice(0, 10) ?? '',
-                            dueDate: panelDoc.dueDate.slice(0, 10),
-                            totalAmount: String(panelDoc.totalAmount),
-                            description: panelDoc.description ?? '',
-                          })
-                        }}
-                        className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      {panelDoc.status !== 'VOID' && panelDoc.status !== 'SETTLED' && (
-                        <button
-                          title="Anular"
-                          onClick={() => voidPayable.mutate(panelDoc.id)}
-                          disabled={voidPayable.isPending}
-                          className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          <XCircle className="w-4 h-4" />
-                        </button>
-                      )}
-                      <button
-                        title="Eliminar"
-                        onClick={() => setDeleteRow(panelDoc)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
@@ -2269,6 +2228,46 @@ export default function PayablesPage() {
                     </a>
                   ) : null
                 })()}
+                {panelDoc.origin !== 'TOCONLINE' && (
+                  <div className="flex items-center gap-1 ml-auto">
+                    <button
+                      title="Editar"
+                      onClick={() => {
+                        setEditId(panelDoc.id)
+                        setEditRow(panelDoc)
+                        setEditForm({
+                          categoryId: panelDoc.category?.id ?? '',
+                          entityName: panelDoc.entityName,
+                          reference: panelDoc.reference,
+                          documentDate: panelDoc.documentDate?.slice(0, 10) ?? '',
+                          dueDate: panelDoc.dueDate.slice(0, 10),
+                          totalAmount: String(panelDoc.totalAmount),
+                          description: panelDoc.description ?? '',
+                        })
+                      }}
+                      className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    {panelDoc.status !== 'VOID' && panelDoc.status !== 'SETTLED' && (
+                      <button
+                        title="Anular"
+                        onClick={() => voidPayable.mutate(panelDoc.id)}
+                        disabled={voidPayable.isPending}
+                        className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <XCircle className="w-4 h-4" />
+                      </button>
+                    )}
+                    <button
+                      title="Eliminar"
+                      onClick={() => setDeleteRow(panelDoc)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="text-sm font-medium mt-0.5">
                 {panelDoc.tocSupplierId ? (
