@@ -150,14 +150,14 @@ export default function ReconciliationPage() {
   })
   const { data: receivablesData } = useQuery({
     queryKey: ['receivables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL,SETTLED&reconcilable=true&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
     staleTime: 0,
     refetchOnMount: 'always',
   })
   const { data: payablesData } = useQuery({
     queryKey: ['payables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL,SETTLED&reconcilable=true&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
     staleTime: 0,
     refetchOnMount: 'always',
