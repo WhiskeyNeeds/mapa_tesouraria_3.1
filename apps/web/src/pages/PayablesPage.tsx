@@ -101,6 +101,7 @@ interface Payable {
   readyToPay?: boolean
   needsContact?: boolean
   parentId?: string | null
+  settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
   category?: { id: string; name: string; color: string } | null
   budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
@@ -2361,15 +2362,21 @@ export default function PayablesPage() {
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-green-900 text-sm">Liquidado</div>
                         <div className="text-xs text-green-600 mt-0.5">
-                          {panelDoc._statusToc === 'SETTLED' ? 'Recibo emitido no TOConline' : 'Liquidado manualmente nesta plataforma'}
+                          {panelDoc._statusToc === 'SETTLED' ? 'Recibo emitido no TOConline'
+                            : panelDoc.settledVia === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
+                            : panelDoc.settledVia === 'RECONCILIATION' ? 'Liquidado por reconciliação'
+                            : 'Liquidado manualmente nesta plataforma'}
                         </div>
                       </div>
                       {panelDoc._statusToc === 'SETTLED' ? (
                         <span className="text-xs text-green-700/70 flex-shrink-0">Gerido no TOConline</span>
+                      ) : panelDoc.settledVia === 'RECONCILIATION' ? (
+                        <span className="text-xs text-green-700/70 flex-shrink-0 whitespace-nowrap">Reverter na reconciliação</span>
                       ) : (
                         <button
-                          onClick={() => unsettlePayable.mutate(panelDoc.id)}
-                          disabled={unsettlePayable.isPending}
+                          onClick={() => panelDoc.settledVia === 'INSTALLMENTS' ? undefined : unsettlePayable.mutate(panelDoc.id)}
+                          disabled={unsettlePayable.isPending || panelDoc.settledVia === 'INSTALLMENTS'}
+                          title={panelDoc.settledVia === 'INSTALLMENTS' ? 'Reverta parcela a parcela' : undefined}
                           className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-green-700 disabled:hover:border-green-200 disabled:hover:bg-transparent"
                         >
                           {unsettlePayable.isPending ? '...' : 'Anular'}
@@ -2387,16 +2394,24 @@ export default function PayablesPage() {
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-teal-900 text-sm">Pago</div>
                         <div className="text-xs text-teal-600 mt-0.5">
-                          {panelDoc.tocPurchasesDocId ? 'Pagamento registado — liquida quando houver recibo no TOConline' : 'Pagamento registado — aguarda liquidação'}
+                          {panelDoc.settledVia === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
+                            : panelDoc.settledVia === 'RECONCILIATION' ? 'Liquidado por reconciliação'
+                            : panelDoc.tocPurchasesDocId ? 'Pagamento registado — liquida quando houver recibo no TOConline'
+                            : 'Pagamento registado — aguarda liquidação'}
                         </div>
                       </div>
-                      <button
-                        onClick={() => unsettlePayable.mutate(panelDoc.id)}
-                        disabled={unsettlePayable.isPending}
-                        className="text-xs text-teal-700 hover:text-red-700 border border-teal-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-teal-700 disabled:hover:border-teal-200 disabled:hover:bg-transparent"
-                      >
-                        {unsettlePayable.isPending ? '...' : 'Anular'}
-                      </button>
+                      {panelDoc.settledVia === 'RECONCILIATION' ? (
+                        <span className="text-xs text-teal-700/70 flex-shrink-0 whitespace-nowrap">Reverter na reconciliação</span>
+                      ) : (
+                        <button
+                          onClick={() => panelDoc.settledVia === 'INSTALLMENTS' ? undefined : unsettlePayable.mutate(panelDoc.id)}
+                          disabled={unsettlePayable.isPending || panelDoc.settledVia === 'INSTALLMENTS'}
+                          title={panelDoc.settledVia === 'INSTALLMENTS' ? 'Reverta parcela a parcela' : undefined}
+                          className="text-xs text-teal-700 hover:text-red-700 border border-teal-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-teal-700 disabled:hover:border-teal-200 disabled:hover:bg-transparent"
+                        >
+                          {unsettlePayable.isPending ? '...' : 'Anular'}
+                        </button>
+                      )}
                     </div>
                   )}
 

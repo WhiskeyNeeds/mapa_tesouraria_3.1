@@ -46,6 +46,9 @@ function eventVisual(ev: TimelineEvent): EventVisual {
   if (ev.kind.endsWith('.set_promised_date')) return { icon: CalendarClock, label: 'Data prometida', color: 'bg-blue-50 text-blue-700 border-blue-200' }
   if (ev.kind.endsWith('.split')) return { icon: Split, label: 'Dividida', color: 'bg-purple-50 text-purple-700 border-purple-200' }
   if (ev.kind.endsWith('.unsplit')) return { icon: Undo2, label: 'Divisão desfeita', color: 'bg-gray-50 text-gray-700 border-gray-200' }
+  if (ev.kind.endsWith('.reconcile_reverse')) return { icon: Undo2, label: 'Conciliação revertida', color: 'bg-amber-50 text-amber-700 border-amber-200' }
+  if (ev.kind.endsWith('.reconcile')) return { icon: CreditCard, label: 'Conciliada', color: 'bg-teal-50 text-teal-700 border-teal-200' }
+  if (ev.kind.endsWith('.set_ready_to_pay')) return { icon: CalendarClock, label: 'Pronta para pagar', color: 'bg-blue-50 text-blue-700 border-blue-200' }
   return { icon: Clock, label: ev.kind, color: 'bg-gray-50 text-gray-700 border-gray-200' }
 }
 
