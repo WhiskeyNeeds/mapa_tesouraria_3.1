@@ -44,6 +44,7 @@ interface Doc {
   tocSalesDocId?: string | null
   category?: DocCategory | null
   children?: DocChild[]
+  settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
 }
 
 type DocType = 'payable' | 'receivable'
@@ -199,6 +200,10 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
   const isOpen = doc.status === 'OPEN' || doc.status === 'PARTIAL'
   const isPaid = doc.status === 'PAID' || doc.status === 'SETTLED'
   const paidAmount = isExpense ? Number(doc.paidAmount ?? 0) : Number(doc.receivedAmount ?? 0)
+  const via = doc.settledVia ?? 'LOCAL'
+  const revertBlockedMsg =
+    via === 'INSTALLMENTS' ? 'Reverta parcela a parcela'
+    : via === 'RECONCILIATION' ? 'Reverta anulando a reconciliação' : null
 
   const tabs = [
     { key: 'details' as Tab, label: 'Detalhes' },
@@ -283,15 +288,22 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-green-900 text-sm">Liquidado</div>
-                  <div className="text-xs text-green-600 mt-0.5">Registado nesta plataforma</div>
+                  <div className="text-xs text-green-600 mt-0.5">
+                    {via === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
+                      : via === 'RECONCILIATION' ? 'Liquidado por reconciliação'
+                      : 'Registado nesta plataforma'}
+                  </div>
                 </div>
-                <button
-                  onClick={() => unsettleDoc.mutate()}
-                  disabled={unsettleDoc.isPending}
-                  className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {unsettleDoc.isPending ? '...' : 'Anular'}
-                </button>
+                {via === 'RECONCILIATION' ? null : (
+                  <button
+                    onClick={() => revertBlockedMsg ? undefined : unsettleDoc.mutate()}
+                    disabled={unsettleDoc.isPending || !!revertBlockedMsg}
+                    title={revertBlockedMsg ?? undefined}
+                    className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {unsettleDoc.isPending ? '...' : 'Anular'}
+                  </button>
+                )}
               </div>
             )}
 
@@ -303,15 +315,22 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-teal-900 text-sm">Pago</div>
-                  <div className="text-xs text-teal-600 mt-0.5">Registado — aguarda liquidação</div>
+                  <div className="text-xs text-teal-600 mt-0.5">
+                    {via === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
+                      : via === 'RECONCILIATION' ? 'Liquidado por reconciliação'
+                      : 'Registado — aguarda liquidação'}
+                  </div>
                 </div>
-                <button
-                  onClick={() => unsettleDoc.mutate()}
-                  disabled={unsettleDoc.isPending}
-                  className="text-xs text-teal-700 hover:text-red-700 border border-teal-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {unsettleDoc.isPending ? '...' : 'Anular'}
-                </button>
+                {via === 'RECONCILIATION' ? null : (
+                  <button
+                    onClick={() => revertBlockedMsg ? undefined : unsettleDoc.mutate()}
+                    disabled={unsettleDoc.isPending || !!revertBlockedMsg}
+                    title={revertBlockedMsg ?? undefined}
+                    className="text-xs text-teal-700 hover:text-red-700 border border-teal-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {unsettleDoc.isPending ? '...' : 'Anular'}
+                  </button>
+                )}
               </div>
             )}
 
