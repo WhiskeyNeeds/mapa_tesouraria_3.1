@@ -41,6 +41,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       pastPaymentDeadline?: string
       tocCustomerId?: string
       bucket?: 'clientes' | 'outras'
+      reconcilable?: string
       sortBy?: string
       sortDir?: string
       page?: string
@@ -59,6 +60,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
       overdue: q.overdue === 'true',
       pastPaymentDeadline: q.pastPaymentDeadline === 'true',
+      reconcilable: q.reconcilable === 'true',
       docDateFrom: q.docDateFrom,
       docDateTo: q.docDateTo,
       sortBy: validSortBy,

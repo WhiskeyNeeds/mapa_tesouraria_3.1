@@ -24,7 +24,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const q = request.query as {
       status?: string; origin?: TreasuryDocOrigin; categoryId?: string; uncategorized?: string; budgetId?: string; unbudgeted?: string
       entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string; paymentDateFrom?: string; paymentDateTo?: string
-      isRecurrent?: string; overdue?: string; pastPaymentDeadline?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; readyToPay?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
+      isRecurrent?: string; overdue?: string; pastPaymentDeadline?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; readyToPay?: string; reconcilable?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
     const statusValue = q.status?.includes(',')
       ? (q.status.split(',') as TreasuryDocStatus[])
@@ -40,6 +40,7 @@ export async function payablesRoutes(fastify: FastifyInstance) {
       overdue: q.overdue === 'true',
       pastPaymentDeadline: q.pastPaymentDeadline === 'true',
       readyToPay: q.readyToPay === 'true' ? true : undefined,
+      reconcilable: q.reconcilable === 'true',
       sortBy: validSortBy,
       sortDir: validSortDir,
       page: q.page ? parseInt(q.page) : undefined,

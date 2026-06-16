@@ -189,6 +189,9 @@ type ReceivableListFilters = {
   // (tocSalesDocId != null); 'outras' = operações locais (tocSalesDocId == null).
   // Permite que cada separador ordene/pagine o seu próprio conjunto no servidor.
   bucket?: 'clientes' | 'outras'
+  // Modo de reconciliação: mostra as parcelas (filhas de split) em vez da mãe
+  // dividida. Inverte a exclusão padrão (que esconde parcelas e mostra a mãe).
+  reconcilable?: boolean
   sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
   sortDir?: 'asc' | 'desc'
   page?: number
@@ -277,7 +280,7 @@ export class TreasuryReceivablesService {
     opts: { lean?: boolean } = {},
   ): Promise<ReceivableListItem[]> {
     const { lean = false } = opts
-    const { status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocCustomerId, bucket } = filters
+    const { status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocCustomerId, bucket, reconcilable } = filters
     const statusList: TreasuryDocStatus[] | undefined = (overdue || pastPaymentDeadline)
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -290,7 +293,9 @@ export class TreasuryReceivablesService {
     const localWhere: Prisma.TreasuryReceivableWhereInput = {
       clientId,
       deletedAt: null,
-      NOT: { parentId: { not: null }, recurrenceId: null },
+      ...(reconcilable
+        ? { NOT: { children: { some: { recurrenceId: null, deletedAt: null } } } }
+        : { NOT: { parentId: { not: null }, recurrenceId: null } }),
       ...(categoryId ? { categoryId } : {}),
       ...(budgetId ? { budgetId } : {}),
       ...(paymentDateFrom || paymentDateTo ? {

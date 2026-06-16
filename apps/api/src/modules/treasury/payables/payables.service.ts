@@ -189,6 +189,9 @@ export class TreasuryPayablesService {
     // "Futuros Pagamentos": faturas marcadas como Pronta para Pagar. Atravessa os
     // buckets (Fornecedores + Outras) — quando ligado, ignora a restrição de bucket.
     readyToPay?: boolean
+    // Modo de reconciliação: mostra as parcelas (filhas de split) em vez da mãe
+    // dividida. Inverte a exclusão padrão (que esconde parcelas e mostra a mãe).
+    reconcilable?: boolean
     sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
@@ -199,7 +202,7 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocSupplierId, bucket, readyToPay, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocSupplierId, bucket, readyToPay, reconcilable, sortBy = 'dueDate', sortDir = 'asc' } = filters
     const statusList: TreasuryDocStatus[] | undefined = (overdue || pastPaymentDeadline)
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
@@ -211,7 +214,9 @@ export class TreasuryPayablesService {
     const localWhere: Prisma.TreasuryPayableWhereInput = {
       clientId,
       deletedAt: null,
-      NOT: { parentId: { not: null }, recurrenceId: null },
+      ...(reconcilable
+        ? { NOT: { children: { some: { recurrenceId: null, deletedAt: null } } } }
+        : { NOT: { parentId: { not: null }, recurrenceId: null } }),
       ...(categoryId ? { categoryId } : {}),
       ...(budgetId ? { budgetId } : {}),
       ...(paymentDateFrom || paymentDateTo ? {
