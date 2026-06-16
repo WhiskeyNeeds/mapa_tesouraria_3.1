@@ -1,4 +1,4 @@
-import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma, TocSalesDocument } from '@prisma/client'
+import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma, TocSalesDocument, TreasurySettlementSource } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { computeNextDate } from '../recurrences/utils.js'
 import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
@@ -11,6 +11,7 @@ import { compareDocs } from '../../../lib/doc-sort.js'
 import { computeNextInternalReference, internalReferencePrefix } from '../../../lib/internal-reference.js'
 import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
 import { earliestPendingDueAt } from '../../../lib/pending-action.js'
+import { syncParentDocStatus } from '../../../lib/parent-status.js'
 
 interface ReceivableListItem {
   id: string
@@ -22,6 +23,7 @@ interface ReceivableListItem {
   pendingAmount: number | Prisma.Decimal | null
   receivedAmount: number | Prisma.Decimal | null
   status: TreasuryDocStatus
+  settledVia: TreasurySettlementSource | null
   origin: TreasuryDocOrigin
   tocSalesDocId: string | null
   tocCustomerId: string | null
@@ -72,6 +74,7 @@ function mapTocSalesToReceivable(d: TocDocForOverlay): ReceivableListItem | null
     pendingAmount: pending,
     receivedAmount: received,
     status: mappedStatus,
+    settledVia: null,
     origin: 'TOCONLINE',
     tocSalesDocId: String(d.tocId),
     tocCustomerId: d.customerId != null ? String(d.customerId) : null,
@@ -114,6 +117,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
       pendingAmount: local.pendingAmount,
       receivedAmount: local.receivedAmount,
       status: local.status,
+      settledVia: local.settledVia,
       origin: local.origin,
       tocSalesDocId: local.tocSalesDocId,
       tocCustomerId: local.tocCustomerId,
@@ -144,6 +148,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
     pendingAmount: merged.pending,
     receivedAmount: merged.settled,
     status: merged.status,
+    settledVia: local.settledVia,
     origin: 'TOCONLINE',
     tocSalesDocId: local.tocSalesDocId,
     tocCustomerId: local.tocCustomerId ?? (tocDoc.customerId != null ? String(tocDoc.customerId) : null),
@@ -852,39 +857,8 @@ export class TreasuryReceivablesService {
     return { updated, failed: errors.length, errors }
   }
 
-  private async syncParentStatus(clientId: string, parentId: string) {
-    const children = await this.prisma.treasuryReceivable.findMany({
-      where: { parentId, deletedAt: null, recurrenceId: null },
-      select: { status: true, receivedAmount: true, pendingAmount: true, promisedPaymentDate: true, dueDate: true },
-    })
-    if (children.length === 0) return
-    const receivedAmount = children.reduce((s, c) => s + Number(c.receivedAmount ?? 0), 0)
-    const pendingAmount = children.reduce((s, c) => s + Number(c.pendingAmount ?? 0), 0)
-    const active = children.filter((c) => c.status !== 'VOID')
-    const allSettled = active.length > 0 && active.every((c) => c.status === 'SETTLED')
-    const allClosed = active.length > 0 && active.every((c) => c.status === 'SETTLED' || c.status === 'PAID')
-    const someProgress = active.some((c) => c.status === 'SETTLED' || c.status === 'PAID' || c.status === 'PARTIAL')
-    const status: TreasuryDocStatus = allSettled ? 'SETTLED' : allClosed ? 'PAID' : someProgress ? 'PARTIAL' : 'OPEN'
-
-    // Earliest pending parcela drives the parent's promisedPaymentDate.
-    // PAID/SETTLED/VOID children are excluded (already paid or cancelled).
-    const pendingDates = children
-      .filter((c) => c.status !== 'PAID' && c.status !== 'SETTLED' && c.status !== 'VOID')
-      .map((c) => c.promisedPaymentDate ?? c.dueDate)
-      .filter((d): d is Date => d != null)
-    const promisedPaymentDate = pendingDates.length > 0
-      ? pendingDates.reduce((min, d) => d < min ? d : min, pendingDates[0])
-      : null
-
-    // settledAt do pai: preserva a data original se já estava liquidado; marca
-    // agora quando passa a PAID/SETTLED; repõe null se regressa a OPEN/PARTIAL.
-    const parent = await this.prisma.treasuryReceivable.findUnique({ where: { id: parentId }, select: { settledAt: true } })
-    const settledAt = (status === 'SETTLED' || status === 'PAID') ? (parent?.settledAt ?? new Date()) : null
-
-    await this.prisma.treasuryReceivable.update({
-      where: { id: parentId },
-      data: { status, receivedAmount, pendingAmount, promisedPaymentDate, settledAt },
-    })
+  private syncParentStatus(clientId: string, parentId: string) {
+    return syncParentDocStatus(this.prisma, clientId, 'receivable', parentId)
   }
 
   async settle(clientId: string, userId: string, id: string) {
@@ -900,11 +874,19 @@ export class TreasuryReceivablesService {
       if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
     }
 
-    const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status !== 'SETTLED' && c.status !== 'VOID')
+    const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
+    const isSplitParent = nonRecurChildren.length > 0
 
-    // Para docs TOC, totalAmount é null no local — o "received" será calculado
-    // dinamicamente no overlay a partir do tocSalesDocument.
     const result = await this.prisma.$transaction(async (tx) => {
+      if (isSplitParent) {
+        await tx.$executeRaw`
+          UPDATE "treasury_receivables"
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = NOW(), "settledVia" = 'LOCAL', "updatedAt" = NOW()
+          WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('SETTLED','VOID')
+        `
+        await audit(tx, { clientId, userId, action: 'receivable.settle', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
+        return null
+      }
       const parent = await tx.treasuryReceivable.update({
         where: { id },
         data: {
@@ -913,30 +895,16 @@ export class TreasuryReceivablesService {
           receivedAmount: item.tocSalesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
           settledAt: new Date(),
+          settledVia: 'LOCAL',
         },
       })
-      // Cascade: settling a parent settles all its non-recurring open/partial children at once.
-      if (splitChildren.length > 0) {
-        await tx.$executeRaw`
-          UPDATE "treasury_receivables"
-          SET "status" = 'SETTLED', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = NOW(), "updatedAt" = NOW()
-          WHERE "parentId" = ${id}
-            AND "recurrenceId" IS NULL
-            AND "deletedAt" IS NULL
-            AND "status" NOT IN ('SETTLED', 'VOID')
-        `
-      }
-      await audit(tx, {
-        clientId, userId,
-        action: 'receivable.settle',
-        entityType: 'Receivable', entityId: id,
-        payload: { from: item.status, to: 'SETTLED', cascadedChildren: splitChildren.length },
-      })
+      await audit(tx, { clientId, userId, action: 'receivable.settle', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL' } })
       return parent
     })
 
+    if (isSplitParent) await this.syncParentStatus(clientId, id)
     if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
-    return result
+    return result ?? this.prisma.treasuryReceivable.findUnique({ where: { id } })
   }
 
   async pay(clientId: string, userId: string, id: string) {
@@ -950,9 +918,19 @@ export class TreasuryReceivablesService {
       if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível pagar uma recorrência futura antes da sua data de vencimento')
     }
 
-    const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status !== 'PAID' && c.status !== 'SETTLED' && c.status !== 'VOID')
+    const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
+    const isSplitParent = nonRecurChildren.length > 0
 
     const result = await this.prisma.$transaction(async (tx) => {
+      if (isSplitParent) {
+        await tx.$executeRaw`
+          UPDATE "treasury_receivables"
+          SET "status" = 'PAID', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = NOW(), "settledVia" = 'LOCAL', "updatedAt" = NOW()
+          WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('PAID','SETTLED','VOID')
+        `
+        await audit(tx, { clientId, userId, action: 'receivable.pay', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'PAID', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
+        return null
+      }
       const parent = await tx.treasuryReceivable.update({
         where: { id },
         data: {
@@ -961,30 +939,16 @@ export class TreasuryReceivablesService {
           receivedAmount: item.tocSalesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
           settledAt: new Date(),
+          settledVia: 'LOCAL',
         },
       })
-      // Cascade: marcar a mãe como paga marca as parcelas em aberto/parciais.
-      if (splitChildren.length > 0) {
-        await tx.$executeRaw`
-          UPDATE "treasury_receivables"
-          SET "status" = 'PAID', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = NOW(), "updatedAt" = NOW()
-          WHERE "parentId" = ${id}
-            AND "recurrenceId" IS NULL
-            AND "deletedAt" IS NULL
-            AND "status" NOT IN ('PAID', 'SETTLED', 'VOID')
-        `
-      }
-      await audit(tx, {
-        clientId, userId,
-        action: 'receivable.pay',
-        entityType: 'Receivable', entityId: id,
-        payload: { from: item.status, to: 'PAID', cascadedChildren: splitChildren.length },
-      })
+      await audit(tx, { clientId, userId, action: 'receivable.pay', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'PAID', via: 'LOCAL' } })
       return parent
     })
 
+    if (isSplitParent) await this.syncParentStatus(clientId, id)
     if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
-    return result
+    return result ?? this.prisma.treasuryReceivable.findUnique({ where: { id } })
   }
 
   async unsettle(clientId: string, userId: string, id: string) {
@@ -997,8 +961,8 @@ export class TreasuryReceivablesService {
       throw httpError(409, 'Fatura liquidada no TOConline (recibo emitido) — não é possível anular a liquidação aqui.')
     }
     if (item.status !== 'SETTLED' && item.status !== 'PAID') throw httpError(409, 'Apenas documentos pagos ou liquidados podem ser revertidos')
-
-    const settledChildren = (item.children ?? []).filter((c) => !c.recurrenceId && (c.status === 'SETTLED' || c.status === 'PAID'))
+    if (item.settledVia === 'INSTALLMENTS') throw httpError(409, 'Esta fatura ficou paga pelas parcelas — reverta parcela a parcela.')
+    if (item.settledVia === 'RECONCILIATION') throw httpError(409, 'Esta fatura ficou paga por reconciliação — reverta anulando a reconciliação correspondente.')
 
     const result = await this.prisma.$transaction(async (tx) => {
       const parent = await tx.treasuryReceivable.update({
@@ -1008,24 +972,14 @@ export class TreasuryReceivablesService {
           pendingAmount: item.tocSalesDocId ? null : item.totalAmount,
           receivedAmount: item.tocSalesDocId ? null : 0,
           settledAt: null,
+          settledVia: null,
         },
       })
-      // Cascade: reverting the parent reverts every PAID/SETTLED non-recurring child.
-      if (settledChildren.length > 0) {
-        await tx.$executeRaw`
-          UPDATE "treasury_receivables"
-          SET "status" = 'OPEN', "pendingAmount" = "totalAmount", "receivedAmount" = 0, "settledAt" = NULL, "updatedAt" = NOW()
-          WHERE "parentId" = ${id}
-            AND "recurrenceId" IS NULL
-            AND "deletedAt" IS NULL
-            AND "status" IN ('SETTLED', 'PAID')
-        `
-      }
       await audit(tx, {
         clientId, userId,
         action: 'receivable.unsettle',
         entityType: 'Receivable', entityId: id,
-        payload: { from: item.status, to: 'OPEN', cascadedChildren: settledChildren.length },
+        payload: { from: item.status, to: 'OPEN', via: item.settledVia },
       })
       // Anular o pagamento também reverte (parcialmente) a reconciliação: desliga
       // apenas esta fatura, mantendo os restantes documentos/movimentos.

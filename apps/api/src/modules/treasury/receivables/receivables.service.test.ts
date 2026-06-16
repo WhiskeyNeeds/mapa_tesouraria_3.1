@@ -59,3 +59,23 @@ describe('void', () => {
     await expect(svc.void('c1', 'u1', 'r2')).rejects.toThrow(/settled/)
   })
 })
+
+describe('unsettle gating por settledVia', () => {
+  function makeService() {
+    return new TreasuryReceivablesService({} as never, {} as never, {} as never)
+  }
+
+  it('bloqueia reverter a mãe paga pelas parcelas (INSTALLMENTS)', async () => {
+    const svc = makeService()
+    vi.spyOn(svc as never as { resolveLocalReceivableId: () => Promise<string> }, 'resolveLocalReceivableId').mockResolvedValue('p1')
+    vi.spyOn(svc, 'getById').mockResolvedValue({ id: 'p1', status: 'PAID', settledVia: 'INSTALLMENTS', tocSalesDocId: null, _tocOverlay: null, children: [] } as never)
+    await expect(svc.unsettle('c1', 'u1', 'p1')).rejects.toThrow(/parcela a parcela/)
+  })
+
+  it('bloqueia reverter um doc reconciliado pelo botão genérico (RECONCILIATION)', async () => {
+    const svc = makeService()
+    vi.spyOn(svc as never as { resolveLocalReceivableId: () => Promise<string> }, 'resolveLocalReceivableId').mockResolvedValue('r1')
+    vi.spyOn(svc, 'getById').mockResolvedValue({ id: 'r1', status: 'PAID', settledVia: 'RECONCILIATION', tocSalesDocId: null, _tocOverlay: null, children: [] } as never)
+    await expect(svc.unsettle('c1', 'u1', 'r1')).rejects.toThrow(/reconcilia/i)
+  })
+})
