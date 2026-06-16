@@ -263,7 +263,7 @@ export class TreasuryDunningRulesService {
         ruleResults.push({ ...ruleSummary, reason: 'PAYABLE_NOT_SUPPORTED' })
         continue
       }
-      if (!rule.emailTemplate) {
+      if (rule.actionType === 'EMAIL' && !rule.emailTemplate) {
         ruleResults.push({ ...ruleSummary, reason: 'NO_TEMPLATE' })
         continue
       }
@@ -318,6 +318,34 @@ export class TreasuryDunningRulesService {
             })
 
         try {
+          if (rule.actionType === 'TASK' || rule.actionType === 'CALL') {
+            if (!this.followups) throw new Error('FollowupsService não injetado no DunningRulesService')
+            await this.followups.createCallTask(clientId, adminId, {
+              receivableId: inv.id,
+              direction: 'RECEIVABLE',
+              title: rule.taskTitle ?? rule.name,
+              description: rule.taskDescription ?? undefined,
+              importance: rule.taskImportance,
+              dueAt: targetDate,
+              plannedType: rule.actionType === 'CALL' ? 'CALL' : 'TASK',
+              extraPayload: { dunningRuleId: rule.id, executionId: exec.id, automatic: true },
+            })
+            await this.prisma.treasuryDunningExecution.update({
+              where: { id: exec.id },
+              data: { status: 'SENT', executedAt: now },
+            })
+            totalSent++
+            ruleSummary.sentCount++
+            ruleSummary.sent.push({
+              receivableId: inv.id,
+              reference: inv.reference,
+              entityName: inv.entityName,
+              totalAmount: inv.totalAmount?.toString() ?? null,
+              promisedPaymentDate: inv.promisedPaymentDate ? inv.promisedPaymentDate.toISOString() : null,
+            })
+            continue
+          }
+
           // Override de teste em dev — todos os emails vão para um endereço fixo.
           const overrideTo = process.env.DUNNING_TEST_RECIPIENT?.trim()
           let recipient: string | null = overrideTo || null
@@ -341,9 +369,9 @@ export class TreasuryDunningRulesService {
             receivableId: inv.id,
             direction: 'RECEIVABLE',
             to: [recipient],
-            subject: rule.emailTemplate.subject,
-            bodyHtml: rule.emailTemplate.bodyHtml,
-            templateId: rule.emailTemplate.id,
+            subject: rule.emailTemplate!.subject,
+            bodyHtml: rule.emailTemplate!.bodyHtml,
+            templateId: rule.emailTemplate!.id,
             attachInvoicePdf: false,
           })
 
@@ -404,14 +432,14 @@ export class TreasuryDunningRulesService {
    */
   private async autoImportTocSalesDocs(
     clientId: string,
-    rules: Array<{ direction: string; offsetDays: number; emailTemplate: unknown }>,
+    rules: Array<{ direction: string; offsetDays: number; emailTemplate: unknown; actionType: string; taskTitle: string | null }>,
     today: Date,
     adminId: string,
   ) {
     if (!this.toconline) return
 
     const offsets = rules
-      .filter((r) => r.direction !== 'PAYABLE' && r.emailTemplate)
+      .filter((r) => r.direction !== 'PAYABLE' && (r.actionType === 'EMAIL' ? !!r.emailTemplate : !!r.taskTitle))
       .map((r) => r.offsetDays)
     if (offsets.length === 0) return
 
