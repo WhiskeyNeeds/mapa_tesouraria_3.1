@@ -113,6 +113,12 @@ enum TreasuryFollowupDirection {
   PAYABLE
 }
 
+enum TreasuryDunningActionType {
+  EMAIL
+  TASK
+  CALL
+}
+
 enum TreasuryEmailTemplateScope {
   RECEIVABLE
   PAYABLE
@@ -1009,6 +1015,11 @@ model TreasuryDunningRule {
   offsetDays      Int
   direction       TreasuryFollowupDirection @default(RECEIVABLE)
   emailTemplateId String?
+
+  actionType      TreasuryDunningActionType @default(EMAIL)
+  taskTitle       String?                   @db.VarChar(300)
+  taskDescription String?
+  taskImportance  TreasuryFollowupImportance @default(NORMAL)
 
   /// Filtros opcionais que restringem a quais faturas a regra se aplica.
   minAmount  Decimal? @db.Decimal(18, 2)
