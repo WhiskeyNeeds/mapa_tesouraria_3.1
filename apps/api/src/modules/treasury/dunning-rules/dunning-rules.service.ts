@@ -1,4 +1,4 @@
-import type { PrismaClient, Prisma, TreasuryFollowupDirection } from '@prisma/client'
+import type { PrismaClient, Prisma, TreasuryFollowupDirection, TreasuryDunningActionType, TreasuryFollowupImportance } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import type { FollowupsService } from '../followups/followups.service.js'
 import type { ToconlineService } from '../../toconline/toconline.service.js'
@@ -9,6 +9,10 @@ export interface DunningRuleInput {
   offsetDays: number
   direction?: TreasuryFollowupDirection
   emailTemplateId?: string | null
+  actionType?: TreasuryDunningActionType
+  taskTitle?: string | null
+  taskDescription?: string | null
+  taskImportance?: TreasuryFollowupImportance
   minAmount?: number | null
   maxAmount?: number | null
   categoryId?: string | null
@@ -60,9 +64,15 @@ export class TreasuryDunningRulesService {
     if (typeof data.offsetDays !== 'number' || !Number.isFinite(data.offsetDays)) {
       throw httpError(400, 'Offset de dias inválido')
     }
-    if (!data.emailTemplateId) throw httpError(400, 'Template de email é obrigatório')
     await this.assertTrackOwnership(clientId, data.trackId)
-    await this.assertTemplateOwnership(clientId, data.emailTemplateId)
+
+    const actionType = data.actionType ?? 'EMAIL'
+    if (actionType === 'EMAIL') {
+      if (!data.emailTemplateId) throw httpError(400, 'Template de email é obrigatório')
+      await this.assertTemplateOwnership(clientId, data.emailTemplateId)
+    } else {
+      if (!data.taskTitle?.trim()) throw httpError(400, 'Título da tarefa é obrigatório')
+    }
 
     return this.prisma.treasuryDunningRule.create({
       data: {
@@ -71,7 +81,11 @@ export class TreasuryDunningRulesService {
         name: data.name.trim(),
         offsetDays: Math.trunc(data.offsetDays),
         direction: data.direction ?? 'RECEIVABLE',
-        emailTemplateId: data.emailTemplateId,
+        actionType,
+        emailTemplateId: actionType === 'EMAIL' ? data.emailTemplateId : null,
+        taskTitle: actionType === 'EMAIL' ? null : data.taskTitle!.trim(),
+        taskDescription: actionType === 'EMAIL' ? null : (data.taskDescription?.trim() || null),
+        taskImportance: data.taskImportance ?? 'NORMAL',
         minAmount: data.minAmount ?? null,
         maxAmount: data.maxAmount ?? null,
         categoryId: data.categoryId ?? null,
@@ -98,13 +112,36 @@ export class TreasuryDunningRulesService {
     if (data.isActive !== undefined) updateData.isActive = data.isActive
     if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder
 
+    const effectiveActionType = data.actionType ?? rule.actionType
+    if (data.actionType !== undefined) updateData.actionType = data.actionType
+
+    if (effectiveActionType === 'EMAIL') {
+      // emailTemplateId tratado no bloco existente mais abaixo.
+      if (data.actionType === 'EMAIL') {
+        updateData.taskTitle = null
+        updateData.taskDescription = null
+      }
+    } else {
+      const title = data.taskTitle ?? rule.taskTitle
+      if (!title?.trim()) throw httpError(400, 'Título da tarefa é obrigatório')
+      updateData.taskTitle = title.trim()
+      if (data.taskDescription !== undefined) {
+        updateData.taskDescription = data.taskDescription?.trim() || null
+      }
+      // Ao mudar de EMAIL para TASK/CALL, desliga o template.
+      if (data.actionType !== undefined && data.actionType !== 'EMAIL') {
+        updateData.emailTemplate = { disconnect: true }
+      }
+    }
+    if (data.taskImportance !== undefined) updateData.taskImportance = data.taskImportance
+
     if (data.categoryId !== undefined) {
       updateData.category = data.categoryId === null
         ? { disconnect: true }
         : { connect: { id: data.categoryId } }
     }
 
-    if (data.emailTemplateId !== undefined) {
+    if (data.emailTemplateId !== undefined && effectiveActionType === 'EMAIL') {
       if (!data.emailTemplateId) throw httpError(400, 'Template de email é obrigatório')
       await this.assertTemplateOwnership(clientId, data.emailTemplateId)
       updateData.emailTemplate = { connect: { id: data.emailTemplateId } }
