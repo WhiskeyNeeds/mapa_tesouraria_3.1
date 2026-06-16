@@ -2,12 +2,12 @@ import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
 import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight } from 'lucide-react'
 import {
-  Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  Bar, ComposedChart, Line, PieChart, Pie, Cell, ReferenceLine,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Bar, ComposedChart, Line, PieChart, Pie, Cell,
 } from 'recharts'
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
@@ -1243,7 +1243,9 @@ function CashflowStatementTable() {
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
   const [days, setDays] = useState(30)
-  const [forecastDays, setForecastDays] = useState(90)
+  // forecastDays fixo em 90: a secção "Previsão de Tesouraria" foi removida do
+  // Dashboard; o forecast continua a alimentar o indicador de risco (saldo negativo).
+  const [forecastDays] = useState(90)
 
   const { data, isLoading } = useQuery<DashboardData>({
     queryKey: ['dashboard', selectedClientId, days],
@@ -1653,103 +1655,6 @@ export default function DashboardPage() {
 
         </div>
       </div>
-
-      {/* Forecast section */}
-      {forecastData && forecastData.forecast.length > 0 && (
-        <div className="card p-5">
-          <div className="flex items-center justify-between mb-1">
-            <div>
-              <h2 className="text-sm font-semibold text-gray-700">Previsão de Tesouraria</h2>
-              <p className="text-xs text-gray-400 mt-0.5">Baseado em contas a receber e a pagar em aberto</p>
-            </div>
-            <div className="flex gap-1">
-              {[30, 60, 90].map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setForecastDays(d)}
-                  className={`px-2.5 py-1 text-xs rounded font-medium transition-colors ${forecastDays === d ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                >
-                  {d}d
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Stats header */}
-          {forecastStats && (
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mt-4 mb-4">
-              <div className="bg-gray-50 rounded-lg px-3 py-2.5">
-                <div className="text-xs text-gray-500">Saldo Atual</div>
-                <div className="text-sm font-bold text-gray-900 mt-0.5">{formatCurrency(forecastData.startingBalance)}</div>
-              </div>
-              <div className={`rounded-lg px-3 py-2.5 ${forecastStats.minBalance < 0 ? 'bg-red-50' : forecastStats.minBalance < forecastData.startingBalance * 0.2 ? 'bg-amber-50' : 'bg-gray-50'}`}>
-                <div className="text-xs text-gray-500">Mín. Projetado</div>
-                <div className={`text-sm font-bold mt-0.5 ${forecastStats.minBalance < 0 ? 'text-red-600' : forecastStats.minBalance < forecastData.startingBalance * 0.2 ? 'text-amber-600' : 'text-gray-900'}`}>
-                  {formatCurrency(forecastStats.minBalance)}
-                </div>
-                <div className="text-xs text-gray-400">{formatDate(forecastStats.minDate)}</div>
-              </div>
-              <div className={`rounded-lg px-3 py-2.5 ${forecastStats.projectedFinal >= forecastData.startingBalance ? 'bg-green-50' : 'bg-red-50'}`}>
-                <div className="text-xs text-gray-500">Saldo Final ({forecastDays}d)</div>
-                <div className={`text-sm font-bold mt-0.5 ${forecastStats.projectedFinal >= forecastData.startingBalance ? 'text-green-700' : 'text-red-700'}`}>
-                  {forecastStats.projectedFinal >= forecastData.startingBalance ? '+' : ''}{formatCurrency(forecastStats.projectedFinal - forecastData.startingBalance)}
-                </div>
-                <div className="text-xs text-gray-400">{formatCurrency(forecastStats.projectedFinal)}</div>
-              </div>
-              <div className="bg-green-50 rounded-lg px-3 py-2.5">
-                <div className="text-xs text-gray-500">Entradas Esperadas</div>
-                <div className="text-sm font-bold text-green-700 mt-0.5">{formatCurrency(forecastStats.totalIncome)}</div>
-              </div>
-              <div className="bg-red-50 rounded-lg px-3 py-2.5">
-                <div className="text-xs text-gray-500">Saídas Esperadas</div>
-                <div className="text-sm font-bold text-red-700 mt-0.5">{formatCurrency(forecastStats.totalExpense)}</div>
-              </div>
-            </div>
-          )}
-
-          {/* Negative balance alert */}
-          {forecastStats?.daysUntilNegative !== null && forecastStats?.negativeDate && (
-            <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
-              <span className="text-sm text-red-700">
-                Saldo projetado <strong>abaixo de zero</strong> em {forecastStats.daysUntilNegative} dias ({formatDate(forecastStats.negativeDate)})
-              </span>
-            </div>
-          )}
-
-          <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart
-              data={forecastData.forecast.map((d) => ({ ...d, label: formatDate(d.date, 'dd/MM') }))}
-              margin={{ left: 0, right: 8, top: 4, bottom: 0 }}
-            >
-              <defs>
-                <linearGradient id="forecastBalGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-              <XAxis
-                dataKey="label"
-                tick={{ fontSize: 10, fill: '#9ca3af' }}
-                tickLine={false}
-                axisLine={false}
-                interval={Math.max(1, Math.floor(forecastData.forecast.length / 10))}
-              />
-              <YAxis
-                tick={{ fontSize: 10, fill: '#9ca3af' }}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`}
-                width={38}
-              />
-              <Tooltip content={<ChartTooltip />} formatter={(v: number) => formatCurrency(v)} labelFormatter={(l) => l} />
-              <ReferenceLine y={0} stroke="#fca5a5" strokeWidth={1.5} strokeDasharray="4 4" label={{ value: '0', position: 'right', fontSize: 9, fill: '#fca5a5' }} />
-              <Area type="monotone" dataKey="balance" stroke="#3b82f6" fill="url(#forecastBalGrad)" strokeWidth={2} dot={false} name="Saldo Projetado" />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       {/* Category breakdown — donuts */}
       {catBreakdown && (catBreakdown.revenue.length > 0 || catBreakdown.expense.length > 0) && (
