@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useToast } from '@/contexts/ToastContext'
 import Modal from '@/components/ui/Modal'
-import { Plus, Pencil, Trash2, Clock, AlertTriangle, Mail, X, Save } from 'lucide-react'
+import { Plus, Pencil, Trash2, Clock, Mail, X, Save, Phone, NotebookPen } from 'lucide-react'
 
 interface EmailTemplate {
   id: string
@@ -21,6 +21,10 @@ interface DunningRule {
   direction: 'RECEIVABLE' | 'PAYABLE'
   emailTemplateId: string | null
   emailTemplate: { id: string; name: string; scope: string } | null
+  actionType: 'EMAIL' | 'TASK' | 'CALL'
+  taskTitle: string | null
+  taskDescription: string | null
+  taskImportance: 'LOW' | 'NORMAL' | 'HIGH'
   minAmount: number | null
   maxAmount: number | null
   categoryId: string | null
@@ -40,12 +44,28 @@ const emptyRule = {
   offsetDays: 0,
   isActive: true,
   emailTemplateId: '',
+  actionType: 'EMAIL' as 'EMAIL' | 'TASK' | 'CALL',
+  taskTitle: '',
+  taskDescription: '',
+  taskImportance: 'NORMAL' as 'LOW' | 'NORMAL' | 'HIGH',
 }
 
 function formatOffset(days: number): string {
   if (days === 0) return 'No dia do pagamento'
   if (days < 0) return `${Math.abs(days)} dia${Math.abs(days) === 1 ? '' : 's'} antes do pagamento`
   return `${days} dia${days === 1 ? '' : 's'} após o pagamento`
+}
+
+const ACTION_TYPES = [
+  { key: 'EMAIL', label: 'Email', icon: Mail },
+  { key: 'TASK', label: 'Tarefa', icon: NotebookPen },
+  { key: 'CALL', label: 'Chamada', icon: Phone },
+] as const
+
+function actionVisual(t: 'EMAIL' | 'TASK' | 'CALL') {
+  if (t === 'TASK') return { icon: NotebookPen, label: 'Tarefa' }
+  if (t === 'CALL') return { icon: Phone, label: 'Chamada' }
+  return { icon: Mail, label: 'Email' }
 }
 
 // Mapeia o offsetDays para o tom default da regra.
@@ -181,25 +201,34 @@ export default function DunningRulesTab({ clientId, trackId }: Props) {
       offsetDays: r.offsetDays,
       isActive: r.isActive,
       emailTemplateId: r.emailTemplateId ?? '',
+      actionType: r.actionType,
+      taskTitle: r.taskTitle ?? '',
+      taskDescription: r.taskDescription ?? '',
+      taskImportance: r.taskImportance,
     })
     // Em edição, qualquer alteração futura é da responsabilidade do utilizador.
     setTemplateManuallyPicked(true)
   }
 
   function submitRule() {
-    const payload = {
+    const base = {
       trackId,
       name: ruleForm.name.trim(),
       offsetDays: Number(ruleForm.offsetDays),
-      emailTemplateId: ruleForm.emailTemplateId,
       isActive: ruleForm.isActive,
+      actionType: ruleForm.actionType,
     }
+    const payload = ruleForm.actionType === 'EMAIL'
+      ? { ...base, emailTemplateId: ruleForm.emailTemplateId }
+      : { ...base, taskTitle: ruleForm.taskTitle.trim(), taskDescription: ruleForm.taskDescription.trim() || null, taskImportance: ruleForm.taskImportance }
     if (editingRule) updateRule.mutate({ id: editingRule.id, payload })
     else createRule.mutate(payload)
   }
 
   const sortedRules = [...rules].sort((a, b) => a.offsetDays - b.offsetDays)
-  const canSubmit = !!ruleForm.name.trim() && !!ruleForm.emailTemplateId
+  const canSubmit = !!ruleForm.name.trim() && (
+    ruleForm.actionType === 'EMAIL' ? !!ruleForm.emailTemplateId : !!ruleForm.taskTitle.trim()
+  )
 
   return (
     <div className="space-y-4 max-w-4xl">
@@ -228,7 +257,7 @@ export default function DunningRulesTab({ clientId, trackId }: Props) {
             return (
               <li key={r.id} className={`relative pl-12 ${!r.isActive ? 'opacity-60' : ''}`}>
                 <span className={`absolute left-0 top-2 w-8 h-8 rounded-full border-2 flex items-center justify-center ${color} z-10 bg-white`}>
-                  {r.offsetDays > 0 ? <AlertTriangle className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                  {(() => { const Icon = actionVisual(r.actionType).icon; return <Icon className="w-4 h-4" /> })()}
                 </span>
                 <div className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm">
                   <div className="flex items-start justify-between gap-2">
@@ -236,10 +265,20 @@ export default function DunningRulesTab({ clientId, trackId }: Props) {
                       <div className="text-[11px] text-gray-500 uppercase tracking-wider">{formatOffset(r.offsetDays)}</div>
                       <div className="text-sm font-semibold text-gray-900 mt-0.5 truncate">{r.name}</div>
                       <div className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-                        <Mail className="w-3 h-3 flex-shrink-0" />
-                        {r.emailTemplate ? r.emailTemplate.name : <span className="italic text-amber-600">Sem template</span>}
-                        {r.totalExecutions > 0 && (
-                          <span className="ml-1 text-gray-400">· {r.totalExecutions} execução(ões)</span>
+                        {r.actionType === 'EMAIL' ? (
+                          <>
+                            <Mail className="w-3 h-3 flex-shrink-0" />
+                            {r.emailTemplate ? r.emailTemplate.name : <span className="italic text-amber-600">Sem template</span>}
+                            {r.totalExecutions > 0 && (
+                              <span className="ml-1 text-gray-400">· {r.totalExecutions} execução(ões)</span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {(() => { const Icon = actionVisual(r.actionType).icon; return <Icon className="w-3 h-3 flex-shrink-0" /> })()}
+                            <span className="truncate">{r.taskTitle}</span>
+                            {r.taskImportance === 'HIGH' && <span className="text-red-600 font-medium">⚑</span>}
+                          </>
                         )}
                       </div>
                     </div>
@@ -273,9 +312,32 @@ export default function DunningRulesTab({ clientId, trackId }: Props) {
       <Modal
         open={showNewRule || editingRule !== null}
         onClose={closeModal}
-        title={editingRule ? 'Editar Regra' : 'Nova Regra de Cobrança'}
+        title={editingRule ? 'Editar ação' : 'Nova ação na régua'}
       >
         <div className="space-y-4">
+          <div>
+            <label className="label">Tipo de ação</label>
+            <div className="flex gap-2">
+              {ACTION_TYPES.map((t) => {
+                const Icon = t.icon
+                const selected = ruleForm.actionType === t.key
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setRuleForm((f) => ({ ...f, actionType: t.key }))}
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                      selected ? 'border-primary-300 bg-primary-50 text-primary-700' : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {t.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
           <div>
             <label className="label">Nome <span className="text-red-500">*</span></label>
             <input
@@ -317,6 +379,7 @@ export default function DunningRulesTab({ clientId, trackId }: Props) {
             </div>
           </div>
 
+          {ruleForm.actionType === 'EMAIL' && (
           <div>
             <label className="label">Template de email <span className="text-red-500">*</span></label>
             {templates.length === 0 ? (
@@ -455,6 +518,51 @@ export default function DunningRulesTab({ clientId, trackId }: Props) {
               )
             })()}
           </div>
+          )}
+
+          {ruleForm.actionType !== 'EMAIL' && (
+            <>
+              <div>
+                <label className="label">Título <span className="text-red-500">*</span></label>
+                <input
+                  className="input"
+                  value={ruleForm.taskTitle}
+                  onChange={(e) => setRuleForm({ ...ruleForm, taskTitle: e.target.value })}
+                  placeholder={ruleForm.actionType === 'CALL' ? 'Ex: Contactar cliente a confirmar pagamento' : 'Ex: Verificar no banco se o movimento caiu'}
+                />
+              </div>
+              <div>
+                <label className="label">Descrição</label>
+                <textarea
+                  className="input min-h-[80px] resize-y"
+                  value={ruleForm.taskDescription}
+                  onChange={(e) => setRuleForm({ ...ruleForm, taskDescription: e.target.value })}
+                  placeholder="Detalhe opcional do lembrete"
+                />
+              </div>
+              <div>
+                <label className="label">Importância</label>
+                <div className="flex gap-2">
+                  {(['LOW', 'NORMAL', 'HIGH'] as const).map((imp) => {
+                    const selected = ruleForm.taskImportance === imp
+                    const txt = imp === 'LOW' ? 'Baixa' : imp === 'NORMAL' ? 'Normal' : 'Alta'
+                    return (
+                      <button
+                        key={imp}
+                        type="button"
+                        onClick={() => setRuleForm({ ...ruleForm, taskImportance: imp })}
+                        className={`flex-1 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                          selected ? 'border-primary-300 bg-primary-50 text-primary-700' : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        {txt}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </>
+          )}
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input
