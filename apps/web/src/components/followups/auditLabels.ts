@@ -44,6 +44,19 @@ const STATUS_LABELS: Record<string, string> = {
   VOID: 'Anulada',
 }
 
+// Origem da liquidação (payload.via): como o documento ficou pago/liquidado.
+const SETTLEMENT_SOURCE_LABEL: Record<string, string> = {
+  LOCAL: 'manualmente',
+  INSTALLMENTS: 'pelas parcelas',
+  RECONCILIATION: 'por reconciliação',
+}
+
+/** Sufixo " (liquidado …)" quando o payload identifica a origem da liquidação. */
+function viaSuffix(via: unknown, prefix = 'liquidado'): string {
+  const label = typeof via === 'string' ? SETTLEMENT_SOURCE_LABEL[via] : undefined
+  return label ? ` (${prefix} ${label})` : ''
+}
+
 const MONEY = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' })
 
 export function fieldLabel(field: string): string {
@@ -90,13 +103,13 @@ export function auditTitle(action: string, payload: unknown): string {
       return p.recurrenceCascade ? 'Recorrência removida (com instâncias)' : 'Apagada'
     case 'receivable.settle':
     case 'payable.settle':
-      return p.cascadedChildren ? `Liquidada (+${p.cascadedChildren} parcelas)` : 'Liquidada'
+      return p.cascadedChildren ? `Liquidada (+${p.cascadedChildren} parcelas)` : `Liquidada${viaSuffix(p.via)}`
     case 'receivable.pay':
     case 'payable.pay':
-      return p.cascadedChildren ? `Marcada como paga (+${p.cascadedChildren} parcelas)` : 'Marcada como paga'
+      return p.cascadedChildren ? `Marcada como paga (+${p.cascadedChildren} parcelas)` : `Marcada como paga${viaSuffix(p.via)}`
     case 'receivable.unsettle':
     case 'payable.unsettle':
-      return 'Revertida para Em Aberto'
+      return `Revertida para Em Aberto${viaSuffix(p.via, 'estava liquidado')}`
     // 'partial_payment' audit actions removed — handled server-side but not shown
     case 'receivable.void':
     case 'payable.void':
