@@ -348,6 +348,7 @@ function TimelineItem({ ev, expanded, onToggleExpand, onComplete, onLogCall, onD
   const isPending = ev.status === 'PENDING'
   const isFailed = ev.status === 'FAILED'
   const isFollowup = ev.source === 'followup'
+  const plannedType = (ev.payload as Record<string, unknown> | null)?.plannedType
 
   const headline = isFollowup ? (ev.title ?? label) : auditTitle(ev.kind, ev.payload)
 
@@ -371,7 +372,7 @@ function TimelineItem({ ev, expanded, onToggleExpand, onComplete, onLogCall, onD
             <div className="text-sm font-medium text-gray-900 truncate">{headline}</div>
           </div>
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            {isPending && ev.kind === 'CALL_TASK' && (
+            {isPending && ev.kind === 'CALL_TASK' && plannedType !== 'TASK' && (
               <button
                 onClick={() => onLogCall(ev.id)}
                 className="text-xs text-emerald-600 hover:text-emerald-700 font-medium px-2 py-1 rounded hover:bg-emerald-50"
