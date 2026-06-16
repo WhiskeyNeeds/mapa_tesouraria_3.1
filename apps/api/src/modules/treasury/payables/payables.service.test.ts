@@ -64,6 +64,24 @@ describe('void', () => {
   })
 })
 
+describe('unsettle gating por settledVia (payables)', () => {
+  function makeService() { return new TreasuryPayablesService({} as never, {} as never, {} as never) }
+
+  it('bloqueia reverter a mãe paga pelas parcelas (INSTALLMENTS)', async () => {
+    const svc = makeService()
+    vi.spyOn(svc as never as { resolveLocalPayableId: () => Promise<string> }, 'resolveLocalPayableId').mockResolvedValue('p1')
+    vi.spyOn(svc, 'getById').mockResolvedValue({ id: 'p1', status: 'PAID', settledVia: 'INSTALLMENTS', tocPurchasesDocId: null, _tocOverlay: null, children: [] } as never)
+    await expect(svc.unsettle('c1', 'u1', 'p1')).rejects.toThrow(/parcela a parcela/)
+  })
+
+  it('bloqueia reverter um doc reconciliado pelo botão genérico (RECONCILIATION)', async () => {
+    const svc = makeService()
+    vi.spyOn(svc as never as { resolveLocalPayableId: () => Promise<string> }, 'resolveLocalPayableId').mockResolvedValue('q1')
+    vi.spyOn(svc, 'getById').mockResolvedValue({ id: 'q1', status: 'PAID', settledVia: 'RECONCILIATION', tocPurchasesDocId: null, _tocOverlay: null, children: [] } as never)
+    await expect(svc.unsettle('c1', 'u1', 'q1')).rejects.toThrow(/reconcilia/i)
+  })
+})
+
 describe('setReadyToPay', () => {
   // prisma mínimo: setReadyToPay corre dentro de $transaction, por isso o tx
   // expõe update (payable), audit log e follow-ups.
