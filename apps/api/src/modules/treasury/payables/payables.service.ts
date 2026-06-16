@@ -10,6 +10,7 @@ import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 import { compareDocs } from '../../../lib/doc-sort.js'
 import { computeNextInternalReference, internalReferencePrefix } from '../../../lib/internal-reference.js'
 import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
+import { earliestPendingDueAt } from '../../../lib/pending-action.js'
 
 interface PayableListItem {
   id: string
@@ -30,6 +31,8 @@ interface PayableListItem {
   readyToPay: boolean
   /** Tem tarefa de contacto pendente (CALL_TASK PENDING) — mostra ícone "Contatar Cliente". */
   needsContact?: boolean
+  /** dueAt (ISO) mais antigo das CALL_TASK PENDING com prazo — alimenta o "!" de ação pendente. null se não houver. */
+  _pendingActionDueAt?: string | null
   category: { id: string; name: string; color: string | null; launchToc: boolean } | null
   budget: { id: string; name: string; color: string | null } | null
   children: unknown[]
@@ -313,10 +316,14 @@ export class TreasuryPayablesService {
     if (localIds.length > 0) {
       const pendingTasks = await this.prisma.treasuryFollowup.findMany({
         where: { clientId, payableId: { in: localIds }, kind: 'CALL_TASK', status: 'PENDING' },
-        select: { payableId: true },
+        select: { payableId: true, dueAt: true },
       })
       const needsContactIds = new Set(pendingTasks.map((t) => t.payableId))
-      for (const item of items) item.needsContact = needsContactIds.has(item.id)
+      const dueByDoc = earliestPendingDueAt(pendingTasks.map((t) => ({ docId: t.payableId, dueAt: t.dueAt })))
+      for (const item of items) {
+        item.needsContact = needsContactIds.has(item.id)
+        item._pendingActionDueAt = dueByDoc.get(item.id) ?? null
+      }
     }
 
     return { total, page, limit, items }
