@@ -2,6 +2,7 @@ import type { PrismaClient, TreasuryCategoryType } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { ToconlineService } from '../../toconline/toconline.service.js'
 import { resolveDocAmountsFromDb } from '../../../lib/toc-overlay.js'
+import { syncParentDocStatus } from '../../../lib/parent-status.js'
 
 export interface ReconciliationItem {
   movementIds: string[]
@@ -269,6 +270,7 @@ export class TreasuryReconciliationsService {
                 // fica reservada ao recibo emitido no TOConline (sync status 3).
                 status: newPending <= 0.01 ? 'PAID' : 'PARTIAL',
                 settledAt: newPending <= 0.01 ? new Date() : null,
+                settledVia: newPending <= 0.01 ? 'RECONCILIATION' : null,
               },
             })
             // Regista na timeline da própria fatura (entityType Receivable).
@@ -280,6 +282,7 @@ export class TreasuryReconciliationsService {
                 payload: { amount: alloc.amount, reconciliationId: recon.id, fullySettled: newPending <= 0.01 },
               },
             })
+            if (rec.parentId && !rec.recurrenceId) await syncParentDocStatus(tx, clientId, 'receivable', rec.parentId)
           }
         } else {
           let tocPaymentId: string | undefined
@@ -318,6 +321,7 @@ export class TreasuryReconciliationsService {
                 // Conciliação bancária marca "Pago" (PAID); a "Liquidada" (SETTLED)
                 // fica reservada ao recibo emitido no TOConline (sync status 3).
                 status: newPending <= 0.01 ? 'PAID' : 'PARTIAL',
+                settledVia: newPending <= 0.01 ? 'RECONCILIATION' : null,
               },
             })
             // Regista na timeline da própria fatura (entityType Payable).
@@ -329,6 +333,7 @@ export class TreasuryReconciliationsService {
                 payload: { amount: alloc.amount, reconciliationId: recon.id, fullySettled: newPending <= 0.01 },
               },
             })
+            if (pay.parentId && !pay.recurrenceId) await syncParentDocStatus(tx, clientId, 'payable', pay.parentId)
           }
         }
       }
@@ -388,6 +393,7 @@ export class TreasuryReconciliationsService {
               pendingAmount: Math.max(0, total - newReceived),
               status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
               settledAt: null,
+              settledVia: null,
             },
           })
           await tx.treasuryAuditLog.create({
@@ -398,6 +404,7 @@ export class TreasuryReconciliationsService {
               payload: { amount: Number(link.amountAllocated), reconciliationId },
             },
           })
+          if (rec.parentId && !rec.recurrenceId) await syncParentDocStatus(tx, clientId, 'receivable', rec.parentId)
         }
       }
 
@@ -414,6 +421,7 @@ export class TreasuryReconciliationsService {
               paidAmount: newPaid,
               pendingAmount: Math.max(0, total - newPaid),
               status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
+              settledVia: null,
             },
           })
           await tx.treasuryAuditLog.create({
@@ -424,6 +432,7 @@ export class TreasuryReconciliationsService {
               payload: { amount: Number(link.amountAllocated), reconciliationId },
             },
           })
+          if (pay.parentId && !pay.recurrenceId) await syncParentDocStatus(tx, clientId, 'payable', pay.parentId)
         }
       }
 

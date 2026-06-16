@@ -180,7 +180,7 @@ describe('confirm — atualização local de documentos TOConline', () => {
 
     expect(receivableUpdate).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'r1' },
-      data: expect.objectContaining({ status: 'PAID', receivedAmount: 100, pendingAmount: 0, settledAt: expect.any(Date) }),
+      data: expect.objectContaining({ status: 'PAID', receivedAmount: 100, pendingAmount: 0, settledAt: expect.any(Date), settledVia: 'RECONCILIATION' }),
     }))
     // Regista a reconciliação na timeline da fatura (entityType Receivable).
     expect(tx.treasuryAuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -235,7 +235,7 @@ describe('confirm — atualização local de documentos TOConline', () => {
 
     expect(payableUpdate).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'p1' },
-      data: expect.objectContaining({ status: 'PAID', paidAmount: 40, pendingAmount: 0 }),
+      data: expect.objectContaining({ status: 'PAID', paidAmount: 40, pendingAmount: 0, settledVia: 'RECONCILIATION' }),
     }))
   })
 })
@@ -272,7 +272,7 @@ describe('reverse — restauro de documentos TOConline', () => {
 
     expect(receivableUpdate).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'r1' },
-      data: expect.objectContaining({ status: 'PARTIAL', receivedAmount: 40, pendingAmount: 60 }),
+      data: expect.objectContaining({ status: 'PARTIAL', receivedAmount: 40, pendingAmount: 60, settledVia: null }),
     }))
   })
 })
