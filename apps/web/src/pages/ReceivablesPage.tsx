@@ -18,7 +18,7 @@ import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
 import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
-import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, ArrowUpRight, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
+import { Plus, ArrowDownToLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, ArrowUpRight, Pencil, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 

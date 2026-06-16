@@ -19,7 +19,7 @@ import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import RemoveFromFuturePaymentsDialog from '@/components/treasury/RemoveFromFuturePaymentsDialog'
-import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye, Wallet, Tags, FileClock, AlertTriangle, CalendarClock, TimerOff } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye, Wallet, Tags, FileClock, AlertTriangle, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 
@@ -735,8 +735,6 @@ export default function PayablesPage() {
     },
     onError: (e) => toast.error((e as Error).message),
   })
-
-
 
   const setPromisedDate = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string | null }) =>
