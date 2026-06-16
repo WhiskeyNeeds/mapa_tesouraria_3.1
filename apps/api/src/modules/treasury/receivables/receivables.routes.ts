@@ -210,6 +210,13 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.bulkSetStatus(clientId, request.user.sub, ids, status))
   })
 
+  fastify.post(`${prefix}/bulk-delete`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids } = request.body as { ids: string[] }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    return reply.send(await svc.bulkDelete(clientId, request.user.sub, ids))
+  })
+
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const body = request.body as Parameters<TreasuryReceivablesService['update']>[3]

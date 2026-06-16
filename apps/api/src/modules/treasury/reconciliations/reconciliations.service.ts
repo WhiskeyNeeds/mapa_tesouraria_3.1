@@ -34,8 +34,8 @@ export class TreasuryReconciliationsService {
         where,
         include: {
           movements: { include: { movement: { select: { id: true, date: true, amount: true, description: true, bankAccount: { select: { id: true, name: true } } } } } },
-          receivables: { include: { receivable: { select: { id: true, reference: true, entityName: true, pendingAmount: true } } } },
-          payables: { include: { payable: { select: { id: true, reference: true, entityName: true, pendingAmount: true } } } },
+          receivables: { include: { receivable: { select: { id: true, reference: true, entityName: true, pendingAmount: true, documentDate: true, dueDate: true, tocSalesDocId: true } } } },
+          payables: { include: { payable: { select: { id: true, reference: true, entityName: true, pendingAmount: true, documentDate: true, dueDate: true, tocPurchasesDocId: true } } } },
           createdBy: { select: { id: true, name: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -44,7 +44,60 @@ export class TreasuryReconciliationsService {
       }),
     ])
 
+    // Docs do TOConline guardam reference/entityName a null na linha local — vivem
+    // no espelho TOC. Enriquecemos para o histórico mostrar o nº/nome da fatura.
+    await this.enrichTocDocRefs(clientId, items)
+
     return { total, page, limit, items }
+  }
+
+  /** Preenche reference/entityName a partir do espelho TOConline nos documentos
+   *  ligados (sales: colunas documentNo/customerName; purchases: campos do raw). */
+  private async enrichTocDocRefs(
+    clientId: string,
+    items: Array<{
+      receivables: Array<{ receivable: { reference: string | null; entityName: string | null; tocSalesDocId: string | null } }>
+      payables: Array<{ payable: { reference: string | null; entityName: string | null; tocPurchasesDocId: string | null } }>
+    }>,
+  ) {
+    const salesTocIds = new Set<number>()
+    const purchTocIds = new Set<number>()
+    for (const rec of items) {
+      for (const l of rec.receivables) if (l.receivable.tocSalesDocId) salesTocIds.add(Number(l.receivable.tocSalesDocId))
+      for (const l of rec.payables) if (l.payable.tocPurchasesDocId) purchTocIds.add(Number(l.payable.tocPurchasesDocId))
+    }
+    if (salesTocIds.size === 0 && purchTocIds.size === 0) return
+
+    const [salesDocs, purchDocs] = await Promise.all([
+      salesTocIds.size
+        ? this.prisma.tocSalesDocument.findMany({ where: { clientId, tocId: { in: [...salesTocIds] } }, select: { tocId: true, documentNo: true, customerName: true } })
+        : Promise.resolve([]),
+      purchTocIds.size
+        ? this.prisma.tocPurchaseDocument.findMany({ where: { clientId, tocId: { in: [...purchTocIds] } }, select: { tocId: true, raw: true } })
+        : Promise.resolve([]),
+    ])
+    const salesMap = new Map(salesDocs.map((d) => [d.tocId, d]))
+    const purchMap = new Map(purchDocs.map((d) => [d.tocId, d]))
+
+    for (const rec of items) {
+      for (const l of rec.receivables) {
+        const r = l.receivable
+        if (!r.tocSalesDocId) continue
+        const t = salesMap.get(Number(r.tocSalesDocId))
+        if (!t) continue
+        if (!r.reference) r.reference = t.documentNo ?? null
+        if (!r.entityName) r.entityName = t.customerName ?? null
+      }
+      for (const l of rec.payables) {
+        const p = l.payable
+        if (!p.tocPurchasesDocId) continue
+        const t = purchMap.get(Number(p.tocPurchasesDocId))
+        if (!t) continue
+        const raw = (t.raw ?? {}) as Record<string, unknown>
+        if (!p.reference) p.reference = (raw.document_no as string) ?? null
+        if (!p.entityName) p.entityName = (raw.supplier_business_name as string) ?? null
+      }
+    }
   }
 
   async getById(clientId: string, id: string) {
@@ -202,7 +255,7 @@ export class TreasuryReconciliationsService {
           const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
           if (rec) {
             // total/received reais via overlay TOC — em docs ligados os campos
-            // locais estão a null, pelo que somar sobre eles marcaria SETTLED
+            // locais estão a null, pelo que somar sobre eles marcaria PAID
             // indevidamente numa reconciliação parcial.
             const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'receivable', rec)
             const newReceived = settled + alloc.amount
@@ -212,8 +265,19 @@ export class TreasuryReconciliationsService {
               data: {
                 receivedAmount: newReceived,
                 pendingAmount: newPending,
-                status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
+                // Conciliação bancária marca "Pago" (PAID); a "Liquidada" (SETTLED)
+                // fica reservada ao recibo emitido no TOConline (sync status 3).
+                status: newPending <= 0.01 ? 'PAID' : 'PARTIAL',
                 settledAt: newPending <= 0.01 ? new Date() : null,
+              },
+            })
+            // Regista na timeline da própria fatura (entityType Receivable).
+            await tx.treasuryAuditLog.create({
+              data: {
+                clientId, userId,
+                action: 'receivable.reconcile',
+                entityType: 'Receivable', entityId: alloc.id,
+                payload: { amount: alloc.amount, reconciliationId: recon.id, fullySettled: newPending <= 0.01 },
               },
             })
           }
@@ -251,7 +315,18 @@ export class TreasuryReconciliationsService {
               data: {
                 paidAmount: newPaid,
                 pendingAmount: newPending,
-                status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
+                // Conciliação bancária marca "Pago" (PAID); a "Liquidada" (SETTLED)
+                // fica reservada ao recibo emitido no TOConline (sync status 3).
+                status: newPending <= 0.01 ? 'PAID' : 'PARTIAL',
+              },
+            })
+            // Regista na timeline da própria fatura (entityType Payable).
+            await tx.treasuryAuditLog.create({
+              data: {
+                clientId, userId,
+                action: 'payable.reconcile',
+                entityType: 'Payable', entityId: alloc.id,
+                payload: { amount: alloc.amount, reconciliationId: recon.id, fullySettled: newPending <= 0.01 },
               },
             })
           }
@@ -315,6 +390,14 @@ export class TreasuryReconciliationsService {
               settledAt: null,
             },
           })
+          await tx.treasuryAuditLog.create({
+            data: {
+              clientId, userId,
+              action: 'receivable.reconcile_reverse',
+              entityType: 'Receivable', entityId: link.receivableId,
+              payload: { amount: Number(link.amountAllocated), reconciliationId },
+            },
+          })
         }
       }
 
@@ -331,6 +414,14 @@ export class TreasuryReconciliationsService {
               paidAmount: newPaid,
               pendingAmount: Math.max(0, total - newPaid),
               status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
+            },
+          })
+          await tx.treasuryAuditLog.create({
+            data: {
+              clientId, userId,
+              action: 'payable.reconcile_reverse',
+              entityType: 'Payable', entityId: link.payableId,
+              payload: { amount: Number(link.amountAllocated), reconciliationId },
             },
           })
         }

@@ -15,6 +15,7 @@ import {
 import { CreditCard, Clock, Scissors, CheckCircle, ChevronLeft, X, Wallet } from 'lucide-react'
 import Badge from '@/components/ui/Badge'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
+import RemoveFromFuturePaymentsDialog from '@/components/treasury/RemoveFromFuturePaymentsDialog'
 
 interface DocCategory { id: string; name: string; color: string | null }
 interface DocChild {
@@ -71,6 +72,7 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
   const [tab, setTab] = useState<Tab>('details')
   const [section, setSection] = useState<Section>(null)
   const [promisedDate, setPromisedDate] = useState('')
+  const [removeReadyOpen, setRemoveReadyOpen] = useState(false)
   const [splitCount, setSplitCount] = useState(2)
   const [splitInstallments, setSplitInstallments] = useState([
     { amount: '', paymentDate: '' },
@@ -127,10 +129,11 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
   })
 
   const setReadyToPayMut = useMutation({
-    mutationFn: (ready: boolean) =>
-      api.patch(`/treasury/${selectedClientId}/${seg}/${currentId}/ready-to-pay`, { ready }),
-    onSuccess: (_, ready) => {
+    mutationFn: ({ ready, promisedPaymentDate, reason }: { ready: boolean; promisedPaymentDate?: string | null; reason?: string }) =>
+      api.patch(`/treasury/${selectedClientId}/${seg}/${currentId}/ready-to-pay`, { ready, promisedPaymentDate, reason }),
+    onSuccess: (_, { ready }) => {
       invalidate()
+      setRemoveReadyOpen(false)
       toast.success(ready ? 'Adicionada a Futuros Pagamentos' : 'Removida de Futuros Pagamentos')
     },
     onError: (e: Error) => toast.error(e.message),
@@ -350,28 +353,40 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
               </button>
             )}
 
-            {/* Pronta para Pagar — toggle do separador Futuros Pagamentos (só payables) */}
-            {isExpense && isOpen && (
-              <button
-                onClick={() => setReadyToPayMut.mutate(!doc.readyToPay)}
-                disabled={setReadyToPayMut.isPending}
-                className={`w-full flex items-center gap-3 p-3.5 rounded-xl border text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed ${doc.readyToPay
-                  ? 'border-teal-300 bg-teal-50 hover:bg-teal-100'
-                  : 'border-gray-200 hover:bg-teal-50 hover:border-teal-200'
-                  }`}
-              >
-                <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${doc.readyToPay ? 'bg-teal-200' : 'bg-teal-100 group-hover:bg-teal-200'}`}>
-                  <Wallet className="w-4 h-4 text-teal-700" />
-                </div>
-                <div>
-                  <div className="font-medium text-gray-900 text-sm">
-                    {doc.readyToPay ? 'Remover de Futuros Pagamentos' : 'Pronta para Pagar'}
+            {/* Pronta para Pagar — toggle do separador Futuros Pagamentos (só payables, só em aberto) */}
+            {isExpense && doc.status === 'OPEN' && (
+              <>
+                <button
+                  onClick={() => doc.readyToPay ? setRemoveReadyOpen(true) : setReadyToPayMut.mutate({ ready: true })}
+                  disabled={setReadyToPayMut.isPending}
+                  className={`w-full flex items-center gap-3 p-3.5 rounded-xl border text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed ${doc.readyToPay
+                    ? 'border-teal-300 bg-teal-50 hover:bg-teal-100'
+                    : 'border-gray-200 hover:bg-teal-50 hover:border-teal-200'
+                    }`}
+                >
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${doc.readyToPay ? 'bg-teal-200' : 'bg-teal-100 group-hover:bg-teal-200'}`}>
+                    <Wallet className="w-4 h-4 text-teal-700" />
                   </div>
-                  <div className="text-xs text-gray-500">
-                    {doc.readyToPay ? 'Marcada — consta de Futuros Pagamentos' : 'Adicionar a Futuros Pagamentos'}
+                  <div>
+                    <div className="font-medium text-gray-900 text-sm">
+                      {doc.readyToPay ? 'Remover de Futuros Pagamentos' : 'Pronta para Pagar'}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {doc.readyToPay ? 'Marcada — consta de Futuros Pagamentos' : 'Adicionar a Futuros Pagamentos'}
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
+                {doc.readyToPay && removeReadyOpen && (
+                  <RemoveFromFuturePaymentsDialog
+                    currentPromisedDate={doc.promisedPaymentDate}
+                    dueDate={doc.dueDate}
+                    pending={setReadyToPayMut.isPending}
+                    onConfirm={(date, reason) => setReadyToPayMut.mutate({ ready: false, promisedPaymentDate: date, reason })}
+                    onCancel={() => setRemoveReadyOpen(false)}
+                    pickWorkday={pickWorkday}
+                  />
+                )}
+              </>
             )}
 
             {/* Definir data pagamento — bloqueada em faturas pagas/liquidadas */}

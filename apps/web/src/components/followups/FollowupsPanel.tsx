@@ -41,7 +41,7 @@ function eventVisual(ev: TimelineEvent): EventVisual {
   if (ev.kind.endsWith('.pay')) return { icon: CreditCard, label: 'Pago', color: 'bg-teal-50 text-teal-700 border-teal-200' }
   if (ev.kind.endsWith('.settle')) return { icon: CheckCircle2, label: 'Liquidada', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
   if (ev.kind.endsWith('.unsettle')) return { icon: Undo2, label: 'Revertida para Em Aberto', color: 'bg-amber-50 text-amber-700 border-amber-200' }
-  if (ev.kind.endsWith('.partial_payment')) return { icon: CircleDollarSign, label: 'Pagamento parcial', color: 'bg-teal-50 text-teal-700 border-teal-200' }
+  // 'partial_payment' removed from visuals — option not shown anymore
   if (ev.kind.endsWith('.void')) return { icon: XCircle, label: 'Anulada', color: 'bg-red-50 text-red-700 border-red-200' }
   if (ev.kind.endsWith('.set_promised_date')) return { icon: CalendarClock, label: 'Data prometida', color: 'bg-blue-50 text-blue-700 border-blue-200' }
   if (ev.kind.endsWith('.split')) return { icon: Split, label: 'Dividida', color: 'bg-purple-50 text-purple-700 border-purple-200' }
@@ -52,6 +52,19 @@ function eventVisual(ev: TimelineEvent): EventVisual {
 function formatWhen(iso: string) {
   const d = new Date(iso)
   return d.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+/** Prazo relativo (em dias) de uma tarefa + tom semântico para a etiqueta.
+ *  Compara só a data (ignora horas) para "hoje/amanhã" serem intuitivos. */
+function dueRelative(iso: string): { label: string; tone: 'overdue' | 'today' | 'soon' | 'future' } {
+  const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
+  const today = startOfDay(new Date())
+  const due = startOfDay(new Date(iso))
+  const days = Math.round((due.getTime() - today.getTime()) / 86400000)
+  if (days < 0) return { label: days === -1 ? 'atrasada 1 dia' : `atrasada ${-days} dias`, tone: 'overdue' }
+  if (days === 0) return { label: 'hoje', tone: 'today' }
+  if (days === 1) return { label: 'amanhã', tone: 'soon' }
+  return { label: `daqui a ${days} dias`, tone: days <= 3 ? 'soon' : 'future' }
 }
 
 export default function FollowupsPanel({ clientId, doc, direction }: Props) {
@@ -143,6 +156,19 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
     ? events.filter((ev) => ev.source === 'followup' && activeAction.matches(ev.kind))
     : []
 
+  // Próximas tarefas: CALL_TASK pendentes com prazo definido, ordenadas pela data
+  // mais próxima primeiro (inclui atrasadas, as mais urgentes), limitadas a 4.
+  const upcomingTasks = events
+    .filter((ev) => ev.source === 'followup' && ev.kind === 'CALL_TASK' && ev.status === 'PENDING' && ev.dueAt)
+    .sort((a, b) => (a.dueAt ?? '').localeCompare(b.dueAt ?? ''))
+    .slice(0, 4)
+  const dueToneCls: Record<string, string> = {
+    overdue: 'bg-red-100 text-red-700',
+    today: 'bg-amber-100 text-amber-700',
+    soon: 'bg-amber-50 text-amber-600',
+    future: 'bg-gray-100 text-gray-500',
+  }
+
   return (
     <div className="space-y-4">
       {/* Ações */}
@@ -229,6 +255,49 @@ export default function FollowupsPanel({ clientId, doc, direction }: Props) {
               ))}
             </ol>
           )}
+        </div>
+      )}
+
+      {/* Próximas tarefas — destaque das CALL_TASK pendentes com prazo, ordenadas
+          pela data mais próxima. Atalho de "concluir"/"registar" em cada uma. */}
+      {upcomingTasks.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-amber-800 uppercase tracking-wider">
+            <CalendarClock className="w-3.5 h-3.5" />
+            Próximas tarefas
+            <span className="ml-auto text-amber-600 font-normal normal-case">{upcomingTasks.length}</span>
+          </div>
+          <ul className="space-y-1.5">
+            {upcomingTasks.map((ev) => {
+              const rel = dueRelative(ev.dueAt!)
+              return (
+                <li key={`upcoming-${ev.id}`} className="flex items-center gap-2 rounded-lg bg-white border border-amber-100 px-2.5 py-1.5">
+                  <NotebookPen className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-gray-900 truncate">{ev.title ?? 'Tarefa'}</div>
+                    {ev.assignedTo && <div className="text-[10.5px] text-gray-400 truncate">atribuída a {ev.assignedTo.name}</div>}
+                  </div>
+                  <span className={`text-[10.5px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${dueToneCls[rel.tone]}`} title={`prazo: ${formatWhen(ev.dueAt!)}`}>
+                    {rel.label}
+                  </span>
+                  <button
+                    onClick={() => setShowLogCall({ taskId: ev.id })}
+                    className="text-[11px] text-emerald-600 hover:text-emerald-700 font-medium px-1.5 py-0.5 rounded hover:bg-emerald-50 flex-shrink-0"
+                    title="Registar chamada efetuada"
+                  >
+                    Registar
+                  </button>
+                  <button
+                    onClick={() => completeTask.mutate(ev.id)}
+                    className="text-gray-400 hover:text-gray-700 p-0.5 rounded hover:bg-gray-100 flex-shrink-0"
+                    title="Marcar concluída"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
         </div>
       )}
 
@@ -414,8 +483,8 @@ function ExpandedDetails({ ev, clientId, direction }: { ev: TimelineEvent; clien
 
   // Fetch categories and budgets to show names instead of ids
   const type = direction === 'RECEIVABLE' ? 'REVENUE' : 'EXPENSE'
-  const { data: categories = [] } = useQuery({ queryKey: ['followups-categories', clientId, type], queryFn: () => api.get(`/treasury/${clientId}/categories?type=${type}`), enabled: !!clientId })
-  const { data: budgets = [] } = useQuery({ queryKey: ['followups-budgets', clientId, type], queryFn: () => api.get(`/treasury/${clientId}/budgets?type=${type}&status=ACTIVE`), enabled: !!clientId })
+  const { data: categories = [] } = useQuery<{ id: string; name: string }[]>({ queryKey: ['followups-categories', clientId, type], queryFn: () => api.get(`/treasury/${clientId}/categories?type=${type}`), enabled: !!clientId })
+  const { data: budgets = [] } = useQuery<{ id: string; name: string }[]>({ queryKey: ['followups-budgets', clientId, type], queryFn: () => api.get(`/treasury/${clientId}/budgets?type=${type}&status=ACTIVE`), enabled: !!clientId })
 
   // Helper to render values more nicely
   const displayValue = (field: string, value: unknown) => {

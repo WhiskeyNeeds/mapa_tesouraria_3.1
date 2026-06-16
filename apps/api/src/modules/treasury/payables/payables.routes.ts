@@ -49,7 +49,12 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.get(`${prefix}/kpis`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.send(await svc.getKpis(clientId))
+    const q = request.query as { days?: string; all?: string }
+    const days = q.days ? parseInt(q.days) : undefined
+    return reply.send(await svc.getKpis(clientId, {
+      all: q.all === 'true',
+      days: days != null && Number.isFinite(days) ? days : undefined,
+    }))
   })
 
   fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
@@ -182,6 +187,13 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.bulkSetStatus(clientId, request.user.sub, ids, status))
   })
 
+  fastify.post(`${prefix}/bulk-delete`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids } = request.body as { ids: string[] }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    return reply.send(await svc.bulkDelete(clientId, request.user.sub, ids))
+  })
+
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const body = request.body as Parameters<TreasuryPayablesService['update']>[3]
@@ -234,9 +246,12 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.patch(`${prefix}/:id/ready-to-pay`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    const { ready } = request.body as { ready: boolean }
+    // promisedPaymentDate é opcional e só aplicado ao desmarcar (ready=false):
+    // string → define a data; null → repõe a data de vencimento; ausente → não toca.
+    // reason é o motivo (obrigatório quando se define uma nova data) — gera nota + tarefa.
+    const { ready, promisedPaymentDate, reason } = request.body as { ready: boolean; promisedPaymentDate?: string | null; reason?: string }
     if (typeof ready !== 'boolean') return reply.status(400).send({ message: 'Campo "ready" em falta' })
-    return reply.send(await svc.setReadyToPay(clientId, request.user.sub, id, ready))
+    return reply.send(await svc.setReadyToPay(clientId, request.user.sub, id, ready, promisedPaymentDate, reason))
   })
 
   fastify.post(`${prefix}/:id/split`, { onRequest: auth }, async (request, reply) => {

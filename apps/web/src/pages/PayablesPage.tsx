@@ -8,7 +8,7 @@ import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel } from '@/lib/utils'
 import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
 import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
-import KpiCard from '@/components/ui/KpiCard'
+import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import TocSyncStatus from '@/components/ui/TocSyncStatus'
@@ -18,9 +18,29 @@ import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
-import { Plus, ArrowUpFromLine, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye, Wallet } from 'lucide-react'
+import RemoveFromFuturePaymentsDialog from '@/components/treasury/RemoveFromFuturePaymentsDialog'
+import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, DollarSign, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye, Wallet, Tags, FileClock, AlertTriangle, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
+
+/** Separa o montante formatado do símbolo de moeda para os estilizar à parte. */
+function splitMoney(value: number): { amount: string; symbol: string } {
+  const s = formatCurrency(value)
+  const m = s.match(/^(.*?)[\s  ]*(€)[\s  ]*$/)
+  return m ? { amount: m[1].trim(), symbol: m[2] } : { amount: s, symbol: '' }
+}
+
+// Identidade visual de cada cartão de ação rápida: ícone semântico + paleta.
+// Espelha o de Contas a Receber, adaptado a compras (ex.: "A pagar esta semana").
+// Classes estáticas (literais) para o Tailwind as detetar no purge.
+const cardMeta = {
+  uncategorized: { label: 'Sem categoria', Icon: Tags, chip: 'bg-amber-100 text-amber-600', chipActive: 'bg-amber-500 text-white', chipRing: 'ring-amber-200', glow: 'bg-amber-300', bar: 'bg-amber-400', activeBg: 'bg-amber-50 border-amber-200', num: 'text-amber-700' },
+  unbudgeted: { label: 'Sem budget', Icon: Wallet, chip: 'bg-violet-100 text-violet-600', chipActive: 'bg-violet-500 text-white', chipRing: 'ring-violet-200', glow: 'bg-violet-300', bar: 'bg-violet-400', activeBg: 'bg-violet-50 border-violet-200', num: 'text-violet-700' },
+  pending: { label: 'Pendentes / Em aberto', Icon: FileClock, chip: 'bg-blue-100 text-blue-600', chipActive: 'bg-blue-500 text-white', chipRing: 'ring-blue-200', glow: 'bg-blue-300', bar: 'bg-blue-400', activeBg: 'bg-blue-50 border-blue-200', num: 'text-blue-700' },
+  overdue: { label: 'Vencidas', Icon: AlertTriangle, chip: 'bg-red-100 text-red-600', chipActive: 'bg-red-500 text-white', chipRing: 'ring-red-200', glow: 'bg-red-300', bar: 'bg-red-400', activeBg: 'bg-red-50 border-red-200', num: 'text-red-700' },
+  thisWeek: { label: 'A pagar esta semana', Icon: CalendarClock, chip: 'bg-teal-100 text-teal-600', chipActive: 'bg-teal-500 text-white', chipRing: 'ring-teal-200', glow: 'bg-teal-300', bar: 'bg-teal-400', activeBg: 'bg-teal-50 border-teal-200', num: 'text-teal-700' },
+  pastDeadline: { label: 'Passou prazo pagamento', Icon: TimerOff, chip: 'bg-orange-100 text-orange-600', chipActive: 'bg-orange-500 text-white', chipRing: 'ring-orange-200', glow: 'bg-orange-300', bar: 'bg-orange-400', activeBg: 'bg-orange-50 border-orange-200', num: 'text-orange-700' },
+} as const
 
 interface TocPurchaseDoc {
   id: number
@@ -79,6 +99,7 @@ interface Payable {
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   readyToPay?: boolean
+  needsContact?: boolean
   parentId?: string | null
   category?: { id: string; name: string; color: string } | null
   budget?: { id: string; name: string; color?: string | null } | null
@@ -332,9 +353,8 @@ export default function PayablesPage() {
   const [editRow, setEditRow] = useState<Payable | null>(null)
   const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
   const [deleteRow, setDeleteRow] = useState<Payable | null>(null)
-  const [partialId, setPartialId] = useState<string | null>(null)
-  const [partialAmount, setPartialAmount] = useState('')
-  const [partialMax, setPartialMax] = useState(0)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   // Seleção para atribuição de categoria em massa (âmbito: página visível).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -378,6 +398,7 @@ export default function PayablesPage() {
   const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
   const [panelSection, setPanelSection] = useState<null | 'promised' | 'split'>(null)
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
+  const [removeReadyOpen, setRemoveReadyOpen] = useState(false)
   const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
   const [splitCount, setSplitCount] = useState(2)
   const [splitValueMode, setSplitValueMode] = useState<'EUR' | 'PCT'>('EUR')
@@ -519,6 +540,7 @@ export default function PayablesPage() {
       qc.invalidateQueries({ queryKey: ['payables'] })
       qc.invalidateQueries({ queryKey: ['payables-kpis'] })
       setDeleteRow(null)
+      setPanelDoc((d) => d && deleteRow && d.id === deleteRow.id ? null : d)
       toast.success('Documento eliminado.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -526,7 +548,7 @@ export default function PayablesPage() {
 
   const voidPayable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/payables/${id}/void`, {}),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] }); toast.success('Documento anulado.') },
+    onSuccess: (_, id) => { qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] }); setPanelDoc((d) => d && d.id === id ? { ...d, status: 'VOID' } : d); toast.success('Documento anulado.') },
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -565,6 +587,18 @@ export default function PayablesPage() {
         ? `Estado aplicado a ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
         : `Estado aplicado a ${res.updated} documento(s).`)
       setSelectedIds(new Set())
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const bulkDeleteMut = useMutation({
+    mutationFn: (ids: string[]) =>
+      api.post<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/payables/bulk-delete`, { ids }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      toast.success(res.failed > 0
+        ? `Eliminados ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `${res.updated} documento(s) eliminado(s).`)
+      setSelectedIds(new Set()); setBulkDeleteOpen(false)
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -702,12 +736,7 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const partialPayment = useMutation({
-    mutationFn: ({ id, amount }: { id: string; amount: number }) =>
-      api.post(`/treasury/${selectedClientId}/payables/${id}/partial-payment`, { amount }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] }); setPartialId(null); setPartialAmount(''); toast.success('Pagamento parcial registado.') },
-    onError: (e) => toast.error((e as Error).message),
-  })
+
 
   const setPromisedDate = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string | null }) =>
@@ -722,11 +751,12 @@ export default function PayablesPage() {
   })
 
   const setReadyToPay = useMutation({
-    mutationFn: ({ id, ready }: { id: string; ready: boolean }) =>
-      api.patch(`/treasury/${selectedClientId}/payables/${id}/ready-to-pay`, { ready }),
-    onSuccess: (_, { ready }) => {
+    mutationFn: ({ id, ready, promisedPaymentDate, reason }: { id: string; ready: boolean; promisedPaymentDate?: string | null; reason?: string }) =>
+      api.patch(`/treasury/${selectedClientId}/payables/${id}/ready-to-pay`, { ready, promisedPaymentDate, reason }),
+    onSuccess: (_, { ready, promisedPaymentDate }) => {
       qc.invalidateQueries({ queryKey: ['payables'] })
-      setPanelDoc((d) => d ? { ...d, readyToPay: ready } : d)
+      setPanelDoc((d) => d ? { ...d, readyToPay: ready, ...(promisedPaymentDate !== undefined ? { promisedPaymentDate } : {}) } : d)
+      setRemoveReadyOpen(false)
       toast.success(ready ? 'Adicionada a Futuros Pagamentos.' : 'Removida de Futuros Pagamentos.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -894,6 +924,15 @@ export default function PayablesPage() {
       >
         Reverter p/ Em Aberto
       </button>
+      <span className="w-px h-5 bg-primary-200" />
+      <button
+        className="inline-flex items-center gap-1.5 text-sm py-1.5 px-3 rounded-lg border border-red-200 bg-white text-red-600 font-medium hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        disabled={bulkDeleteMut.isPending}
+        onClick={() => setBulkDeleteOpen(true)}
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+        Eliminar
+      </button>
       <button className="text-sm text-gray-500 hover:text-gray-700" onClick={() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkBudgetId('') }}>Limpar seleção</button>
     </div>
   )
@@ -933,6 +972,19 @@ export default function PayablesPage() {
     ...kpis,
     countOpen: Math.max(0, kpis.countOpen - kpis.countOverdue),
   } : null
+  // Valor "Pago" por janela seleccionável (Tudo / 30d / 60d / 90d). Default 30d.
+  const [paidDays, setPaidDays] = useState<number | 'ALL'>(30)
+  const { data: kpisRange } = useQuery({
+    // Aninhada sob 'payables-kpis' para que as invalidações de pagar/liquidar/
+    // reconciliar (que invalidam ['payables-kpis']) refresquem também esta janela.
+    queryKey: ['payables-kpis', selectedClientId, 'range', paidDays],
+    queryFn: () => {
+      const qs = paidDays === 'ALL' ? 'all=true' : `days=${paidDays}`
+      return api.get<{ paidThisMonth: number }>(`/treasury/${selectedClientId}/payables/kpis?${qs}`)
+    },
+    enabled: !!selectedClientId,
+  })
+  const displayedPaid = kpisRange?.paidThisMonth ?? combinedKpis?.paidThisMonth ?? 0
 
   const isClosed = (status: string) => status === 'PAID' || status === 'SETTLED' || status === 'VOID'
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
@@ -992,42 +1044,92 @@ export default function PayablesPage() {
             </div>
 
             {combinedKpis && (
-              <>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  <KpiCard title="Total Pendente" value={formatCurrency(combinedKpis.totalPending)} icon={<ArrowUpFromLine className="w-6 h-6 text-red-500" />} />
-                  <KpiCard title="Em aberto" value={String(combinedKpis.countOpen)} />
-                  <KpiCard
-                    title="Vencidas"
-                    value={String(combinedKpis.countOverdue)}
-                    className={combinedKpis.countOverdue > 0 ? 'border-red-200' : ''}
-                  />
-                  <KpiCard title="Pago este mês" value={formatCurrency(combinedKpis.paidThisMonth)} />
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                {/* Cartões de ação rápida (filtros): grelha 3×2 com ícone semântico,
+                    barra de acento e micro-interação de hover/estado ativo. */}
+                <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-3 gap-3 content-start">
+                  {kpis?.cards && ([
+                    ['uncategorized', kpis.cards.uncategorized],
+                    ['unbudgeted', kpis.cards.unbudgeted],
+                    ['pending', kpis.cards.pending],
+                    ['overdue', kpis.cards.overdue],
+                    ['thisWeek', kpis.cards.dueThisWeek],
+                    ['pastDeadline', kpis.cards.pastPaymentDeadline],
+                  ] as const).map(([key, count], i) => {
+                    const c = cardMeta[key]
+                    const active = activeCard === key
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => applyCard(key)}
+                        style={{ animationDelay: `${i * 45}ms` }}
+                        title={active ? 'Clique para limpar o filtro' : `Filtrar: ${c.label}`}
+                        className={`group relative overflow-hidden rounded-xl border px-3.5 py-3 text-left flex items-center gap-3 animate-fade-in transition-all duration-200 ${active ? `${c.activeBg} shadow-card-md` : 'bg-white border-gray-100 hover:-translate-y-0.5 hover:shadow-card-md hover:border-gray-200'}`}
+                      >
+                        {/* Glow de canto na cor semântica — discreto em repouso, intensifica no hover/activo. */}
+                        <span className={`pointer-events-none absolute -top-7 -right-5 h-20 w-20 rounded-full ${c.glow} blur-2xl transition-opacity duration-300 ${active ? 'opacity-25' : 'opacity-0 group-hover:opacity-20'}`} />
+                        {/* Barra de acento sempre presente (ténue), cresce no hover/activo. */}
+                        <span className={`absolute inset-y-0 left-0 w-1 ${c.bar} transition-all duration-200 ${active ? 'opacity-100' : 'opacity-30 group-hover:opacity-80'}`} />
+                        <span className={`relative w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ring-1 ring-inset transition-all duration-200 ${active ? `${c.chipActive} ring-transparent shadow-sm` : `${c.chip} ${c.chipRing} group-hover:scale-105`}`}>
+                          <c.Icon className="w-4 h-4" strokeWidth={2.2} />
+                        </span>
+                        <div className="relative min-w-0 flex-1">
+                          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-gray-400 leading-tight truncate">{c.label}</div>
+                          <div className={`text-xl font-bold tabular-nums tracking-tight leading-snug transition-colors duration-200 ${active ? c.num : 'text-gray-900'}`}>{count}</div>
+                        </div>
+                        {active && (
+                          <span className="absolute top-1.5 right-1.5 text-gray-300 group-hover:text-gray-500 transition-colors">
+                            <X className="w-3.5 h-3.5" />
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
-                {kpis?.cards && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                    {([
-                      ['uncategorized', 'Sem categoria', kpis.cards.uncategorized],
-                      ['unbudgeted', 'Sem budget', kpis.cards.unbudgeted],
-                      ['pending', 'Pendentes / Em aberto', kpis.cards.pending],
-                      ['overdue', 'Vencidas', kpis.cards.overdue],
-                      ['thisWeek', 'A pagar esta semana', kpis.cards.dueThisWeek],
-                      ['pastDeadline', 'Passou prazo pagamento', kpis.cards.pastPaymentDeadline],
-                    ] as const).map(([key, label, count]) => {
-                      const active = activeCard === key
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => applyCard(key)}
-                          className={`rounded-xl border px-3 py-2 text-left flex items-center justify-between gap-2 transition-all ${active ? 'border-primary-300 bg-primary-50 shadow-sm' : 'border-gray-100 bg-white hover:border-gray-200 hover:shadow-card-md'}`}
-                        >
-                          <span className="text-[11px] font-medium text-gray-500 leading-tight">{label}</span>
-                          <span className={`text-lg font-bold tabular-nums ${active ? 'text-primary-700' : 'text-gray-900'}`}>{count}</span>
-                        </button>
-                      )
-                    })}
+
+                {/* Cartão-herói: Total Pendente + Pago (janela seleccionável). Em lg
+                    fica absoluto a preencher a célula → altura = 2 cartões empilhados. */}
+                <div className="relative animate-fade-in" style={{ animationDelay: '120ms' }}>
+                  {/* Superfície slate profunda (ecoa a sidebar) com acento esmeralda
+                      para o valor realizado. */}
+                  <div className="group relative lg:absolute lg:inset-0 overflow-hidden rounded-2xl px-4 py-3.5 flex flex-col justify-between text-white shadow-card-lg ring-1 ring-inset ring-white/10 bg-[radial-gradient(130%_130%_at_100%_0%,#13294a_0%,#0f172a_42%,#0a0f1d_100%)]">
+                    {/* Atmosfera: brilho esmeralda, profundidade fria oposta, grão, hairline e reflexo */}
+                    <div className="pointer-events-none absolute -top-16 -right-12 h-48 w-48 rounded-full bg-emerald-400/20 blur-3xl transition-colors duration-500 group-hover:bg-emerald-400/30" />
+                    <div className="pointer-events-none absolute -bottom-20 -left-12 h-48 w-48 rounded-full bg-blue-900/40 blur-3xl" />
+                    <div className="pointer-events-none absolute inset-0 opacity-[0.05]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #fff 1px, transparent 0)', backgroundSize: '14px 14px' }} />
+                    <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+                    <span className="pointer-events-none absolute -bottom-7 -right-1 text-[7.5rem] font-black leading-none text-white/[0.035] select-none">€</span>
+                    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                      <div className="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-sheen" />
+                    </div>
+
+                    {/* Total pendente */}
+                    <div className="relative">
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-1 w-4 rounded-full bg-gradient-to-r from-emerald-400 to-emerald-400/0" />
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">Total pendente</p>
+                      </div>
+                      <div className="mt-1 flex items-baseline gap-1.5">
+                        <span className="text-[1.7rem] sm:text-[1.85rem] font-bold tracking-tight tabular-nums leading-none bg-gradient-to-b from-white to-white/75 bg-clip-text text-transparent">{splitMoney(combinedKpis.totalPending).amount}</span>
+                        <span className="text-sm font-semibold text-white/40">{splitMoney(combinedKpis.totalPending).symbol}</span>
+                      </div>
+                    </div>
+
+                    {/* Pago + selector de janela */}
+                    <div className="relative">
+                      <div className="h-px bg-gradient-to-r from-white/0 via-white/15 to-white/0" />
+                      <div className="mt-2.5 flex items-center justify-between gap-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-white/55">Pago</p>
+                        <ReceivedPeriodToggle value={paidDays} onChange={setPaidDays} />
+                      </div>
+                      <div className="mt-1.5 flex items-baseline gap-1.5">
+                        <span key={displayedPaid} className="text-[1.3rem] sm:text-[1.4rem] font-bold tracking-tight tabular-nums leading-none text-emerald-300 animate-value-in">{splitMoney(displayedPaid).amount}</span>
+                        <span className="text-[13px] font-semibold text-emerald-300/50">{splitMoney(displayedPaid).symbol}</span>
+                      </div>
+                    </div>
                   </div>
-                )}
-              </>
+                </div>
+              </div>
             )}
 
             {/* Tabs */}
@@ -1147,7 +1249,7 @@ export default function PayablesPage() {
                           </th>
                           <th className="text-left px-3 py-3">Categoria</th>
                           <th className="text-left px-3 py-3">Budget</th>
-                          <th className="w-16 px-3 py-3" />
+                          <th className="w-48 px-3 py-3" />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
@@ -1166,7 +1268,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} />
+                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} needsContact={p.needsContact} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div>
@@ -1242,78 +1344,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                      title="Editar"
-                                      onClick={() => {
-                                        setEditId(p.id)
-                                        setEditRow(p)
-                                        setEditForm({
-                                          categoryId: p.category?.id ?? '',
-                                          entityName: p.entityName,
-                                          reference: p.reference,
-                                          documentDate: p.documentDate?.slice(0, 10) ?? '',
-                                          dueDate: p.dueDate.slice(0, 10),
-                                          totalAmount: String(p.totalAmount),
-                                          description: p.description ?? '',
-                                        })
-                                      }}
-                                      className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                                    >
-                                      <Pencil className="w-3.5 h-3.5" />
-                                    </button>
-                                    {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
-                                      <button
-                                        title="Pagamento parcial"
-                                        onClick={() => { setPartialId(p.id); setPartialAmount(''); setPartialMax(Number(p.pendingAmount)) }}
-                                        className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                      >
-                                        <DollarSign className="w-3.5 h-3.5" />
-                                      </button>
-                                    )}
-                                    {(p.status === 'OPEN' || p.status === 'PARTIAL') && (() => {
-                                      const isFutureRec = !!(p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd)
-                                      return (
-                                        <button
-                                          title={isFutureRec ? 'Recorrência futura — só pode ser paga a partir da data de vencimento' : 'Marcar como pago'}
-                                          onClick={() => { if (!isFutureRec) payPayable.mutate(p.id) }}
-                                          disabled={isFutureRec}
-                                          className="p-1 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
-                                        >
-                                          <CreditCard className="w-3.5 h-3.5" />
-                                        </button>
-                                      )
-                                    })()}
-                                    {p.origin !== 'TOCONLINE' && (p.status === 'OPEN' || p.status === 'PARTIAL' || p.status === 'PAID') && (() => {
-                                      const isFutureRec = !!(p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd)
-                                      return (
-                                        <button
-                                          title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : 'Marcar como liquidada'}
-                                          onClick={() => { if (!isFutureRec) settlePayable.mutate(p.id) }}
-                                          disabled={isFutureRec}
-                                          className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
-                                        >
-                                          <CheckCircle className="w-3.5 h-3.5" />
-                                        </button>
-                                      )
-                                    })()}
-                                    {p.status !== 'VOID' && p.status !== 'SETTLED' && (
-                                      <button
-                                        title="Anular"
-                                        onClick={() => voidPayable.mutate(p.id)}
-                                        className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                                      >
-                                        <XCircle className="w-3.5 h-3.5" />
-                                      </button>
-                                    )}
-                                    <button
-                                      title="Eliminar"
-                                      onClick={() => setDeleteRow(p)}
-                                      className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
+                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </td>
                               </tr>
                             )
@@ -1356,7 +1387,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(row.item.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={row.item.readyToPay} />
+                                  <DocLabels splitCount={(row.item.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={row.item.readyToPay} needsContact={row.item.needsContact} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div className="flex items-start gap-1.5">
@@ -1615,7 +1646,7 @@ export default function PayablesPage() {
                           <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                           <th className="text-left px-3 py-3">Categoria</th>
                           <th className="text-left px-3 py-3">Budget</th>
-                          <th className="w-16 px-3 py-3" />
+                          <th className="w-48 px-3 py-3" />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
@@ -1641,7 +1672,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-2 py-3 align-top whitespace-nowrap">
-                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} />
+                                  <DocLabels splitCount={(p.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={p.readyToPay} needsContact={p.needsContact} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
                                   <div>
@@ -1697,52 +1728,7 @@ export default function PayablesPage() {
                                   />
                                 </td>
                                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                      title="Editar"
-                                      onClick={() => {
-                                        setEditId(p.id)
-                                        setEditRow(p)
-                                        setEditForm({
-                                          categoryId: p.category?.id ?? '',
-                                          entityName: p.entityName,
-                                          reference: p.reference,
-                                          documentDate: p.documentDate?.slice(0, 10) ?? '',
-                                          dueDate: p.dueDate.slice(0, 10),
-                                          totalAmount: String(p.totalAmount),
-                                          description: p.description ?? '',
-                                        })
-                                      }}
-                                      className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                                    >
-                                      <Pencil className="w-3.5 h-3.5" />
-                                    </button>
-                                    {(p.status === 'OPEN' || p.status === 'PARTIAL') && (
-                                      <button
-                                        title="Pagamento parcial"
-                                        onClick={() => { setPartialId(p.id); setPartialAmount(''); setPartialMax(Number(p.pendingAmount)) }}
-                                        className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                      >
-                                        <DollarSign className="w-3.5 h-3.5" />
-                                      </button>
-                                    )}
-                                    {p.status !== 'VOID' && p.status !== 'SETTLED' && (
-                                      <button
-                                        title="Anular"
-                                        onClick={() => voidPayable.mutate(p.id)}
-                                        className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                                      >
-                                        <XCircle className="w-3.5 h-3.5" />
-                                      </button>
-                                    )}
-                                    <button
-                                      title="Eliminar"
-                                      onClick={() => setDeleteRow(p)}
-                                      className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
+                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </td>
                               </tr>
                             )
@@ -1761,39 +1747,7 @@ export default function PayablesPage() {
               </div>
             )}
 
-            <Modal open={!!partialId} onClose={() => { setPartialId(null); setPartialAmount('') }} title="Registar Pagamento Parcial">
-              <div className="space-y-4">
-                <p className="text-sm text-gray-600">
-                  Valor pendente: <span className="font-semibold text-gray-900">{formatCurrency(partialMax)}</span>
-                </p>
-                <div>
-                  <label className="label">Valor pago (€)</label>
-                  <input
-                    type="number"
-                    min="0.01"
-                    max={partialMax}
-                    step="0.01"
-                    className="input"
-                    value={partialAmount}
-                    onChange={(e) => setPartialAmount(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-                <div className="flex gap-3 pt-2">
-                  <button onClick={() => { setPartialId(null); setPartialAmount('') }} className="btn-secondary flex-1">Cancelar</button>
-                  <button
-                    onClick={() => {
-                      const amt = parseFloat(partialAmount)
-                      if (partialId && amt > 0) partialPayment.mutate({ id: partialId, amount: amt })
-                    }}
-                    className="btn-primary flex-1"
-                    disabled={partialPayment.isPending || !partialAmount || parseFloat(partialAmount) <= 0}
-                  >
-                    {partialPayment.isPending ? 'A guardar...' : 'Registar'}
-                  </button>
-                </div>
-              </div>
-            </Modal>
+
 
             <Modal open={!!editId} onClose={() => { setEditId(null); setEditRow(null) }} title="Editar Conta a Pagar" size="lg">
               <div className="grid grid-cols-2 gap-4">
@@ -1885,6 +1839,27 @@ export default function PayablesPage() {
                     disabled={deletePayable.isPending}
                   >
                     {deletePayable.isPending ? 'A eliminar...' : 'Eliminar'}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+
+            <Modal open={bulkDeleteOpen} onClose={() => setBulkDeleteOpen(false)} title="Eliminar documentos">
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Vão ser permanentemente eliminados <span className="font-semibold text-gray-900">{selectedIds.size}</span> documento(s) selecionado(s). Esta acção não pode ser revertida.
+                </p>
+                {bulkDeleteMut.isError && (
+                  <p className="text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(bulkDeleteMut.error as Error).message}</p>
+                )}
+                <div className="flex gap-3 pt-2">
+                  <button onClick={() => setBulkDeleteOpen(false)} className="btn-secondary flex-1">Cancelar</button>
+                  <button
+                    onClick={() => bulkDeleteMut.mutate([...selectedIds])}
+                    className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-50 transition-colors"
+                    disabled={bulkDeleteMut.isPending}
+                  >
+                    {bulkDeleteMut.isPending ? 'A eliminar...' : `Eliminar ${selectedIds.size}`}
                   </button>
                 </div>
               </div>
@@ -2235,7 +2210,49 @@ export default function PayablesPage() {
                   )}
                   <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Conta a Pagar</div>
                 </div>
-                <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
+                <div className="flex flex-col items-end gap-2">
+                  <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"><X className="w-4 h-4" /></button>
+                  {panelDoc.origin !== 'TOCONLINE' && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        title="Editar"
+                        onClick={() => {
+                          setEditId(panelDoc.id)
+                          setEditRow(panelDoc)
+                          setEditForm({
+                            categoryId: panelDoc.category?.id ?? '',
+                            entityName: panelDoc.entityName,
+                            reference: panelDoc.reference,
+                            documentDate: panelDoc.documentDate?.slice(0, 10) ?? '',
+                            dueDate: panelDoc.dueDate.slice(0, 10),
+                            totalAmount: String(panelDoc.totalAmount),
+                            description: panelDoc.description ?? '',
+                          })
+                        }}
+                        className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      {panelDoc.status !== 'VOID' && panelDoc.status !== 'SETTLED' && (
+                        <button
+                          title="Anular"
+                          onClick={() => voidPayable.mutate(panelDoc.id)}
+                          disabled={voidPayable.isPending}
+                          className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        title="Eliminar"
+                        onClick={() => setDeleteRow(panelDoc)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-2xl font-bold text-gray-900">{formatCurrency(panelDoc.totalAmount)}</div>
@@ -2434,28 +2451,40 @@ export default function PayablesPage() {
                     )
                   })()}
 
-                  {/* Pronta para Pagar — toggle do separador Futuros Pagamentos */}
-                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (
-                    <button
-                      onClick={() => setReadyToPay.mutate({ id: panelDoc.id, ready: !panelDoc.readyToPay })}
-                      disabled={setReadyToPay.isPending}
-                      className={`w-full flex items-center gap-3 p-3.5 rounded-xl border text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed ${panelDoc.readyToPay
-                        ? 'border-teal-300 bg-teal-50 hover:bg-teal-100'
-                        : 'border-gray-200 hover:bg-teal-50 hover:border-teal-200'
-                        }`}
-                    >
-                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${panelDoc.readyToPay ? 'bg-teal-200' : 'bg-teal-100 group-hover:bg-teal-200'}`}>
-                        <Wallet className="w-4 h-4 text-teal-700" />
-                      </div>
-                      <div>
-                        <div className="font-medium text-gray-900 text-sm">
-                          {panelDoc.readyToPay ? 'Remover de Futuros Pagamentos' : 'Pronta para Pagar'}
+                  {/* Pronta para Pagar — toggle do separador Futuros Pagamentos (só em aberto) */}
+                  {panelDoc.status === 'OPEN' && (
+                    <>
+                      <button
+                        onClick={() => panelDoc.readyToPay ? setRemoveReadyOpen(true) : setReadyToPay.mutate({ id: panelDoc.id, ready: true })}
+                        disabled={setReadyToPay.isPending}
+                        className={`w-full flex items-center gap-3 p-3.5 rounded-xl border text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed ${panelDoc.readyToPay
+                          ? 'border-teal-300 bg-teal-50 hover:bg-teal-100'
+                          : 'border-gray-200 hover:bg-teal-50 hover:border-teal-200'
+                          }`}
+                      >
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${panelDoc.readyToPay ? 'bg-teal-200' : 'bg-teal-100 group-hover:bg-teal-200'}`}>
+                          <Wallet className="w-4 h-4 text-teal-700" />
                         </div>
-                        <div className="text-xs text-gray-500">
-                          {panelDoc.readyToPay ? 'Marcada — consta de Futuros Pagamentos' : 'Adicionar a Futuros Pagamentos'}
+                        <div>
+                          <div className="font-medium text-gray-900 text-sm">
+                            {panelDoc.readyToPay ? 'Remover de Futuros Pagamentos' : 'Pronta para Pagar'}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {panelDoc.readyToPay ? 'Marcada — consta de Futuros Pagamentos' : 'Adicionar a Futuros Pagamentos'}
+                          </div>
                         </div>
-                      </div>
-                    </button>
+                      </button>
+                      {panelDoc.readyToPay && removeReadyOpen && (
+                        <RemoveFromFuturePaymentsDialog
+                          currentPromisedDate={panelDoc.promisedPaymentDate}
+                          dueDate={panelDoc.dueDate}
+                          pending={setReadyToPay.isPending}
+                          onConfirm={(date, reason) => setReadyToPay.mutate({ id: panelDoc.id, ready: false, promisedPaymentDate: date, reason })}
+                          onCancel={() => setRemoveReadyOpen(false)}
+                          pickWorkday={pickWorkday}
+                        />
+                      )}
+                    </>
                   )}
 
                   {/* Data prometida — bloqueada em faturas pagas/liquidadas */}

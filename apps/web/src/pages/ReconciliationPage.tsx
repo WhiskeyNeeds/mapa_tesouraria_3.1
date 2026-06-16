@@ -49,8 +49,8 @@ interface RecHistoryItem {
   createdAt: string; direction: string; reversedAt?: string; reversedReason?: string
   createdBy: { name: string }
   movements: Array<{ amount: number; movement: { id: string; date: string; amount: number; description: string; bankAccount?: { id: string; name: string } | null } }>
-  receivables: Array<{ amountAllocated: number; receivable: { id: string; reference: string; entityName: string } }>
-  payables: Array<{ amountAllocated: number; payable: { id: string; reference: string; entityName: string } }>
+  receivables: Array<{ amountAllocated: number; receivable: { id: string; reference: string; entityName: string; documentDate?: string | null; dueDate?: string | null } }>
+  payables: Array<{ amountAllocated: number; payable: { id: string; reference: string; entityName: string; documentDate?: string | null; dueDate?: string | null } }>
 }
 
 // ── Filter helpers ─────────────────────────────────────────────────────────────
@@ -944,6 +944,11 @@ export default function ReconciliationPage() {
             const uniqueAccounts = Array.from(
               new Map(rec.movements.flatMap((l) => l.movement.bankAccount ? [[l.movement.bankAccount.id, l.movement.bankAccount.name]] : [])).entries()
             ).map(([, name]) => name)
+            // Nº das faturas reconciliadas (N-para-N: associadas a todos os movimentos desta reconciliação).
+            const docRefs = [
+              ...rec.receivables.map((l) => l.receivable.reference),
+              ...rec.payables.map((l) => l.payable.reference),
+            ].filter((r): r is string => !!r)
             return (
               <div key={rec.id}>
                 <div
@@ -1002,6 +1007,10 @@ export default function ReconciliationPage() {
                               {link.movement.bankAccount && (
                                 <span className="ml-1.5 text-[11px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full font-medium">{link.movement.bankAccount.name}</span>
                               )}
+                              <div className="text-[11px] text-gray-400">{formatDate(link.movement.date)}</div>
+                              {docRefs.length > 0 && (
+                                <div className="text-[11px] text-gray-500 truncate">Fat.: {docRefs.join(', ')}</div>
+                              )}
                             </div>
                             <span className={`font-semibold whitespace-nowrap ${Number(link.movement.amount) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
                               {Number(link.movement.amount) >= 0 ? '+' : '−'}{formatCurrency(Math.abs(Number(link.movement.amount)))}
@@ -1015,19 +1024,33 @@ export default function ReconciliationPage() {
                       <div className="space-y-1.5">
                         {rec.receivables.map((link) => (
                           <div key={link.receivable.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
-                            <span className="truncate mr-2">
+                            <div className="truncate mr-2 min-w-0">
                               <span className="text-emerald-700 font-bold mr-1 text-[10px]">CR</span>
                               {link.receivable.reference} · {link.receivable.entityName}
-                            </span>
+                              {(link.receivable.documentDate || link.receivable.dueDate) && (
+                                <div className="text-[11px] text-gray-400">
+                                  {link.receivable.documentDate && <>Doc. {formatDate(link.receivable.documentDate)}</>}
+                                  {link.receivable.documentDate && link.receivable.dueDate && ' · '}
+                                  {link.receivable.dueDate && <>Venc. {formatDate(link.receivable.dueDate)}</>}
+                                </div>
+                              )}
+                            </div>
                             <span className="font-semibold text-emerald-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
                           </div>
                         ))}
                         {rec.payables.map((link) => (
                           <div key={link.payable.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
-                            <span className="truncate mr-2">
+                            <div className="truncate mr-2 min-w-0">
                               <span className="text-red-700 font-bold mr-1 text-[10px]">CP</span>
                               {link.payable.reference} · {link.payable.entityName}
-                            </span>
+                              {(link.payable.documentDate || link.payable.dueDate) && (
+                                <div className="text-[11px] text-gray-400">
+                                  {link.payable.documentDate && <>Doc. {formatDate(link.payable.documentDate)}</>}
+                                  {link.payable.documentDate && link.payable.dueDate && ' · '}
+                                  {link.payable.dueDate && <>Venc. {formatDate(link.payable.dueDate)}</>}
+                                </div>
+                              )}
+                            </div>
                             <span className="font-semibold text-red-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
                           </div>
                         ))}

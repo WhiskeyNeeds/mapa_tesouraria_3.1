@@ -8,6 +8,8 @@ import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 import { compareDocs } from '../../../lib/doc-sort.js'
+import { computeNextInternalReference, internalReferencePrefix } from '../../../lib/internal-reference.js'
+import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
 
 interface ReceivableListItem {
   id: string
@@ -569,26 +571,41 @@ export class TreasuryReceivablesService {
       recurrenceId = rec.id
     }
 
-    const created = await this.prisma.treasuryReceivable.create({
-      data: {
-        clientId,
-        createdById: userId,
-        origin: category?.launchToc ? 'TOCONLINE' : 'LOCAL',
-        totalAmount: data.totalAmount,
-        pendingAmount: data.recurrence ? 0 : data.totalAmount,
-        documentDate: data.documentDate ? new Date(data.documentDate) : null,
-        dueDate: new Date(data.dueDate),
-        currency: data.currency ?? 'EUR',
-        categoryId: data.categoryId,
-        entityName: data.entityName ?? null,
-        entityNif: data.entityNif,
-        tocCustomerId: data.tocCustomerId,
-        tocSalesDocId: data.tocSalesDocId,
-        reference: data.reference ?? null,
-        description: data.description,
-        recurrenceId,
-        ...(resolvedBudgetId ? { budgetId: resolvedBudgetId, budgetAutoAssigned } : {}),
-      },
+    const origin: TreasuryDocOrigin = category?.launchToc ? 'TOCONLINE' : 'LOCAL'
+    const created = await this.prisma.$transaction(async (tx) => {
+      // Faturas criadas localmente (origin LOCAL, não recorrência-template) recebem
+      // sempre numeração interna INT{ano}/{n}, ignorando referência manual. Docs TOC
+      // mantêm a referência do TOConline; templates de recorrência ficam fora.
+      let reference = data.reference ?? null
+      if (origin === 'LOCAL' && !data.recurrence) {
+        const year = new Date().getFullYear()
+        const existing = await tx.treasuryReceivable.findMany({
+          where: { clientId, reference: { startsWith: internalReferencePrefix(year) } },
+          select: { reference: true },
+        })
+        reference = computeNextInternalReference(existing.map((e) => e.reference), year)
+      }
+      return tx.treasuryReceivable.create({
+        data: {
+          clientId,
+          createdById: userId,
+          origin,
+          totalAmount: data.totalAmount,
+          pendingAmount: data.recurrence ? 0 : data.totalAmount,
+          documentDate: data.documentDate ? new Date(data.documentDate) : null,
+          dueDate: new Date(data.dueDate),
+          currency: data.currency ?? 'EUR',
+          categoryId: data.categoryId,
+          entityName: data.entityName ?? null,
+          entityNif: data.entityNif,
+          tocCustomerId: data.tocCustomerId,
+          tocSalesDocId: data.tocSalesDocId,
+          reference,
+          description: data.description,
+          recurrenceId,
+          ...(resolvedBudgetId ? { budgetId: resolvedBudgetId, budgetAutoAssigned } : {}),
+        },
+      })
     })
 
     await audit(this.prisma, {
@@ -802,6 +819,23 @@ export class TreasuryReceivablesService {
     return { updated, failed: errors.length, errors }
   }
 
+  /** Eliminação em massa. Despacha cada documento para `delete`, herdando o
+   *  soft-delete, cascata de recorrências e auditoria. Resiliente: falhas
+   *  individuais são apanhadas e não abortam os restantes. */
+  async bulkDelete(clientId: string, userId: string, ids: string[]) {
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        await this.delete(clientId, userId, id)
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
   private async syncParentStatus(clientId: string, parentId: string) {
     const children = await this.prisma.treasuryReceivable.findMany({
       where: { parentId, deletedAt: null, recurrenceId: null },
@@ -977,6 +1011,17 @@ export class TreasuryReceivablesService {
         entityType: 'Receivable', entityId: id,
         payload: { from: item.status, to: 'OPEN', cascadedChildren: settledChildren.length },
       })
+      // Anular o pagamento também reverte (parcialmente) a reconciliação: desliga
+      // apenas esta fatura, mantendo os restantes documentos/movimentos.
+      const detached = await detachDocFromConfirmedReconciliations(tx, clientId, userId, 'receivable', id)
+      if (detached.reconciliations > 0) {
+        await audit(tx, {
+          clientId, userId,
+          action: 'receivable.reconcile_reverse',
+          entityType: 'Receivable', entityId: id,
+          payload: { amount: detached.amount, reconciliations: detached.reconciliations, partial: true },
+        })
+      }
       return parent
     })
     if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
@@ -1013,14 +1058,16 @@ export class TreasuryReceivablesService {
   }
 
   async void(clientId: string, userId: string, id: string) {
+    // Faturas do TOConline não podem ser anuladas na app: o seu ciclo de vida
+    // (incl. anulação) é gerido no TOConline e refletido via sync. Bloqueia antes
+    // de `resolveLocalReceivableId` para não criar uma anotação local desnecessária.
+    if (id.startsWith('toc-')) {
+      throw httpError(409, 'Faturas do TOConline não podem ser anuladas na app — a anulação tem de ser feita no TOConline.')
+    }
     id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
-    // Faturas liquidadas no TOConline (recibo emitido, status 3) refletem a
-    // contabilidade — não podem ser anuladas aqui (o status local fica OPEN, a
-    // liquidação vive no espelho TOC). A anulação tem de ser feita no TOConline.
-    const tocOverlay = (item as { _tocOverlay?: { status?: number | null } | null })._tocOverlay
-    if (item.tocSalesDocId && mapTocStatus(tocOverlay?.status ?? null) === 'SETTLED') {
-      throw httpError(409, 'Fatura liquidada no TOConline (recibo emitido) — não é possível anulá-la aqui.')
+    if (item.tocSalesDocId) {
+      throw httpError(409, 'Faturas do TOConline não podem ser anuladas na app — a anulação tem de ser feita no TOConline.')
     }
     if (item.status === 'SETTLED') throw httpError(409, 'Cannot void a settled receivable')
     const result = await this.prisma.treasuryReceivable.update({ where: { id }, data: { status: 'VOID', settledAt: null } })

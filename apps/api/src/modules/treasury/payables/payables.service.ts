@@ -8,6 +8,8 @@ import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 import { compareDocs } from '../../../lib/doc-sort.js'
+import { computeNextInternalReference, internalReferencePrefix } from '../../../lib/internal-reference.js'
+import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
 
 interface PayableListItem {
   id: string
@@ -26,6 +28,8 @@ interface PayableListItem {
   parentId: string | null
   promisedPaymentDate: Date | null
   readyToPay: boolean
+  /** Tem tarefa de contacto pendente (CALL_TASK PENDING) — mostra ícone "Contatar Cliente". */
+  needsContact?: boolean
   category: { id: string; name: string; color: string | null; launchToc: boolean } | null
   budget: { id: string; name: string; color: string | null } | null
   children: unknown[]
@@ -302,6 +306,19 @@ export class TreasuryPayablesService {
     const total = allItems.length
     const items = allItems.slice((page - 1) * limit, page * limit)
 
+    // Sinaliza as faturas (da página atual) com tarefa de contacto pendente
+    // (CALL_TASK PENDING) — o frontend mostra o ícone "Contatar Cliente". Só os
+    // ids locais (cuid) têm follow-ups; itens TOC puros (id `toc-…`) nunca casam.
+    const localIds = items.map((i) => i.id).filter((id) => !id.startsWith('toc-'))
+    if (localIds.length > 0) {
+      const pendingTasks = await this.prisma.treasuryFollowup.findMany({
+        where: { clientId, payableId: { in: localIds }, kind: 'CALL_TASK', status: 'PENDING' },
+        select: { payableId: true },
+      })
+      const needsContactIds = new Set(pendingTasks.map((t) => t.payableId))
+      for (const item of items) item.needsContact = needsContactIds.has(item.id)
+    }
+
     return { total, page, limit, items }
   }
 
@@ -503,27 +520,42 @@ export class TreasuryPayablesService {
       recurrenceId = rec.id
     }
 
-    const created = await this.prisma.treasuryPayable.create({
-      data: {
-        clientId,
-        createdById: userId,
-        origin: category?.launchToc ? 'TOCONLINE' : 'LOCAL',
-        totalAmount: data.totalAmount,
-        // Template roots have pendingAmount=0; actual transactions are the children
-        pendingAmount: data.recurrence ? 0 : data.totalAmount,
-        documentDate: data.documentDate ? new Date(data.documentDate) : null,
-        dueDate: new Date(data.dueDate),
-        currency: data.currency ?? 'EUR',
-        categoryId: data.categoryId,
-        entityName: data.entityName ?? null,
-        entityNif: data.entityNif,
-        tocSupplierId: data.tocSupplierId,
-        tocPurchasesDocId: data.tocPurchasesDocId,
-        reference: data.reference ?? null,
-        description: data.description,
-        recurrenceId,
-        ...(resolvedBudgetId ? { budgetId: resolvedBudgetId, budgetAutoAssigned } : {}),
-      },
+    const origin: TreasuryDocOrigin = category?.launchToc ? 'TOCONLINE' : 'LOCAL'
+    const created = await this.prisma.$transaction(async (tx) => {
+      // Faturas criadas localmente (origin LOCAL, não recorrência-template) recebem
+      // sempre numeração interna INT{ano}/{n}, ignorando referência manual. Docs TOC
+      // mantêm a referência do TOConline; templates de recorrência ficam fora.
+      let reference = data.reference ?? null
+      if (origin === 'LOCAL' && !data.recurrence) {
+        const year = new Date().getFullYear()
+        const existing = await tx.treasuryPayable.findMany({
+          where: { clientId, reference: { startsWith: internalReferencePrefix(year) } },
+          select: { reference: true },
+        })
+        reference = computeNextInternalReference(existing.map((e) => e.reference), year)
+      }
+      return tx.treasuryPayable.create({
+        data: {
+          clientId,
+          createdById: userId,
+          origin,
+          totalAmount: data.totalAmount,
+          // Template roots have pendingAmount=0; actual transactions are the children
+          pendingAmount: data.recurrence ? 0 : data.totalAmount,
+          documentDate: data.documentDate ? new Date(data.documentDate) : null,
+          dueDate: new Date(data.dueDate),
+          currency: data.currency ?? 'EUR',
+          categoryId: data.categoryId,
+          entityName: data.entityName ?? null,
+          entityNif: data.entityNif,
+          tocSupplierId: data.tocSupplierId,
+          tocPurchasesDocId: data.tocPurchasesDocId,
+          reference,
+          description: data.description,
+          recurrenceId,
+          ...(resolvedBudgetId ? { budgetId: resolvedBudgetId, budgetAutoAssigned } : {}),
+        },
+      })
     })
 
     await audit(this.prisma, {
@@ -757,6 +789,23 @@ export class TreasuryPayablesService {
     return { updated, failed: errors.length, errors }
   }
 
+  /** Eliminação em massa. Despacha cada documento para `delete`, herdando o
+   *  soft-delete, cascata de recorrências e auditoria. Resiliente: falhas
+   *  individuais são apanhadas e não abortam os restantes. */
+  async bulkDelete(clientId: string, userId: string, ids: string[]) {
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        await this.delete(clientId, userId, id)
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
   private async syncParentStatus(clientId: string, parentId: string) {
     const children = await this.prisma.treasuryPayable.findMany({
       where: { parentId, deletedAt: null, recurrenceId: null },
@@ -920,6 +969,17 @@ export class TreasuryPayablesService {
         entityType: 'Payable', entityId: id,
         payload: { from: item.status, to: 'OPEN', cascadedChildren: settledChildren.length },
       })
+      // Anular o pagamento também reverte (parcialmente) a reconciliação: desliga
+      // apenas esta fatura, mantendo os restantes documentos/movimentos.
+      const detached = await detachDocFromConfirmedReconciliations(tx, clientId, userId, 'payable', id)
+      if (detached.reconciliations > 0) {
+        await audit(tx, {
+          clientId, userId,
+          action: 'payable.reconcile_reverse',
+          entityType: 'Payable', entityId: id,
+          payload: { amount: detached.amount, reconciliations: detached.reconciliations, partial: true },
+        })
+      }
       return parent
     })
 
@@ -956,14 +1016,16 @@ export class TreasuryPayablesService {
   }
 
   async void(clientId: string, userId: string, id: string) {
+    // Faturas do TOConline não podem ser anuladas na app: o seu ciclo de vida
+    // (incl. anulação) é gerido no TOConline e refletido via sync. Bloqueia antes
+    // de `resolveLocalPayableId` para não criar uma anotação local desnecessária.
+    if (id.startsWith('toc-')) {
+      throw httpError(409, 'Faturas do TOConline não podem ser anuladas na app — a anulação tem de ser feita no TOConline.')
+    }
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
-    // Faturas liquidadas no TOConline (recibo emitido, status 3) refletem a
-    // contabilidade — não podem ser anuladas aqui (o status local fica OPEN, a
-    // liquidação vive no espelho TOC). A anulação tem de ser feita no TOConline.
-    const tocOverlay = (item as { _tocOverlay?: { status?: number | null } | null })._tocOverlay
-    if (item.tocPurchasesDocId && mapTocStatus(tocOverlay?.status ?? null) === 'SETTLED') {
-      throw httpError(409, 'Fatura liquidada no TOConline (recibo emitido) — não é possível anulá-la aqui.')
+    if (item.tocPurchasesDocId) {
+      throw httpError(409, 'Faturas do TOConline não podem ser anuladas na app — a anulação tem de ser feita no TOConline.')
     }
     if (item.status === 'SETTLED') throw httpError(409, 'Cannot void a settled payable')
     const result = await this.prisma.treasuryPayable.update({ where: { id }, data: { status: 'VOID' } })
@@ -1050,24 +1112,99 @@ export class TreasuryPayablesService {
   }
 
   /** Marca/desmarca "Pronta para Pagar" (separador Futuros Pagamentos). Anotação
-   *  local não destrutiva — não altera o estado nem move a fatura do seu bucket. */
-  async setReadyToPay(clientId: string, userId: string, id: string, ready: boolean) {
+   *  local não destrutiva — não altera o estado nem move a fatura do seu bucket.
+   *  Ao desmarcar, `promisedPaymentDate` opcional define/repõe a data de pagamento
+   *  no mesmo update (atómico): data → define; `null` → repõe a data de vencimento
+   *  (limpa o promisedPaymentDate); `undefined` → não toca na data.
+   *  Quando se define uma NOVA data (não null) ao desmarcar, `reason` é obrigatório:
+   *  registamos uma nota com o motivo e criamos uma tarefa para contactar o
+   *  fornecedor — tudo na mesma transação. */
+  async setReadyToPay(
+    clientId: string,
+    userId: string,
+    id: string,
+    ready: boolean,
+    promisedPaymentDate?: string | null,
+    reason?: string,
+  ) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
-    if (ready && (item.status === 'PAID' || item.status === 'SETTLED' || item.status === 'VOID')) {
-      throw httpError(409, 'Apenas faturas por pagar podem ser marcadas como prontas para pagar')
+    // Só faturas em aberto podem entrar em Futuros Pagamentos. Parcialmente pagas,
+    // pagas, liquidadas ou anuladas ficam de fora. Desmarcar (ready=false) é sempre
+    // permitido (rede de limpeza para docs que mudaram de estado).
+    if (ready && item.status !== 'OPEN') {
+      throw httpError(409, 'Apenas faturas em aberto podem ser marcadas como prontas para pagar')
     }
-    const result = await this.prisma.treasuryPayable.update({
-      where: { id },
-      data: { readyToPay: ready },
+    // A directiva de data só se aplica ao desmarcar e só quando o campo é fornecido.
+    const alsoSetDate = !ready && promisedPaymentDate !== undefined
+    const newDate = alsoSetDate ? (promisedPaymentDate ? new Date(promisedPaymentDate) : null) : undefined
+    // "Definir data de pagamento" no fluxo de remover: nova data (não null) exige
+    // motivo e gera nota + tarefa de contacto ao fornecedor.
+    const settingNewDate = alsoSetDate && newDate != null
+    const trimmedReason = reason?.trim()
+    if (settingNewDate && !trimmedReason) {
+      throw httpError(400, 'Motivo obrigatório ao definir uma nova data de pagamento')
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.treasuryPayable.update({
+        where: { id },
+        data: {
+          readyToPay: ready,
+          ...(alsoSetDate ? { promisedPaymentDate: newDate } : {}),
+        },
+      })
+      await audit(tx, {
+        clientId, userId,
+        action: 'payable.set_ready_to_pay',
+        entityType: 'Payable', entityId: id,
+        payload: { from: item.readyToPay, to: ready },
+      })
+      if (alsoSetDate) {
+        await audit(tx, {
+          clientId, userId,
+          action: 'payable.set_promised_date',
+          entityType: 'Payable', entityId: id,
+          payload: {
+            from: item.promisedPaymentDate?.toISOString() ?? null,
+            to: newDate?.toISOString() ?? null,
+          },
+        })
+      }
+      if (settingNewDate) {
+        const dateStr = newDate!.toISOString().slice(0, 10)
+        // Nota com o motivo da alteração (registo histórico na timeline).
+        await tx.treasuryFollowup.create({
+          data: {
+            clientId,
+            createdById: userId,
+            direction: 'PAYABLE',
+            kind: 'NOTE',
+            status: 'DONE',
+            payableId: id,
+            title: 'Alteração de data de pagamento',
+            description: `Nova data de pagamento: ${dateStr}. Motivo: ${trimmedReason}`,
+            completedAt: new Date(),
+          },
+        })
+        // Tarefa pendente para contactar o fornecedor sobre a nova data.
+        await tx.treasuryFollowup.create({
+          data: {
+            clientId,
+            createdById: userId,
+            direction: 'PAYABLE',
+            kind: 'CALL_TASK',
+            status: 'PENDING',
+            importance: 'NORMAL',
+            payableId: id,
+            title: 'Contactar fornecedor sobre nova data de pagamento',
+            description: `Nova data de pagamento: ${dateStr}. Motivo: ${trimmedReason}`,
+            dueAt: newDate,
+          },
+        })
+      }
+      return result
     })
-    await audit(this.prisma, {
-      clientId, userId,
-      action: 'payable.set_ready_to_pay',
-      entityType: 'Payable', entityId: id,
-      payload: { from: item.readyToPay, to: ready },
-    })
-    return result
   }
 
   async split(clientId: string, userId: string, id: string, installments: Array<{ promisedPaymentDate: string; amount: number; description?: string }>) {
@@ -1246,8 +1383,16 @@ export class TreasuryPayablesService {
     return { classified, skipped: unclassified.length - classified }
   }
 
-  async getKpis(clientId: string) {
+  async getKpis(clientId: string, opts: { days?: number; all?: boolean } = {}) {
     const now = new Date()
+    // Janela do "Pago": 'all' = desde sempre; days = últimos N dias a contar de
+    // hoje; sem opção = mês civil atual (default histórico, usado pela query
+    // principal de KPIs que não passa parâmetros).
+    const paidFrom = opts.all
+      ? null
+      : opts.days != null
+        ? new Date(now.getTime() - opts.days * 86400000)
+        : new Date(now.getFullYear(), now.getMonth(), 1)
     // "Abertas": emitted but not settled. Excludes recurrence templates (parentless
     // with recurrenceId) and future recurrence instances (dueDate > now).
     const abertasClause: Prisma.TreasuryPayableWhereInput = {
@@ -1275,7 +1420,7 @@ export class TreasuryPayablesService {
         where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
       }),
       this.prisma.treasuryPayable.aggregate({
-        where: { clientId, deletedAt: null, status: { in: ['PAID', 'SETTLED'] }, updatedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
+        where: { clientId, deletedAt: null, status: { in: ['PAID', 'SETTLED'] }, ...(paidFrom ? { updatedAt: { gte: paidFrom } } : {}) },
         _sum: { totalAmount: true },
       }),
     ])

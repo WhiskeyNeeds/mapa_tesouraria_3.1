@@ -360,9 +360,7 @@ export default function ReceivablesPage() {
   const [editRow, setEditRow] = useState<Receivable | null>(null)
   const [editForm, setEditForm] = useState({ categoryId: '', entityName: '', reference: '', documentDate: '', dueDate: '', totalAmount: '', description: '' })
   const [deleteRow, setDeleteRow] = useState<Receivable | null>(null)
-  const [partialId, setPartialId] = useState<string | null>(null)
-  const [partialAmount, setPartialAmount] = useState('')
-  const [partialMax, setPartialMax] = useState(0)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   // Seleção para atribuição de categoria em massa (âmbito: página visível).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -567,6 +565,7 @@ export default function ReceivablesPage() {
       qc.invalidateQueries({ queryKey: ['receivables'] })
       qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
       setDeleteRow(null)
+      setPanelDoc((d) => d && deleteRow && d.id === deleteRow.id ? null : d)
       toast.success('Documento eliminado.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -574,7 +573,7 @@ export default function ReceivablesPage() {
 
   const voidReceivable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/void`, {}),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] }); toast.success('Documento anulado.') },
+    onSuccess: (_, id) => { qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] }); setPanelDoc((d) => d && d.id === id ? { ...d, status: 'VOID' } : d); toast.success('Documento anulado.') },
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -613,6 +612,18 @@ export default function ReceivablesPage() {
         ? `Estado aplicado a ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
         : `Estado aplicado a ${res.updated} documento(s).`)
       setSelectedIds(new Set())
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const bulkDeleteMut = useMutation({
+    mutationFn: (ids: string[]) =>
+      api.post<{ updated: number; failed: number }>(`/treasury/${selectedClientId}/receivables/bulk-delete`, { ids }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
+      toast.success(res.failed > 0
+        ? `Eliminados ${res.updated} de ${res.updated + res.failed} documentos (${res.failed} falharam).`
+        : `${res.updated} documento(s) eliminado(s).`)
+      setSelectedIds(new Set()); setBulkDeleteOpen(false)
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -755,13 +766,6 @@ export default function ReceivablesPage() {
       setEditRow(null)
       toast.success('Documento atualizado.')
     },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
-  const partialPayment = useMutation({
-    mutationFn: ({ id, amount }: { id: string; amount: number }) =>
-      api.post(`/treasury/${selectedClientId}/receivables/${id}/partial-payment`, { amount }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] }); setPartialId(null); setPartialAmount(''); toast.success('Pagamento parcial registado.') },
     onError: (e) => toast.error((e as Error).message),
   })
 
@@ -1008,6 +1012,15 @@ export default function ReceivablesPage() {
         onClick={() => bulkStatusMut.mutate({ ids: [...selectedIds], status: 'OPEN' })}
       >
         Reverter p/ Em Aberto
+      </button>
+      <span className="w-px h-5 bg-primary-200" />
+      <button
+        className="inline-flex items-center gap-1.5 text-sm py-1.5 px-3 rounded-lg border border-red-200 bg-white text-red-600 font-medium hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        disabled={bulkDeleteMut.isPending}
+        onClick={() => setBulkDeleteOpen(true)}
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+        Eliminar
       </button>
       <button className="text-sm text-gray-500 hover:text-gray-700" onClick={() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkBudgetId('') }}>Limpar seleção</button>
     </div>
@@ -1290,7 +1303,7 @@ export default function ReceivablesPage() {
                             </th>
                             <th className="text-left px-3 py-3">Categoria</th>
                             <th className="text-left px-3 py-3">Budget</th>
-                            <th className="w-16 px-3 py-3" />
+                            <th className="w-48 px-3 py-3" />
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
@@ -1385,78 +1398,7 @@ export default function ReceivablesPage() {
                                     />
                                   </td>
                                   <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <button
-                                        title="Editar"
-                                        onClick={() => {
-                                          setEditId(r.id)
-                                          setEditRow(r)
-                                          setEditForm({
-                                            categoryId: r.category?.id ?? '',
-                                            entityName: r.entityName,
-                                            reference: r.reference,
-                                            documentDate: r.documentDate?.slice(0, 10) ?? '',
-                                            dueDate: r.dueDate.slice(0, 10),
-                                            totalAmount: String(r.totalAmount),
-                                            description: r.description ?? '',
-                                          })
-                                        }}
-                                        className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                                      >
-                                        <Pencil className="w-3.5 h-3.5" />
-                                      </button>
-                                      {(r.status === 'OPEN' || r.status === 'PARTIAL') && (
-                                        <button
-                                          title="Pagamento parcial"
-                                          onClick={() => { setPartialId(r.id); setPartialAmount(''); setPartialMax(Number(r.pendingAmount)) }}
-                                          className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                        >
-                                          <DollarSign className="w-3.5 h-3.5" />
-                                        </button>
-                                      )}
-                                      {(r.status === 'OPEN' || r.status === 'PARTIAL') && (() => {
-                                        const isFutureRec = !!(r.recurrenceId && r.parentId && String(r.dueDate).slice(0, 10) > todayYmd)
-                                        return (
-                                          <button
-                                            title={isFutureRec ? 'Recorrência futura — só pode ser paga a partir da data de vencimento' : 'Marcar como pago'}
-                                            onClick={() => { if (!isFutureRec) payReceivable.mutate(r.id) }}
-                                            disabled={isFutureRec}
-                                            className="p-1 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
-                                          >
-                                            <CreditCard className="w-3.5 h-3.5" />
-                                          </button>
-                                        )
-                                      })()}
-                                      {r.origin !== 'TOCONLINE' && (r.status === 'OPEN' || r.status === 'PARTIAL' || r.status === 'PAID') && (() => {
-                                        const isFutureRec = !!(r.recurrenceId && r.parentId && String(r.dueDate).slice(0, 10) > todayYmd)
-                                        return (
-                                          <button
-                                            title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : 'Marcar como liquidada'}
-                                            onClick={() => { if (!isFutureRec) settleReceivable.mutate(r.id) }}
-                                            disabled={isFutureRec}
-                                            className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:bg-transparent"
-                                          >
-                                            <CheckCircle className="w-3.5 h-3.5" />
-                                          </button>
-                                        )
-                                      })()}
-                                      {r.status !== 'VOID' && r.status !== 'SETTLED' && (
-                                        <button
-                                          title="Anular"
-                                          onClick={() => voidReceivable.mutate(r.id)}
-                                          className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                                        >
-                                          <XCircle className="w-3.5 h-3.5" />
-                                        </button>
-                                      )}
-                                      <button
-                                        title="Eliminar"
-                                        onClick={() => setDeleteRow(r)}
-                                        className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" />
                                   </td>
                                 </tr>
                               )
@@ -1760,7 +1702,7 @@ export default function ReceivablesPage() {
                             <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                             <th className="text-left px-3 py-3">Categoria</th>
                             <th className="text-left px-3 py-3">Budget</th>
-                            <th className="w-16 px-3 py-3" />
+                            <th className="w-48 px-3 py-3" />
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
@@ -1840,28 +1782,7 @@ export default function ReceivablesPage() {
                                     />
                                   </td>
                                   <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <button
-                                        title="Editar"
-                                        onClick={() => { setEditId(r.id); setEditRow(r); setEditForm({ categoryId: r.category?.id ?? '', entityName: r.entityName, reference: r.reference, documentDate: r.documentDate?.slice(0, 10) ?? '', dueDate: r.dueDate.slice(0, 10), totalAmount: String(r.totalAmount), description: r.description ?? '' }) }}
-                                        className="p-1 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                                      >
-                                        <Pencil className="w-3.5 h-3.5" />
-                                      </button>
-                                      {(r.status === 'OPEN' || r.status === 'PARTIAL') && (
-                                        <button title="Pagamento parcial" onClick={() => { setPartialId(r.id); setPartialAmount(''); setPartialMax(Number(r.pendingAmount)) }} className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                                          <DollarSign className="w-3.5 h-3.5" />
-                                        </button>
-                                      )}
-                                      {r.status !== 'VOID' && r.status !== 'SETTLED' && (
-                                        <button title="Anular" onClick={() => voidReceivable.mutate(r.id)} className="p-1 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors">
-                                          <XCircle className="w-3.5 h-3.5" />
-                                        </button>
-                                      )}
-                                      <button title="Eliminar" onClick={() => setDeleteRow(r)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" />
                                   </td>
                                 </tr>
                               )
@@ -1880,40 +1801,6 @@ export default function ReceivablesPage() {
                 </div>
               )}
             </div>
-
-            <Modal open={!!partialId} onClose={() => { setPartialId(null); setPartialAmount('') }} title="Registar Recebimento Parcial">
-              <div className="space-y-4">
-                <p className="text-sm text-gray-600">
-                  Valor pendente: <span className="font-semibold text-gray-900">{formatCurrency(partialMax)}</span>
-                </p>
-                <div>
-                  <label className="label">Valor recebido (€)</label>
-                  <input
-                    type="number"
-                    min="0.01"
-                    max={partialMax}
-                    step="0.01"
-                    className="input"
-                    value={partialAmount}
-                    onChange={(e) => setPartialAmount(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-                <div className="flex gap-3 pt-2">
-                  <button onClick={() => { setPartialId(null); setPartialAmount('') }} className="btn-secondary flex-1">Cancelar</button>
-                  <button
-                    onClick={() => {
-                      const amt = parseFloat(partialAmount)
-                      if (partialId && amt > 0) partialPayment.mutate({ id: partialId, amount: amt })
-                    }}
-                    className="btn-primary flex-1"
-                    disabled={partialPayment.isPending || !partialAmount || parseFloat(partialAmount) <= 0}
-                  >
-                    {partialPayment.isPending ? 'A guardar...' : 'Registar'}
-                  </button>
-                </div>
-              </div>
-            </Modal>
 
             <Modal open={!!editId} onClose={() => { setEditId(null); setEditRow(null) }} title="Editar Conta a Receber" size="lg">
               <div className="grid grid-cols-2 gap-4">
@@ -2005,6 +1892,27 @@ export default function ReceivablesPage() {
                     disabled={deleteReceivable.isPending}
                   >
                     {deleteReceivable.isPending ? 'A eliminar...' : 'Eliminar'}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+
+            <Modal open={bulkDeleteOpen} onClose={() => setBulkDeleteOpen(false)} title="Eliminar documentos">
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Vão ser permanentemente eliminados <span className="font-semibold text-gray-900">{selectedIds.size}</span> documento(s) selecionado(s). Esta acção não pode ser revertida.
+                </p>
+                {bulkDeleteMut.isError && (
+                  <p className="text-sm text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2">{(bulkDeleteMut.error as Error).message}</p>
+                )}
+                <div className="flex gap-3 pt-2">
+                  <button onClick={() => setBulkDeleteOpen(false)} className="btn-secondary flex-1">Cancelar</button>
+                  <button
+                    onClick={() => bulkDeleteMut.mutate([...selectedIds])}
+                    className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-50 transition-colors"
+                    disabled={bulkDeleteMut.isPending}
+                  >
+                    {bulkDeleteMut.isPending ? 'A eliminar...' : `Eliminar ${selectedIds.size}`}
                   </button>
                 </div>
               </div>
@@ -2439,7 +2347,49 @@ export default function ReceivablesPage() {
                   )}
                   <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Conta a Receber</div>
                 </div>
-                <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
+                <div className="flex flex-col items-end gap-2">
+                  <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
+                  {panelDoc.origin !== 'TOCONLINE' && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        title="Editar"
+                        onClick={() => {
+                          setEditId(panelDoc.id)
+                          setEditRow(panelDoc)
+                          setEditForm({
+                            categoryId: panelDoc.category?.id ?? '',
+                            entityName: panelDoc.entityName,
+                            reference: panelDoc.reference,
+                            documentDate: panelDoc.documentDate?.slice(0, 10) ?? '',
+                            dueDate: panelDoc.dueDate.slice(0, 10),
+                            totalAmount: String(panelDoc.totalAmount),
+                            description: panelDoc.description ?? '',
+                          })
+                        }}
+                        className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      {panelDoc.status !== 'VOID' && panelDoc.status !== 'SETTLED' && (
+                        <button
+                          title="Anular"
+                          onClick={() => voidReceivable.mutate(panelDoc.id)}
+                          disabled={voidReceivable.isPending}
+                          className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        title="Eliminar"
+                        onClick={() => setDeleteRow(panelDoc)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-[1.7rem] font-bold tracking-tight tabular-nums text-gray-900 leading-none">{formatCurrency(panelDoc.totalAmount)}</div>

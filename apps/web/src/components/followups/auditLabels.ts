@@ -5,13 +5,15 @@
 
 export type AuditAction =
   | 'receivable.create' | 'receivable.update' | 'receivable.delete'
-  | 'receivable.pay' | 'receivable.settle' | 'receivable.unsettle' | 'receivable.partial_payment'
+  | 'receivable.pay' | 'receivable.settle' | 'receivable.unsettle'
   | 'receivable.void' | 'receivable.set_promised_date'
   | 'receivable.split' | 'receivable.unsplit'
+  | 'receivable.reconcile' | 'receivable.reconcile_reverse'
   | 'payable.create' | 'payable.update' | 'payable.delete'
-  | 'payable.pay' | 'payable.settle' | 'payable.unsettle' | 'payable.partial_payment'
-  | 'payable.void' | 'payable.set_promised_date'
+  | 'payable.pay' | 'payable.settle' | 'payable.unsettle'
+  | 'payable.void' | 'payable.set_promised_date' | 'payable.set_ready_to_pay'
   | 'payable.split' | 'payable.unsplit'
+  | 'payable.reconcile' | 'payable.reconcile_reverse'
   | string
 
 export type DiffPayload = { changes?: Record<string, { from: unknown; to: unknown }> }
@@ -76,12 +78,8 @@ export function auditTitle(action: string, payload: unknown): string {
     case 'receivable.update':
     case 'payable.update': {
       const changes = (p as DiffPayload).changes ?? {}
-      const fields = Object.keys(changes).map(fieldLabel)
-
-      // Ignore internal/overlay fields (starting with underscore) from the short title
-      const visibleFields = Object.keys(changes).filter((f) => !f.startsWith('_')).map(fieldLabel)
-      // Use visibleFields for title generation
-      const fieldsToShow = visibleFields
+      // Ignora campos internos/overlay (começam por underscore) no título curto.
+      const fieldsToShow = Object.keys(changes).filter((f) => !f.startsWith('_')).map(fieldLabel)
       if (fieldsToShow.length === 0) return 'Editada'
       if (fieldsToShow.length === 1) return `${fieldsToShow[0]} alterada`
       if (fieldsToShow.length <= 3) return `Alterado: ${fieldsToShow.join(', ')}`
@@ -99,10 +97,7 @@ export function auditTitle(action: string, payload: unknown): string {
     case 'receivable.unsettle':
     case 'payable.unsettle':
       return 'Revertida para Em Aberto'
-    case 'receivable.partial_payment':
-      return `Pagamento recebido: ${MONEY.format(Number(p.amount ?? 0))}`
-    case 'payable.partial_payment':
-      return `Pagamento efetuado: ${MONEY.format(Number(p.amount ?? 0))}`
+    // 'partial_payment' audit actions removed — handled server-side but not shown
     case 'receivable.void':
     case 'payable.void':
       return 'Anulada'
@@ -111,6 +106,17 @@ export function auditTitle(action: string, payload: unknown): string {
       const to = p.to ? new Date(String(p.to)).toLocaleDateString('pt-PT') : null
       return to ? `Data prometida: ${to}` : 'Data prometida removida'
     }
+    case 'receivable.set_ready_to_pay':
+    case 'payable.set_ready_to_pay':
+      return p.to ? 'Marcada como Pronta para Pagar' : 'Removida de Futuros Pagamentos'
+    case 'receivable.reconcile':
+    case 'payable.reconcile': {
+      const amt = MONEY.format(Number(p.amount ?? 0))
+      return p.fullySettled ? `Conciliada e marcada como paga: ${amt}` : `Conciliação parcial: ${amt}`
+    }
+    case 'receivable.reconcile_reverse':
+    case 'payable.reconcile_reverse':
+      return `Conciliação revertida: ${MONEY.format(Number(p.amount ?? 0))}`
     case 'receivable.split':
     case 'payable.split': {
       const n = Array.isArray(p.installments) ? p.installments.length : 0

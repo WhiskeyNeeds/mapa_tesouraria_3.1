@@ -48,6 +48,12 @@ enum TreasuryDocStatus {
   VOID
 }
 
+enum TreasurySettlementSource {
+  LOCAL
+  INSTALLMENTS
+  RECONCILIATION
+}
+
 enum TreasuryMovementStatus {
   UNCLASSIFIED
   CLASSIFIED
@@ -475,6 +481,10 @@ model TreasuryReceivable {
   // liquidação). Usado pela janela do KPI "Recebido". Reposto a null quando o
   // estado regressa a OPEN/PARTIAL/VOID.
   settledAt           DateTime?
+  // Como o documento ficou pago/liquidado. null quando OPEN/PARTIAL/VOID.
+  // LOCAL = marcado manualmente; INSTALLMENTS = mãe derivada das parcelas;
+  // RECONCILIATION = reconciliado pelo valor total. Gateia a reversão.
+  settledVia          TreasurySettlementSource?
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)
@@ -544,6 +554,8 @@ model TreasuryPayable {
   // surgir no separador "Futuros Pagamentos" sem sair do seu separador de
   // origem (Fornecedores/Outras). Limpa automaticamente ao pagar/liquidar.
   readyToPay          Boolean   @default(false)
+  // Como o documento ficou pago/liquidado. Ver TreasuryReceivable.settledVia.
+  settledVia          TreasurySettlementSource?
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)
