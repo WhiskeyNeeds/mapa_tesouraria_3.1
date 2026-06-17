@@ -105,6 +105,7 @@ interface Payable {
   settledAt?: string | null
   paymentDate?: string | null
   paymentReference?: string | null
+  paymentAmount?: number | null
   category?: { id: string; name: string; color: string } | null
   budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
@@ -672,8 +673,8 @@ export default function PayablesPage() {
 
   const settlePayable = useMutation({
     mutationFn: (vars: { id: string; paymentReference?: string; date?: string }) =>
-      api.post(`/treasury/${selectedClientId}/payables/${vars.id}/settle`, { paymentReference: vars.paymentReference, date: vars.date }),
-    onSuccess: (_, vars) => {
+      api.post<Payable>(`/treasury/${selectedClientId}/payables/${vars.id}/settle`, { paymentReference: vars.paymentReference, date: vars.date }),
+    onSuccess: (updated, vars) => {
       const id = vars.id
       qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
       const settleChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
@@ -687,6 +688,7 @@ export default function PayablesPage() {
         paidAmount: d.totalAmount,
         promisedPaymentDate: null,
         paymentReference: vars.paymentReference ?? d.paymentReference,
+        paymentAmount: updated?.paymentAmount ?? d.paymentAmount,
         paymentDate: vars.date ?? d.paymentDate,
         children: settleChildren(d.children),
       } : d)
@@ -2412,14 +2414,15 @@ export default function PayablesPage() {
               </div>
             )}
 
-            {/* Pagamento registado manualmente (sem pagamento TOC) */}
-            {panelPayments.length === 0 && panelDoc.status === 'SETTLED' && panelDoc.paymentReference && (
+            {/* Comprovativo interno (stand-in até vir o pagamento do TOConline) — pode
+                coexistir com os pagamentos do TOC: cobre a parte ainda não coberta. */}
+            {panelDoc.status === 'SETTLED' && panelDoc.paymentReference && (
               <div className="border-b border-gray-100 px-4 py-3 space-y-2">
-                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">1 pagamento associado</div>
+                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Comprovativo interno</div>
                 <div className="rounded-lg border border-gray-200 p-2.5">
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-xs text-gray-400">Pagamento</span>
-                    <span className="text-xs font-semibold text-gray-700">{formatCurrency(panelDoc.totalAmount)}</span>
+                    <span className="text-xs font-semibold text-gray-700">{panelDoc.paymentAmount != null ? formatCurrency(panelDoc.paymentAmount) : '—'}</span>
                   </div>
                   <div className="font-medium text-sm text-gray-900">{panelDoc.paymentReference}</div>
                   <div className="text-xs text-gray-500">{panelDoc.paymentDate ? formatDate(panelDoc.paymentDate) : '—'}</div>

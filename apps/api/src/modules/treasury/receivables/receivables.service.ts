@@ -27,6 +27,8 @@ interface ReceivableListItem {
   settledAt: Date | null
   /** Referência do recibo registado manualmente ao liquidar (null se não houver). */
   receiptReference: string | null
+  /** Valor coberto pelo recibo interno (null se não houver). */
+  receiptAmount: number | Prisma.Decimal | null
   origin: TreasuryDocOrigin
   tocSalesDocId: string | null
   tocCustomerId: string | null
@@ -83,6 +85,7 @@ function mapTocSalesToReceivable(d: TocDocForOverlay): ReceivableListItem | null
     settledVia: null,
     settledAt: null,
     receiptReference: null,
+    receiptAmount: null,
     origin: 'TOCONLINE',
     tocSalesDocId: String(d.tocId),
     tocCustomerId: d.customerId != null ? String(d.customerId) : null,
@@ -141,6 +144,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
       settledVia: local.settledVia,
       settledAt: local.settledAt,
       receiptReference: local.receiptReference,
+      receiptAmount: local.receiptAmount,
       origin: local.origin,
       tocSalesDocId: local.tocSalesDocId,
       tocCustomerId: local.tocCustomerId,
@@ -175,6 +179,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
     settledVia: local.settledVia,
     settledAt: local.settledAt,
     receiptReference: local.receiptReference,
+    receiptAmount: local.receiptAmount,
     origin: 'TOCONLINE',
     tocSalesDocId: local.tocSalesDocId,
     tocCustomerId: local.tocCustomerId ?? (tocDoc.customerId != null ? String(tocDoc.customerId) : null),
@@ -951,6 +956,13 @@ export class TreasuryReceivablesService {
       if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
     }
     const settledAt = manual && opts.date ? new Date(opts.date) : new Date()
+    // Valor do recibo interno = parte ainda não coberta pelos recibos do TOC.
+    // Para docs TOC = pendente do espelho TOC; para locais = total da fatura.
+    const tocOverlay = (item as { _tocOverlay?: { pendingTotal?: unknown; grossTotal?: unknown } | null })._tocOverlay
+    const receiptAmount = !manual ? undefined
+      : item.tocSalesDocId
+        ? Number((tocOverlay?.pendingTotal ?? tocOverlay?.grossTotal ?? 0) as Prisma.Decimal | number)
+        : Number(item.totalAmount ?? 0)
 
     const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
     const isSplitParent = nonRecurChildren.length > 0
@@ -962,7 +974,7 @@ export class TreasuryReceivablesService {
           SET "status" = 'SETTLED', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = ${settledAt}, "settledVia" = 'LOCAL', "updatedAt" = NOW()
           WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('SETTLED','VOID')
         `
-        if (manual) await tx.treasuryReceivable.update({ where: { id }, data: { receiptReference: ref } })
+        if (manual) await tx.treasuryReceivable.update({ where: { id }, data: { receiptReference: ref, receiptAmount } })
         await audit(tx, { clientId, userId, action: 'receivable.settle', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
         return null
       }
@@ -975,7 +987,7 @@ export class TreasuryReceivablesService {
           promisedPaymentDate: null,
           settledAt,
           settledVia: 'LOCAL',
-          ...(manual ? { receiptReference: ref } : {}),
+          ...(manual ? { receiptReference: ref, receiptAmount } : {}),
         },
       })
       await audit(tx, { clientId, userId, action: 'receivable.settle', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL', receiptReference: ref ?? null } })
@@ -1054,6 +1066,7 @@ export class TreasuryReceivablesService {
           settledAt: null,
           settledVia: null,
           receiptReference: null,
+          receiptAmount: null,
         },
       })
       await audit(tx, {

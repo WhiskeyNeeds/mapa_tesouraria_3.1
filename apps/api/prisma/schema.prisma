@@ -488,6 +488,10 @@ model TreasuryReceivable {
   // Referência do recibo registado manualmente ao liquidar (PAID -> SETTLED).
   // A data do recibo é guardada em `settledAt`. Limpa ao reverter a liquidação.
   receiptReference    String?   @db.VarChar(80)
+  // Valor coberto pelo recibo interno = parte ainda não coberta por recibos do
+  // TOConline no momento da liquidação. Limpo ao reverter e ao detetar (sync)
+  // que o TOConline já cobre tudo (pendente TOC = 0).
+  receiptAmount       Decimal?  @db.Decimal(18, 2)
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)
@@ -566,6 +570,10 @@ model TreasuryPayable {
   // Referência do comprovativo/pagamento registado manualmente ao liquidar
   // (PAID -> SETTLED). A data é guardada em `settledAt`. Limpa ao reverter.
   paymentReference    String?   @db.VarChar(80)
+  // Valor coberto pelo comprovativo interno = parte ainda não coberta por
+  // pagamentos do TOConline no momento da liquidação. Limpo ao reverter e ao
+  // detetar (sync) que o TOConline já cobre tudo (pendente TOC = 0).
+  paymentAmount       Decimal?  @db.Decimal(18, 2)
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)

@@ -186,26 +186,54 @@ export async function syncServices(prisma: PrismaClient, svc: ToconlineService, 
 
 export async function syncSalesDocuments(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllSalesDocumentsFlat(clientId)
-  return upsertAll(
-    rows.map(r => extractSalesDocFields(clientId, r)),
+  const items = rows.map(r => extractSalesDocFields(clientId, r))
+  const result = await upsertAll(
+    items,
     item => prisma.tocSalesDocument.upsert({
       where: { clientId_tocId: { clientId, tocId: item.tocId } },
       create: item,
       update: { ...item },
     }),
   )
+  // Recibo interno (stand-in): quando o TOConline já cobre a fatura por completo
+  // (recibo emitido / pendente 0), o recibo registado manualmente deixa de fazer
+  // sentido — limpa-o para não duplicar com o recibo real do TOConline.
+  const coveredTocIds = items
+    .filter(i => Number(i.status) === 3 || Number(i.pendingTotal ?? 0) <= 0)
+    .map(i => String(i.tocId))
+  if (coveredTocIds.length) {
+    await prisma.treasuryReceivable.updateMany({
+      where: { clientId, tocSalesDocId: { in: coveredTocIds }, receiptReference: { not: null } },
+      data: { receiptReference: null, receiptAmount: null },
+    })
+  }
+  return result
 }
 
 export async function syncPurchaseDocuments(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllPurchaseDocumentsFlat(clientId)
-  return upsertAll(
-    rows.map(r => extractPurchaseDocFields(clientId, r)),
+  const items = rows.map(r => extractPurchaseDocFields(clientId, r))
+  const result = await upsertAll(
+    items,
     item => prisma.tocPurchaseDocument.upsert({
       where: { clientId_tocId: { clientId, tocId: item.tocId } },
       create: item,
       update: { ...item },
     }),
   )
+  // Comprovativo interno (stand-in): quando o TOConline já cobre a fatura por
+  // completo (pagamento registado / pendente 0), limpa o comprovativo manual
+  // para não duplicar com o pagamento real do TOConline.
+  const coveredTocIds = items
+    .filter(i => Number(i.status) === 3 || Number(i.pendingTotal ?? 0) <= 0)
+    .map(i => String(i.tocId))
+  if (coveredTocIds.length) {
+    await prisma.treasuryPayable.updateMany({
+      where: { clientId, tocPurchasesDocId: { in: coveredTocIds }, paymentReference: { not: null } },
+      data: { paymentReference: null, paymentAmount: null },
+    })
+  }
+  return result
 }
 
 export async function syncSalesReceipts(prisma: PrismaClient, svc: ToconlineService, clientId: string) {

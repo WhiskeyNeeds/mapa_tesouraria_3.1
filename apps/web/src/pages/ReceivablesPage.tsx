@@ -88,6 +88,7 @@ interface Receivable {
   promisedPaymentDate?: string | null
   receivedDate?: string | null
   receiptReference?: string | null
+  receiptAmount?: number | null
   parentId?: string | null
   settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
   category?: { id: string; name: string; color?: string | null } | null
@@ -702,8 +703,8 @@ export default function ReceivablesPage() {
 
   const settleReceivable = useMutation({
     mutationFn: (vars: { id: string; receiptReference?: string; date?: string }) =>
-      api.post(`/treasury/${selectedClientId}/receivables/${vars.id}/settle`, { receiptReference: vars.receiptReference, date: vars.date }),
-    onSuccess: (_, vars) => {
+      api.post<Receivable>(`/treasury/${selectedClientId}/receivables/${vars.id}/settle`, { receiptReference: vars.receiptReference, date: vars.date }),
+    onSuccess: (updated, vars) => {
       const id = vars.id
       qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
       const settleChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
@@ -717,6 +718,7 @@ export default function ReceivablesPage() {
         receivedAmount: d.totalAmount,
         promisedPaymentDate: null,
         receiptReference: vars.receiptReference ?? d.receiptReference,
+        receiptAmount: updated?.receiptAmount ?? d.receiptAmount,
         receivedDate: vars.date ?? d.receivedDate,
         children: settleChildren(d.children),
       } : d)
@@ -2582,14 +2584,15 @@ export default function ReceivablesPage() {
               </div>
             )}
 
-            {/* Recibo registado manualmente (sem recibo TOC) */}
-            {panelReceipts.length === 0 && panelDoc.status === 'SETTLED' && panelDoc.receiptReference && (
+            {/* Recibo interno (stand-in até vir o recibo do TOConline) — pode coexistir
+                com os recibos do TOC: cobre a parte ainda não coberta por eles. */}
+            {panelDoc.status === 'SETTLED' && panelDoc.receiptReference && (
               <div className="border-b border-gray-100 px-4 py-3 space-y-2">
-                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">1 recibo associado</div>
+                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recibo interno</div>
                 <div className="rounded-lg border border-gray-200 p-2.5">
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-xs text-gray-400">Recibo</span>
-                    <span className="text-xs font-semibold text-gray-700">{formatCurrency(panelDoc.totalAmount)}</span>
+                    <span className="text-xs font-semibold text-gray-700">{panelDoc.receiptAmount != null ? formatCurrency(panelDoc.receiptAmount) : '—'}</span>
                   </div>
                   <div className="font-medium text-sm text-gray-900">{panelDoc.receiptReference}</div>
                   <div className="text-xs text-gray-500">{panelDoc.receivedDate ? formatDate(panelDoc.receivedDate) : '—'}</div>

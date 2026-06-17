@@ -27,6 +27,8 @@ interface PayableListItem {
   settledAt: Date | null
   /** Referência do comprovativo de pagamento registado ao liquidar (null se não houver). */
   paymentReference: string | null
+  /** Valor coberto pelo comprovativo interno (null se não houver). */
+  paymentAmount: number | Prisma.Decimal | null
   /** Data efetiva de pagamento (calculada): pagamento ao fornecedor no TOConline ›
    *  última parcela paga › settledAt manual. null enquanto não houver pagamento. */
   paymentDate: Date | string | null
@@ -71,6 +73,7 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
     settledVia: null,
     settledAt: null,
     paymentReference: null,
+    paymentAmount: null,
     paymentDate: null,
     origin: 'TOCONLINE',
     tocPurchasesDocId: String(d.tocId),
@@ -124,6 +127,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
       settledVia: local.settledVia,
       settledAt: local.settledAt,
       paymentReference: local.paymentReference,
+      paymentAmount: local.paymentAmount,
       paymentDate: basePaymentDate(local),
       origin: local.origin,
       tocPurchasesDocId: local.tocPurchasesDocId,
@@ -160,6 +164,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
     settledVia: local.settledVia,
     settledAt: local.settledAt,
     paymentReference: local.paymentReference,
+    paymentAmount: local.paymentAmount,
     paymentDate: basePaymentDate(local),
     origin: 'TOCONLINE',
     tocPurchasesDocId: local.tocPurchasesDocId,
@@ -912,6 +917,13 @@ export class TreasuryPayablesService {
       if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
     }
     const settledAt = manual && opts.date ? new Date(opts.date) : new Date()
+    // Valor do comprovativo interno = parte ainda não coberta pelos pagamentos do
+    // TOC. Para docs TOC = pendente do espelho TOC; para locais = total da fatura.
+    const tocOverlay = (item as { _tocOverlay?: { pendingTotal?: unknown; grossTotal?: unknown } | null })._tocOverlay
+    const paymentAmount = !manual ? undefined
+      : item.tocPurchasesDocId
+        ? Number((tocOverlay?.pendingTotal ?? tocOverlay?.grossTotal ?? 0) as Prisma.Decimal | number)
+        : Number(item.totalAmount ?? 0)
 
     const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
     const isSplitParent = nonRecurChildren.length > 0
@@ -923,7 +935,7 @@ export class TreasuryPayablesService {
           SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "settledAt" = ${settledAt}, "updatedAt" = NOW()
           WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('SETTLED','VOID')
         `
-        if (manual) await tx.treasuryPayable.update({ where: { id }, data: { paymentReference: ref } })
+        if (manual) await tx.treasuryPayable.update({ where: { id }, data: { paymentReference: ref, paymentAmount } })
         await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
         return null
       }
@@ -937,7 +949,7 @@ export class TreasuryPayablesService {
           readyToPay: false,
           settledVia: 'LOCAL',
           settledAt,
-          ...(manual ? { paymentReference: ref } : {}),
+          ...(manual ? { paymentReference: ref, paymentAmount } : {}),
         },
       })
       await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL', paymentReference: ref ?? null } })
@@ -1017,6 +1029,7 @@ export class TreasuryPayablesService {
           settledVia: null,
           settledAt: null,
           paymentReference: null,
+          paymentAmount: null,
         },
       })
       await audit(tx, {
