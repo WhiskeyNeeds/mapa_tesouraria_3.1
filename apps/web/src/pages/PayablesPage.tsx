@@ -1646,7 +1646,7 @@ export default function PayablesPage() {
                           <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                           <th className="text-left px-3 py-3">Categoria</th>
                           <th className="text-left px-3 py-3">Budget</th>
-                          <th className="w-48 px-3 py-3" />
+                          {!panelDoc && <th className="w-28 px-3 py-3" />}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
@@ -1727,15 +1727,54 @@ export default function PayablesPage() {
                                     onSelect={(budgetId) => classifyBudget.mutate({ id: p.id, budgetId })}
                                   />
                                 </td>
-                                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                </td>
+                                {!panelDoc && (
+                                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button
+                                        title="Editar"
+                                        onClick={() => {
+                                          setEditId(p.id)
+                                          setEditRow(p)
+                                          setEditForm({
+                                            categoryId: p.category?.id ?? '',
+                                            entityName: p.entityName,
+                                            reference: p.reference,
+                                            documentDate: p.documentDate?.slice(0, 10) ?? '',
+                                            dueDate: p.dueDate.slice(0, 10),
+                                            totalAmount: String(p.totalAmount),
+                                            description: p.description ?? '',
+                                          })
+                                        }}
+                                        className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                                      >
+                                        <Pencil className="w-4 h-4" />
+                                      </button>
+                                      {p.status !== 'VOID' && p.status !== 'SETTLED' && (
+                                        <button
+                                          title="Anular"
+                                          onClick={() => voidPayable.mutate(p.id)}
+                                          disabled={voidPayable.isPending}
+                                          className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                        >
+                                          <XCircle className="w-4 h-4" />
+                                        </button>
+                                      )}
+                                      <button
+                                        title="Eliminar"
+                                        onClick={() => setDeleteRow(p)}
+                                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                )}
                               </tr>
                             )
                           }
 
                           if (outrasRows.length === 0) {
-                            return <tr><td colSpan={12} className="px-3 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
+                            return <tr><td colSpan={panelDoc ? 11 : 12} className="px-3 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
                           }
 
                           return outrasRows.map(renderRow)

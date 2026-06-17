@@ -1704,7 +1704,7 @@ export default function ReceivablesPage() {
                             <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
                             <th className="text-left px-3 py-3">Categoria</th>
                             <th className="text-left px-3 py-3">Budget</th>
-                            <th className="w-48 px-3 py-3" />
+                            {!panelDoc && <th className="w-28 px-3 py-3" />}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
@@ -1783,15 +1783,54 @@ export default function ReceivablesPage() {
                                       onSelect={(budgetId) => classifyBudget.mutate({ id: r.id, budgetId })}
                                     />
                                   </td>
-                                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                  </td>
+                                  {!panelDoc && (
+                                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button
+                                          title="Editar"
+                                          onClick={() => {
+                                            setEditId(r.id)
+                                            setEditRow(r)
+                                            setEditForm({
+                                              categoryId: r.category?.id ?? '',
+                                              entityName: r.entityName,
+                                              reference: r.reference,
+                                              documentDate: r.documentDate?.slice(0, 10) ?? '',
+                                              dueDate: r.dueDate.slice(0, 10),
+                                              totalAmount: String(r.totalAmount),
+                                              description: r.description ?? '',
+                                            })
+                                          }}
+                                          className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                                        >
+                                          <Pencil className="w-4 h-4" />
+                                        </button>
+                                        {r.status !== 'VOID' && r.status !== 'SETTLED' && (
+                                          <button
+                                            title="Anular"
+                                            onClick={() => voidReceivable.mutate(r.id)}
+                                            disabled={voidReceivable.isPending}
+                                            className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                          >
+                                            <XCircle className="w-4 h-4" />
+                                          </button>
+                                        )}
+                                        <button
+                                          title="Eliminar"
+                                          onClick={() => setDeleteRow(r)}
+                                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  )}
                                 </tr>
                               )
                             }
 
                             if (outrasRows.length === 0) {
-                              return <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira.</td></tr>
+                              return <tr><td colSpan={panelDoc ? 11 : 12} className="px-3 py-10 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira.</td></tr>
                             }
 
                             return outrasRows.map(renderRow)
