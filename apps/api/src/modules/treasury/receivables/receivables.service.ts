@@ -892,12 +892,14 @@ export class TreasuryReceivablesService {
    *  documentos que não possam transitar (ex.: liquidar fatura TOConline, anular
    *  já liquidado) são apanhados e não abortam os restantes. */
   async bulkSetStatus(clientId: string, userId: string, ids: string[], status: 'PAID' | 'SETTLED' | 'OPEN' | 'VOID') {
+    // Liquidar exige registar o recibo (referência + data) por documento, por
+    // isso não é permitido em massa: cada fatura liquida-se individualmente.
+    if (status === 'SETTLED') throw httpError(400, 'A liquidação tem de registar o recibo — liquide cada documento individualmente.')
     let updated = 0
     const errors: Array<{ id: string; error: string }> = []
     for (const id of ids) {
       try {
         if (status === 'PAID') await this.pay(clientId, userId, id)
-        else if (status === 'SETTLED') await this.settle(clientId, userId, id)
         else if (status === 'OPEN') await this.unsettle(clientId, userId, id)
         else await this.void(clientId, userId, id)
         updated++

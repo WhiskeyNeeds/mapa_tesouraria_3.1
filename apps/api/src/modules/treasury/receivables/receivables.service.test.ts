@@ -17,14 +17,15 @@ describe('bulkSetStatus', () => {
     expect(pay).toHaveBeenCalledTimes(2)
     expect(pay).toHaveBeenCalledWith('c1', 'u1', 'a')
 
-    await svc.bulkSetStatus('c1', 'u1', ['c'], 'SETTLED')
-    expect(settle).toHaveBeenCalledWith('c1', 'u1', 'c')
-
     await svc.bulkSetStatus('c1', 'u1', ['d'], 'OPEN')
     expect(unsettle).toHaveBeenCalledWith('c1', 'u1', 'd')
 
     await svc.bulkSetStatus('c1', 'u1', ['e'], 'VOID')
     expect(voidFn).toHaveBeenCalledWith('c1', 'u1', 'e')
+
+    // Liquidar em massa é bloqueado: exige registar o recibo por documento.
+    await expect(svc.bulkSetStatus('c1', 'u1', ['c'], 'SETTLED')).rejects.toThrow(/recibo/i)
+    expect(settle).not.toHaveBeenCalled()
   })
 
   it('é resiliente: um documento que falha não aborta os restantes', async () => {
