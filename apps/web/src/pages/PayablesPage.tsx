@@ -2412,6 +2412,21 @@ export default function PayablesPage() {
               </div>
             )}
 
+            {/* Pagamento registado manualmente (sem pagamento TOC) */}
+            {panelPayments.length === 0 && panelDoc.status === 'SETTLED' && panelDoc.paymentReference && (
+              <div className="border-b border-gray-100 px-4 py-3 space-y-2">
+                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">1 pagamento associado</div>
+                <div className="rounded-lg border border-gray-200 p-2.5">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-xs text-gray-400">Pagamento</span>
+                    <span className="text-xs font-semibold text-gray-700">{formatCurrency(panelDoc.totalAmount)}</span>
+                  </div>
+                  <div className="font-medium text-sm text-gray-900">{panelDoc.paymentReference}</div>
+                  <div className="text-xs text-gray-500">{panelDoc.paymentDate ? formatDate(panelDoc.paymentDate) : '—'}</div>
+                </div>
+              </div>
+            )}
+
             {/* Tabs */}
             <div className="flex border-b border-gray-100">
               {(['parcelas', 'details', 'followups'] as const).map((t) => (
@@ -2438,7 +2453,6 @@ export default function PayablesPage() {
                           {panelDoc._statusToc === 'SETTLED' ? 'Recibo emitido no TOConline'
                             : panelDoc.settledVia === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
                             : panelDoc.settledVia === 'RECONCILIATION' ? 'Liquidado por reconciliação'
-                            : panelDoc.paymentReference ? `Pagamento ${panelDoc.paymentReference}`
                             : 'Liquidado manualmente nesta plataforma'}
                         </div>
                       </div>

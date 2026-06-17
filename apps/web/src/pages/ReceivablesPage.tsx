@@ -2582,6 +2582,21 @@ export default function ReceivablesPage() {
               </div>
             )}
 
+            {/* Recibo registado manualmente (sem recibo TOC) */}
+            {panelReceipts.length === 0 && panelDoc.status === 'SETTLED' && panelDoc.receiptReference && (
+              <div className="border-b border-gray-100 px-4 py-3 space-y-2">
+                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">1 recibo associado</div>
+                <div className="rounded-lg border border-gray-200 p-2.5">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-xs text-gray-400">Recibo</span>
+                    <span className="text-xs font-semibold text-gray-700">{formatCurrency(panelDoc.totalAmount)}</span>
+                  </div>
+                  <div className="font-medium text-sm text-gray-900">{panelDoc.receiptReference}</div>
+                  <div className="text-xs text-gray-500">{panelDoc.receivedDate ? formatDate(panelDoc.receivedDate) : '—'}</div>
+                </div>
+              </div>
+            )}
+
             {/* Tabs — controlo segmentado */}
             <div className="px-4 py-3 border-b border-gray-100">
               <div className="flex gap-1 p-1 bg-gray-100/80 rounded-xl">
@@ -2610,7 +2625,6 @@ export default function ReceivablesPage() {
                           {panelDoc._statusToc === 'SETTLED' ? 'Recibo emitido no TOConline'
                             : panelDoc.settledVia === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
                             : panelDoc.settledVia === 'RECONCILIATION' ? 'Liquidado por reconciliação'
-                            : panelDoc.receiptReference ? `Recibo ${panelDoc.receiptReference}`
                             : 'Liquidado manualmente nesta plataforma'}
                         </div>
                       </div>
