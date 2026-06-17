@@ -30,6 +30,9 @@ interface ReceivableListItem {
   recurrenceId: string | null
   parentId: string | null
   promisedPaymentDate: Date | null
+  /** Data efetiva de recebimento (calculada): recibo TOC › última parcela paga ›
+   *  settledAt manual. null enquanto não houver recebimento registado. */
+  receivedDate: Date | string | null
   category: { id: string; name: string; color: string | null; launchToc: boolean } | null
   budget: { id: string; name: string; color: string | null } | null
   children: unknown[]
@@ -81,6 +84,7 @@ function mapTocSalesToReceivable(d: TocDocForOverlay): ReceivableListItem | null
     recurrenceId: null,
     parentId: null,
     promisedPaymentDate: null,
+    receivedDate: null,
     category: null,
     budget: null,
     children: [],
@@ -98,6 +102,18 @@ type LocalReceivableRow = Prisma.TreasuryReceivableGetPayload<{
     children: true
   }
 }>
+
+/** Data-base de recebimento (sem TOC): a maior data de liquidação das parcelas
+ *  (última parcela paga) quando o doc está dividido; caso contrário o `settledAt`
+ *  da própria marcação manual de Pago/Liquidado. O recibo do TOConline, quando
+ *  existe, sobrepõe-se a isto na fase de enriquecimento da listagem. */
+function baseReceivedDate(local: LocalReceivableRow): Date | null {
+  const paidSplits = (local.children ?? []).filter((c) => c.recurrenceId == null && c.settledAt != null)
+  if (paidSplits.length > 0) {
+    return paidSplits.reduce<Date>((max, c) => (c.settledAt! > max ? c.settledAt! : max), paidSplits[0].settledAt!)
+  }
+  return local.settledAt ?? null
+}
 
 /** Overlay TOC: para um `treasuryReceivable` com `tocSalesDocId`, sobrepõe os
  *  campos da fatura (dueDate, totalAmount, pendingAmount, status…) com os
@@ -124,6 +140,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
       recurrenceId: local.recurrenceId,
       parentId: local.parentId,
       promisedPaymentDate: local.promisedPaymentDate,
+      receivedDate: baseReceivedDate(local),
       category: local.category,
       budget: local.budget,
       children: local.children,
@@ -155,6 +172,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
     recurrenceId: local.recurrenceId,
     parentId: local.parentId,
     promisedPaymentDate: local.promisedPaymentDate,
+    receivedDate: baseReceivedDate(local),
     category: local.category,
     budget: local.budget,
     children: local.children,
@@ -250,6 +268,36 @@ export class TreasuryReceivablesService {
           const r = rawById.get(Number(it.tocSalesDocId))
           if (r !== undefined) it._tocRaw = r
         }
+      }
+    }
+
+    // Enriquecimento: data efetiva de recebimento via recibo do TOConline
+    // (precedência máxima sobre a data-base). Só para docs liquidados/pagos da
+    // página cujo raw (com `receipts_ids`) já foi carregado acima.
+    const receiptIdsByItem = new Map<string, number[]>()
+    const allReceiptIds = new Set<number>()
+    for (const it of items) {
+      if (!it.tocSalesDocId || (it.status !== 'SETTLED' && it.status !== 'PAID')) continue
+      const raw = it._tocRaw as { receipts_ids?: unknown } | null
+      const ids = Array.isArray(raw?.receipts_ids)
+        ? raw!.receipts_ids.map(Number).filter((n) => !Number.isNaN(n))
+        : []
+      if (ids.length) {
+        receiptIdsByItem.set(it.id, ids)
+        ids.forEach((n) => allReceiptIds.add(n))
+      }
+    }
+    if (allReceiptIds.size) {
+      const receipts = await this.prisma.tocSalesReceipt.findMany({
+        where: { clientId, tocId: { in: [...allReceiptIds] } },
+        select: { tocId: true, date: true },
+      })
+      const dateByReceipt = new Map(receipts.map((r) => [r.tocId, r.date]))
+      for (const it of items) {
+        const ids = receiptIdsByItem.get(it.id)
+        if (!ids) continue
+        const dates = ids.map((id) => dateByReceipt.get(id)).filter((d): d is string => !!d).sort()
+        if (dates.length) it.receivedDate = dates[dates.length - 1] // ISO date mais recente
       }
     }
 

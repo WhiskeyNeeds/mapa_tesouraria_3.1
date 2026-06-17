@@ -86,6 +86,7 @@ interface Receivable {
   tocCustomerId?: string | null
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
+  receivedDate?: string | null
   parentId?: string | null
   settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
   category?: { id: string; name: string; color?: string | null } | null
@@ -1367,7 +1368,16 @@ export default function ReceivablesPage() {
                                   <td className="pl-3 pr-1 py-3 whitespace-nowrap">{(() => {
                                     const payDate = r.promisedPaymentDate ?? r.dueDate
                                     const overdue = (r.status === 'OPEN' || r.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                    return <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                    return (
+                                      <div>
+                                        <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                        {r.receivedDate && (
+                                          <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de recebimento">
+                                            <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(r.receivedDate)} recebido
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
                                   })()}</td>
                                   <td className="pl-1 pr-3 py-3 text-right tabular-nums whitespace-nowrap text-gray-700">{formatCurrency(r.totalAmount)}</td>
                                   <td className="px-3 py-3 text-right">
@@ -1487,7 +1497,16 @@ export default function ReceivablesPage() {
                                     const payDate = row.item.promisedPaymentDate ?? row.item.dueDate ?? dueDate
                                     if (!payDate) return <span className="text-gray-400">—</span>
                                     const overdue = (row.item.status === 'OPEN' || row.item.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                    return <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                    return (
+                                      <div>
+                                        <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                        {row.item.receivedDate && (
+                                          <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de recebimento">
+                                            <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(row.item.receivedDate)} recebido
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
                                   })()}</td>
                                   <td className="pl-1 pr-3 py-3 text-right tabular-nums whitespace-nowrap text-gray-700">{formatCurrency(total)}</td>
                                   <td className="px-3 py-3 text-right tabular-nums font-semibold text-green-700">{formatCurrency(pending)}</td>
@@ -1751,7 +1770,16 @@ export default function ReceivablesPage() {
                                   <td className="pl-3 pr-1 py-3 whitespace-nowrap">{(() => {
                                     const payDate = r.promisedPaymentDate ?? r.dueDate
                                     const overdue = (r.status === 'OPEN' || r.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                    return <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                    return (
+                                      <div>
+                                        <span className={overdue ? 'text-red-500' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                        {r.receivedDate && (
+                                          <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de recebimento">
+                                            <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(r.receivedDate)} recebido
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
                                   })()}</td>
                                   <td className="pl-1 pr-3 py-3 text-right tabular-nums whitespace-nowrap text-gray-700">{formatCurrency(r.totalAmount)}</td>
                                   <td className="px-3 py-3 text-right">
