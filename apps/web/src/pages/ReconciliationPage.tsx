@@ -279,7 +279,7 @@ export default function ReconciliationPage() {
   // ── Filtered movements ────────────────────────────────────────────────────
   const pendingMovements = useMemo(() => {
     let list = allMovements
-    if (movSearch) list = list.filter((m) => m.description.toLowerCase().includes(movSearch.toLowerCase()))
+    if (movSearch) list = list.filter((m) => (m.description ?? '').toLowerCase().includes(movSearch.toLowerCase()))
     if (movBankId) list = list.filter((m) => m.bankAccount?.id === movBankId)
     if (movSign === 'credit') list = list.filter((m) => Number(m.amount) >= 0)
     if (movSign === 'debit')  list = list.filter((m) => Number(m.amount) < 0)
@@ -294,10 +294,13 @@ export default function ReconciliationPage() {
   const pendingDocs = useMemo(() => {
     let list = allDocs
     if (docType !== 'all') list = list.filter((d) => d.type === docType)
-    if (docSearch) list = list.filter((d) =>
-      d.entityName.toLowerCase().includes(docSearch.toLowerCase()) ||
-      d.reference.toLowerCase().includes(docSearch.toLowerCase())
-    )
+    if (docSearch) {
+      const q = docSearch.toLowerCase()
+      list = list.filter((d) =>
+        (d.entityName ?? '').toLowerCase().includes(q) ||
+        (d.reference ?? '').toLowerCase().includes(q)
+      )
+    }
     if (docDateFrom) list = list.filter((d) => d.dueDate >= docDateFrom)
     if (docDateTo)   list = list.filter((d) => d.dueDate <= docDateTo)
     if (docAmountMin) list = list.filter((d) => Number(d.pendingAmount) >= parseFloat(docAmountMin))
@@ -496,7 +499,10 @@ export default function ReconciliationPage() {
   const hasSelection = selectedMovements.length > 0 || selectedDocs.length > 0
 
   // ── Movement row ──────────────────────────────────────────────────────────
-  function MovRow({ m }: { m: Movement }) {
+  // Render helper (not a component): called inline so its element type stays
+  // `button`. Defining it as a `<MovRow>` component would give it a fresh
+  // identity each render, remounting the whole list and resetting scroll.
+  function renderMovRow(m: Movement) {
     const selected = !!selectedMovements.find((x) => x.id === m.id)
     const isCredit = Number(m.amount) >= 0
     const amtCls = isCredit ? 'text-emerald-700' : 'text-red-700'
@@ -508,6 +514,7 @@ export default function ReconciliationPage() {
     const remainingAmt = fullAmt - reconciledAmt
     return (
       <button
+        key={m.id}
         onClick={() => toggleMovement(m)}
         disabled={isBlocked}
         className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-100
@@ -544,7 +551,8 @@ export default function ReconciliationPage() {
   }
 
   // ── Document row ──────────────────────────────────────────────────────────
-  function DocRow({ d }: { d: Document }) {
+  // Render helper (not a component) — see renderMovRow above.
+  function renderDocRow(d: Document) {
     const selected = !!selectedDocs.find((x) => x.id === d.id)
     const isBlocked = !selected && currentDirection !== null &&
       ((d.type === 'receivable' && currentDirection === 'EXPENSE') || (d.type === 'payable' && currentDirection === 'REVENUE'))
@@ -554,6 +562,7 @@ export default function ReconciliationPage() {
     const amtCls = d.type === 'receivable' ? 'text-emerald-700' : 'text-red-700'
     return (
       <button
+        key={d.id}
         onClick={() => toggleDoc(d)}
         disabled={isBlocked}
         className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-100
@@ -597,7 +606,8 @@ export default function ReconciliationPage() {
   }
 
   // ── Section headers ───────────────────────────────────────────────────────
-  function SectionHeader({ label, count, sign }: { label: string; count: number; sign: 'credit' | 'debit' }) {
+  // Render helper (not a component) — see renderMovRow above.
+  function renderSectionHeader({ label, count, sign }: { label: string; count: number; sign: 'credit' | 'debit' }) {
     const isBlocked = currentDirection !== null &&
       ((sign === 'credit' && currentDirection === 'EXPENSE') || (sign === 'debit' && currentDirection === 'REVENUE'))
     const cls = sign === 'credit' ? 'bg-emerald-50/80 text-emerald-800' : 'bg-red-50/80 text-red-800'
@@ -719,7 +729,7 @@ export default function ReconciliationPage() {
 
           {/* Movement list */}
           <div className="flex-1 overflow-y-auto" style={{ maxHeight: '420px' }}>
-            {pendingMovements.map((m) => <MovRow key={m.id} m={m} />)}
+            {pendingMovements.map((m) => renderMovRow(m))}
             {pendingMovements.length === 0 && (
               <div className="px-4 py-10 text-center text-gray-400 text-sm">
                 {allMovements.length === 0
@@ -818,14 +828,14 @@ export default function ReconciliationPage() {
             )}
             {pendingReceivables.length > 0 && (
               <>
-                <SectionHeader label="↓ Contas a Receber" count={pendingReceivables.length} sign="credit" />
-                {pendingReceivables.map((d) => <DocRow key={d.id} d={d} />)}
+                {renderSectionHeader({ label: '↓ Contas a Receber', count: pendingReceivables.length, sign: 'credit' })}
+                {pendingReceivables.map((d) => renderDocRow(d))}
               </>
             )}
             {pendingPayables.length > 0 && (
               <>
-                <SectionHeader label="↑ Contas a Pagar" count={pendingPayables.length} sign="debit" />
-                {pendingPayables.map((d) => <DocRow key={d.id} d={d} />)}
+                {renderSectionHeader({ label: '↑ Contas a Pagar', count: pendingPayables.length, sign: 'debit' })}
+                {pendingPayables.map((d) => renderDocRow(d))}
               </>
             )}
             {pendingDocs.length === 0 && (
