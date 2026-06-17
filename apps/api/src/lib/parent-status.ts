@@ -60,8 +60,10 @@ export async function syncParentDocStatus(db: Db, _clientId: string, kind: Kind,
   const paidAmount = children.reduce((s, c) => s + Number(c.paidAmount ?? 0), 0)
   const pendingAmount = children.reduce((s, c) => s + Number(c.pendingAmount ?? 0), 0)
   const { status, settledVia, promisedPaymentDate } = deriveParent(children)
+  const parent = await db.treasuryPayable.findUnique({ where: { id: parentId }, select: { settledAt: true } })
+  const settledAt = (status === 'SETTLED' || status === 'PAID') ? (parent?.settledAt ?? new Date()) : null
   await db.treasuryPayable.update({
     where: { id: parentId },
-    data: { status, paidAmount, pendingAmount, promisedPaymentDate, settledVia },
+    data: { status, paidAmount, pendingAmount, promisedPaymentDate, settledAt, settledVia },
   })
 }

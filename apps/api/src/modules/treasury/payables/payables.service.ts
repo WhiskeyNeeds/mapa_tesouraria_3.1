@@ -24,6 +24,7 @@ interface PayableListItem {
   paidAmount: number | Prisma.Decimal | null
   status: TreasuryDocStatus
   settledVia: TreasurySettlementSource | null
+  settledAt: Date | null
   origin: TreasuryDocOrigin
   tocPurchasesDocId: string | null
   tocSupplierId: string | null
@@ -63,6 +64,7 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
     paidAmount: paid,
     status: mappedStatus,
     settledVia: null,
+    settledAt: null,
     origin: 'TOCONLINE',
     tocPurchasesDocId: String(d.tocId),
     tocSupplierId: d.supplierId != null ? String(d.supplierId) : null,
@@ -101,6 +103,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
       paidAmount: local.paidAmount,
       status: local.status,
       settledVia: local.settledVia,
+      settledAt: local.settledAt,
       origin: local.origin,
       tocPurchasesDocId: local.tocPurchasesDocId,
       tocSupplierId: local.tocSupplierId,
@@ -134,6 +137,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
     paidAmount: merged.settled,
     status: merged.status,
     settledVia: local.settledVia,
+    settledAt: local.settledAt,
     origin: 'TOCONLINE',
     tocPurchasesDocId: local.tocPurchasesDocId,
     tocSupplierId: local.tocSupplierId ?? (tocDoc.supplierId != null ? String(tocDoc.supplierId) : null),
@@ -192,7 +196,7 @@ export class TreasuryPayablesService {
     // Modo de reconciliação: mostra as parcelas (filhas de split) em vez da mãe
     // dividida. Inverte a exclusão padrão (que esconde parcelas e mostra a mãe).
     reconcilable?: boolean
-    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
+    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'settledAt' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
@@ -847,7 +851,7 @@ export class TreasuryPayablesService {
       if (isSplitParent) {
         await tx.$executeRaw`
           UPDATE "treasury_payables"
-          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "updatedAt" = NOW()
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "settledAt" = NOW(), "updatedAt" = NOW()
           WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('SETTLED','VOID')
         `
         await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
@@ -862,6 +866,7 @@ export class TreasuryPayablesService {
           promisedPaymentDate: null,
           readyToPay: false,
           settledVia: 'LOCAL',
+          settledAt: new Date(),
         },
       })
       await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL' } })
@@ -891,7 +896,7 @@ export class TreasuryPayablesService {
       if (isSplitParent) {
         await tx.$executeRaw`
           UPDATE "treasury_payables"
-          SET "status" = 'PAID', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "updatedAt" = NOW()
+          SET "status" = 'PAID', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "settledAt" = NOW(), "updatedAt" = NOW()
           WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('PAID','SETTLED','VOID')
         `
         await audit(tx, { clientId, userId, action: 'payable.pay', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'PAID', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
@@ -906,6 +911,7 @@ export class TreasuryPayablesService {
           promisedPaymentDate: null,
           readyToPay: false,
           settledVia: 'LOCAL',
+          settledAt: new Date(),
         },
       })
       await audit(tx, { clientId, userId, action: 'payable.pay', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'PAID', via: 'LOCAL' } })
@@ -938,6 +944,7 @@ export class TreasuryPayablesService {
           pendingAmount: item.tocPurchasesDocId ? null : item.totalAmount,
           paidAmount: item.tocPurchasesDocId ? null : 0,
           settledVia: null,
+          settledAt: null,
         },
       })
       await audit(tx, {

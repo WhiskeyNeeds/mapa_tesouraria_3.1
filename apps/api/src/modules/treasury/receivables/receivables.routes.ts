@@ -50,7 +50,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
     const statusValue = q.status?.includes(',')
       ? (q.status.split(',') as TreasuryDocStatus[])
       : (q.status as TreasuryDocStatus | undefined)
-    const validSortBy = ['dueDate', 'totalAmount', 'pendingAmount', 'entityName', 'reference', 'promisedPaymentDate', 'status'].includes(q.sortBy ?? '') ? q.sortBy as 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status' : undefined
+    const validSortBy = ['dueDate', 'totalAmount', 'pendingAmount', 'entityName', 'reference', 'promisedPaymentDate', 'settledAt', 'status'].includes(q.sortBy ?? '') ? q.sortBy as 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'settledAt' | 'status' : undefined
     const validSortDir = q.sortDir === 'asc' || q.sortDir === 'desc' ? q.sortDir : undefined
     return reply.send(await svc.list(clientId, {
       ...q,

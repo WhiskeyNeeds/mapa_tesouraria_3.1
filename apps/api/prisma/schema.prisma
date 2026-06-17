@@ -556,6 +556,10 @@ model TreasuryPayable {
   readyToPay          Boolean   @default(false)
   // Como o documento ficou pago/liquidado. Ver TreasuryReceivable.settledVia.
   settledVia          TreasurySettlementSource?
+  // Instante em que o documento foi pago/liquidado (data real de pagamento).
+  // Espelha TreasuryReceivable.settledAt. Reposto a null ao reverter para
+  // OPEN/PARTIAL. Usado pela coluna "Pago em" e pela ordenação por essa data.
+  settledAt           DateTime?
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)

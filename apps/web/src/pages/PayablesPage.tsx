@@ -102,6 +102,7 @@ interface Payable {
   needsContact?: boolean
   parentId?: string | null
   settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
+  settledAt?: string | null
   category?: { id: string; name: string; color: string } | null
   budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
@@ -340,7 +341,7 @@ export default function PayablesPage() {
   const [docDateTo, setDocDateTo] = useState('')
   const [paymentDateFrom, setPaymentDateFrom] = useState('')
   const [paymentDateTo, setPaymentDateTo] = useState('')
-  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'>('promisedPaymentDate')
+  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'settledAt' | 'status'>('promisedPaymentDate')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
   const [showNew, setShowNew] = useState(false)
@@ -1216,7 +1217,7 @@ export default function PayablesPage() {
                   {renderBulkBar()}
 
                   <div ref={hScroll} className="overflow-x-auto">
-                    <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
+                    <table className="w-full table-auto text-sm min-w-[1180px] lg:min-w-0">
                       <thead>
                         <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                           <th className="w-12 px-3 py-3 select-none">
@@ -1238,6 +1239,7 @@ export default function PayablesPage() {
                           <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left pl-3 pr-1 py-3 cursor-pointer hover:text-gray-700 select-none">
                             Pagamento <SortIcon field="promisedPaymentDate" />
                           </th>
+                          <th onClick={() => toggleSort('settledAt')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pago em <SortIcon field="settledAt" /></th>
                           <th onClick={() => toggleSort('totalAmount')} className="text-center pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">
                             Total <SortIcon field="totalAmount" />
                           </th>
@@ -1315,6 +1317,7 @@ export default function PayablesPage() {
                                   const overdue = (p.status === 'OPEN' || p.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
                                   return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
                                 })()}</td>
+                                <td className="px-3 py-3 whitespace-nowrap text-gray-500">{p.settledAt ? formatDate(p.settledAt) : <span className="text-gray-300">—</span>}</td>
                                 <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(p.totalAmount)}</td>
                                 <td className="px-3 py-3 text-center">
                                   <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
@@ -1435,6 +1438,7 @@ export default function PayablesPage() {
                                   const overdue = (row.item.status === 'OPEN' || row.item.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
                                   return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
                                 })()}</td>
+                                <td className="px-3 py-3 whitespace-nowrap text-gray-500">{row.item.settledAt ? formatDate(row.item.settledAt) : <span className="text-gray-300">—</span>}</td>
                                 <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(total)}</td>
                                 <td className="px-3 py-3 text-center font-semibold text-red-700">{formatCurrency(pending)}</td>
                                 <td className="px-3 py-3">
@@ -1500,7 +1504,7 @@ export default function PayablesPage() {
                           )
                         })}
                         {rows.length === 0 && (
-                          <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : activeTab === 'futuros' ? 'Sem faturas marcadas como prontas para pagar' : 'Sem documentos'}</td></tr>
+                          <tr><td colSpan={13} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : activeTab === 'futuros' ? 'Sem faturas marcadas como prontas para pagar' : 'Sem documentos'}</td></tr>
                         )}
                       </tbody>
                       {rows.length > 0 && (() => {
@@ -1512,6 +1516,7 @@ export default function PayablesPage() {
                               <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
                                 <td colSpan={4} className="px-3 py-2">Total ({globalCount} doc.)</td>
                                 <td className="px-3 py-2 text-right text-gray-500 normal-case font-normal">Em aberto: {combinedKpis.countOpen}</td>
+                                <td className="px-3 py-2 text-right text-gray-400">—</td>
                                 <td className="px-3 py-2 text-right text-gray-400">—</td>
                                 <td className="px-3 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
                                 <td className="px-3 py-2 text-right text-gray-400">—</td>
@@ -1528,6 +1533,7 @@ export default function PayablesPage() {
                           <tfoot>
                             <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
                               <td colSpan={6} className="px-3 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
+                              <td className="px-3 py-2 text-right text-gray-400">—</td>
                               <td className="px-3 py-2 text-right">{formatCurrency(totalAmt)}</td>
                               <td className="px-3 py-2 text-right text-red-700">{formatCurrency(pendingAmt)}</td>
                               <td colSpan={4} />
@@ -1625,7 +1631,7 @@ export default function PayablesPage() {
                   </div>
                   {renderBulkBar()}
                   <div ref={hScroll} className="overflow-x-auto">
-                    <table className="w-full table-fixed text-sm min-w-[1180px] lg:min-w-0">
+                    <table className="w-full table-auto text-sm min-w-[1180px] lg:min-w-0">
                       <thead>
                         <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                           <th className="w-12 px-3 py-3 select-none">
@@ -1641,6 +1647,7 @@ export default function PayablesPage() {
                           <th onClick={() => toggleSort('entityName')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Fornecedor <SortIcon field="entityName" /></th>
                           <th onClick={() => toggleSort('dueDate')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Vencimento <SortIcon field="dueDate" /></th>
                           <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left pl-3 pr-1 py-3 cursor-pointer hover:text-gray-700 select-none">Pagamento <SortIcon field="promisedPaymentDate" /></th>
+                          <th onClick={() => toggleSort('settledAt')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pago em <SortIcon field="settledAt" /></th>
                           <th onClick={() => toggleSort('totalAmount')} className="text-center pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Total <SortIcon field="totalAmount" /></th>
                           <th onClick={() => toggleSort('pendingAmount')} className="text-center px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
                           <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
@@ -1704,6 +1711,7 @@ export default function PayablesPage() {
                                   const overdue = (p.status === 'OPEN' || p.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
                                   return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
                                 })()}</td>
+                                <td className="px-3 py-3 whitespace-nowrap text-gray-500">{p.settledAt ? formatDate(p.settledAt) : <span className="text-gray-300">—</span>}</td>
                                 <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(p.totalAmount)}</td>
                                 <td className="px-3 py-3 text-center">
                                   <div className="font-semibold text-red-700">{formatCurrency(p.pendingAmount)}</div>
@@ -1735,7 +1743,7 @@ export default function PayablesPage() {
                           }
 
                           if (outrasRows.length === 0) {
-                            return <tr><td colSpan={12} className="px-3 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
+                            return <tr><td colSpan={13} className="px-3 py-16 text-center text-sm text-gray-400">Sem operações registadas. Usa o botão acima para registar a primeira operação.</td></tr>
                           }
 
                           return outrasRows.map(renderRow)

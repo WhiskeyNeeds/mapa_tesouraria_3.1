@@ -348,7 +348,7 @@ export default function ReceivablesPage() {
   const [docDateTo, setDocDateTo] = useState('')
   const [paymentDateFrom, setPaymentDateFrom] = useState('')
   const [paymentDateTo, setPaymentDateTo] = useState('')
-  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'>('promisedPaymentDate')
+  const [sortBy, setSortBy] = useState<'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'settledAt' | 'status'>('promisedPaymentDate')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
   const [showNew, setShowNew] = useState(false)
@@ -1295,7 +1295,7 @@ export default function ReceivablesPage() {
                             <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left pl-3 pr-1 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Pagamento <SortIcon field="promisedPaymentDate" />
                             </th>
-                            <th className="text-left px-3 py-3 select-none">Recebimento</th>
+                            <th onClick={() => toggleSort('settledAt')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Recebimento <SortIcon field="settledAt" /></th>
                             <th onClick={() => toggleSort('totalAmount')} className="text-right pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">
                               Total <SortIcon field="totalAmount" />
                             </th>
@@ -1705,7 +1705,7 @@ export default function ReceivablesPage() {
                             <th onClick={() => toggleSort('entityName')} className="w-[13rem] text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Cliente <SortIcon field="entityName" /></th>
                             <th onClick={() => toggleSort('dueDate')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Vencimento <SortIcon field="dueDate" /></th>
                             <th onClick={() => toggleSort('promisedPaymentDate')} className="text-left pl-3 pr-1 py-3 cursor-pointer hover:text-gray-700 select-none">Pagamento <SortIcon field="promisedPaymentDate" /></th>
-                            <th className="text-left px-3 py-3 select-none">Recebimento</th>
+                            <th onClick={() => toggleSort('settledAt')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Recebimento <SortIcon field="settledAt" /></th>
                             <th onClick={() => toggleSort('totalAmount')} className="text-right pl-1 pr-3 py-3 cursor-pointer hover:text-gray-700 select-none">Total <SortIcon field="totalAmount" /></th>
                             <th onClick={() => toggleSort('pendingAmount')} className="text-right px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Pendente <SortIcon field="pendingAmount" /></th>
                             <th onClick={() => toggleSort('status')} className="text-left px-3 py-3 cursor-pointer hover:text-gray-700 select-none">Estado <SortIcon field="status" /></th>
