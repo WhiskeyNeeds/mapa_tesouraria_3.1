@@ -25,6 +25,8 @@ interface PayableListItem {
   status: TreasuryDocStatus
   settledVia: TreasurySettlementSource | null
   settledAt: Date | null
+  /** Referência do comprovativo de pagamento registado ao liquidar (null se não houver). */
+  paymentReference: string | null
   /** Data efetiva de pagamento (calculada): pagamento ao fornecedor no TOConline ›
    *  última parcela paga › settledAt manual. null enquanto não houver pagamento. */
   paymentDate: Date | string | null
@@ -68,6 +70,7 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
     status: mappedStatus,
     settledVia: null,
     settledAt: null,
+    paymentReference: null,
     paymentDate: null,
     origin: 'TOCONLINE',
     tocPurchasesDocId: String(d.tocId),
@@ -120,6 +123,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
       status: local.status,
       settledVia: local.settledVia,
       settledAt: local.settledAt,
+      paymentReference: local.paymentReference,
       paymentDate: basePaymentDate(local),
       origin: local.origin,
       tocPurchasesDocId: local.tocPurchasesDocId,
@@ -155,6 +159,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
     status: merged.status,
     settledVia: local.settledVia,
     settledAt: local.settledAt,
+    paymentReference: local.paymentReference,
     paymentDate: basePaymentDate(local),
     origin: 'TOCONLINE',
     tocPurchasesDocId: local.tocPurchasesDocId,
@@ -885,18 +890,26 @@ export class TreasuryPayablesService {
     return syncParentDocStatus(this.prisma, clientId, 'payable', parentId)
   }
 
-  async settle(clientId: string, userId: string, id: string) {
+  async settle(clientId: string, userId: string, id: string, opts: { paymentReference?: string; date?: string } = {}) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
-    // Faturas do TOConline não podem ser liquidadas manualmente: a liquidação é
-    // gerida pelo recibo/pagamento registado no TOConline (sync status 3 → SETTLED).
-    if (item.tocPurchasesDocId) throw httpError(409, 'A liquidação de faturas do TOConline é gerida automaticamente pelo TOConline')
+    const ref = opts.paymentReference?.trim()
+    const manual = !!ref
+    // Via manual (registo do comprovativo de pagamento): exige documento Pago +
+    // referência + data. Única forma de liquidar manualmente (incl. faturas TOC,
+    // cuja liquidação automática continua a vir do sync).
+    if (item.tocPurchasesDocId && !manual) throw httpError(409, 'A liquidação de faturas do TOConline é gerida automaticamente pelo TOConline')
+    if (manual) {
+      if (item.status !== 'PAID') throw httpError(409, 'Só é possível registar comprovativo numa conta paga (Pago → Liquidado)')
+      if (!opts.date) throw httpError(400, 'A data do pagamento é obrigatória')
+    }
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided payable')
     if (item.recurrenceId && item.parentId) {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
       if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
     }
+    const settledAt = manual && opts.date ? new Date(opts.date) : new Date()
 
     const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
     const isSplitParent = nonRecurChildren.length > 0
@@ -905,9 +918,10 @@ export class TreasuryPayablesService {
       if (isSplitParent) {
         await tx.$executeRaw`
           UPDATE "treasury_payables"
-          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "settledAt" = NOW(), "updatedAt" = NOW()
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "settledAt" = ${settledAt}, "updatedAt" = NOW()
           WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('SETTLED','VOID')
         `
+        if (manual) await tx.treasuryPayable.update({ where: { id }, data: { paymentReference: ref } })
         await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
         return null
       }
@@ -920,10 +934,11 @@ export class TreasuryPayablesService {
           promisedPaymentDate: null,
           readyToPay: false,
           settledVia: 'LOCAL',
-          settledAt: new Date(),
+          settledAt,
+          ...(manual ? { paymentReference: ref } : {}),
         },
       })
-      await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL' } })
+      await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL', paymentReference: ref ?? null } })
       return parent
     })
 
@@ -999,6 +1014,7 @@ export class TreasuryPayablesService {
           paidAmount: item.tocPurchasesDocId ? null : 0,
           settledVia: null,
           settledAt: null,
+          paymentReference: null,
         },
       })
       await audit(tx, {

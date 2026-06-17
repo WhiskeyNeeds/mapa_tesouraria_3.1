@@ -485,6 +485,9 @@ model TreasuryReceivable {
   // LOCAL = marcado manualmente; INSTALLMENTS = mãe derivada das parcelas;
   // RECONCILIATION = reconciliado pelo valor total. Gateia a reversão.
   settledVia          TreasurySettlementSource?
+  // Referência do recibo registado manualmente ao liquidar (PAID -> SETTLED).
+  // A data do recibo é guardada em `settledAt`. Limpa ao reverter a liquidação.
+  receiptReference    String?   @db.VarChar(80)
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)
@@ -560,6 +563,9 @@ model TreasuryPayable {
   // Espelha TreasuryReceivable.settledAt. Reposto a null ao reverter para
   // OPEN/PARTIAL. Usado pela coluna "Pago em" e pela ordenação por essa data.
   settledAt           DateTime?
+  // Referência do comprovativo/pagamento registado manualmente ao liquidar
+  // (PAID -> SETTLED). A data é guardada em `settledAt`. Limpa ao reverter.
+  paymentReference    String?   @db.VarChar(80)
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)

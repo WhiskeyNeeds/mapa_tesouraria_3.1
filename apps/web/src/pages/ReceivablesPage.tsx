@@ -87,6 +87,7 @@ interface Receivable {
   recurrenceId?: string | null
   promisedPaymentDate?: string | null
   receivedDate?: string | null
+  receiptReference?: string | null
   parentId?: string | null
   settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
   category?: { id: string; name: string; color?: string | null } | null
@@ -407,8 +408,10 @@ export default function ReceivablesPage() {
   const [panelDoc, setPanelDoc] = useState<Receivable | null>(null)
   const [panelTocDoc, setPanelTocDoc] = useState<TocSalesDoc | null>(null)
   const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
-  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split'>(null)
+  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'settle'>(null)
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
+  const [settleRef, setSettleRef] = useState('')
+  const [settleDate, setSettleDate] = useState('')
   const [detailReceipt, setDetailReceipt] = useState<TocReceipt | null>(null)
   const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
   const [splitCount, setSplitCount] = useState(2)
@@ -698,8 +701,10 @@ export default function ReceivablesPage() {
   })
 
   const settleReceivable = useMutation({
-    mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/settle`, {}),
-    onSuccess: (_, id) => {
+    mutationFn: (vars: { id: string; receiptReference?: string; date?: string }) =>
+      api.post(`/treasury/${selectedClientId}/receivables/${vars.id}/settle`, { receiptReference: vars.receiptReference, date: vars.date }),
+    onSuccess: (_, vars) => {
+      const id = vars.id
       qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
       const settleChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
         (arr ?? []).map((c) => c.recurrenceId || c.status === 'SETTLED' || c.status === 'VOID'
@@ -711,6 +716,8 @@ export default function ReceivablesPage() {
         pendingAmount: 0,
         receivedAmount: d.totalAmount,
         promisedPaymentDate: null,
+        receiptReference: vars.receiptReference ?? d.receiptReference,
+        receivedDate: vars.date ?? d.receivedDate,
         children: settleChildren(d.children),
       } : d)
       // Sync the detail cache so panelDocDetail (used as primary source for children) reflects the change synchronously.
@@ -720,8 +727,10 @@ export default function ReceivablesPage() {
         pendingAmount: 0,
         receivedAmount: old.totalAmount,
         promisedPaymentDate: null,
+        receiptReference: vars.receiptReference ?? old.receiptReference,
         children: settleChildren(old.children),
       } : old)
+      setPanelSection(null)
       toast.success('Documento marcado como liquidado.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -2601,6 +2610,7 @@ export default function ReceivablesPage() {
                           {panelDoc._statusToc === 'SETTLED' ? 'Recibo emitido no TOConline'
                             : panelDoc.settledVia === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
                             : panelDoc.settledVia === 'RECONCILIATION' ? 'Liquidado por reconciliação'
+                            : panelDoc.receiptReference ? `Recibo ${panelDoc.receiptReference}`
                             : 'Liquidado manualmente nesta plataforma'}
                         </div>
                       </div>
@@ -2675,29 +2685,42 @@ export default function ReceivablesPage() {
                     )
                   })()}
 
-                  {/* Marcar como Liquidada — direto ou a partir de "Pago" (não disponível em documentos TOC) */}
-                  {!panelDoc.tocSalesDocId && (panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
-                    const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
-                    return (
+                  {/* Marcar como Liquidada — só a partir de Pago; exige registar recibo (referência + data). */}
+                  {panelDoc.status === 'PAID' && panelDoc.settledVia !== 'INSTALLMENTS' && panelDoc.settledVia !== 'RECONCILIATION' && (
+                    <div className="rounded-xl border border-gray-200 overflow-hidden">
                       <button
-                        onClick={() => {
-                          if (isFutureRec) return
-                          settleReceivable.mutate(panelDoc.id)
-                        }}
-                        disabled={settleReceivable.isPending || isFutureRec}
-                        title={isFutureRec ? 'Recorrência futura — só pode ser liquidada a partir da data de vencimento' : undefined}
-                        className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-green-50 hover:border-green-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={() => { if (panelSection !== 'settle') { setSettleRef(''); setSettleDate('') } setPanelSection(panelSection === 'settle' ? null : 'settle') }}
+                        className="w-full flex items-center gap-3 p-3.5 hover:bg-green-50 text-left transition-colors group"
                       >
                         <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
                           <CheckCircle className="w-4 h-4 text-green-700" />
                         </div>
                         <div>
                           <div className="font-medium text-gray-900 text-sm">Marcar como Liquidada</div>
-                          <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar recibo / liquidação total'}</div>
+                          <div className="text-xs text-gray-500">Registar recibo (referência + data)</div>
                         </div>
                       </button>
-                    )
-                  })()}
+                      {panelSection === 'settle' && (
+                        <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Referência do recibo</label>
+                            <input className="input mt-1" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} placeholder="ex.: FR 2025/12" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Data do recibo</label>
+                            <input type="date" className="input mt-1" value={settleDate} onChange={(e) => setSettleDate(e.target.value)} />
+                          </div>
+                          <button
+                            onClick={() => settleReceivable.mutate({ id: panelDoc.id, receiptReference: settleRef.trim(), date: settleDate })}
+                            disabled={settleReceivable.isPending || !settleRef.trim() || !settleDate}
+                            className="btn-primary w-full text-sm py-1.5"
+                          >
+                            {settleReceivable.isPending ? 'A liquidar...' : 'Confirmar liquidação'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Data prometida — bloqueada em faturas pagas/liquidadas */}
                   <div className="rounded-xl border border-gray-200 overflow-hidden">

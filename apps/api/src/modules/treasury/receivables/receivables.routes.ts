@@ -232,7 +232,8 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
 
   fastify.post(`${prefix}/:id/settle`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    return reply.send(await svc.settle(clientId, request.user.sub, id))
+    const body = (request.body ?? {}) as { receiptReference?: string; date?: string }
+    return reply.send(await svc.settle(clientId, request.user.sub, id, { receiptReference: body.receiptReference, date: body.date }))
   })
 
   fastify.post(`${prefix}/:id/unsettle`, { onRequest: auth }, async (request, reply) => {

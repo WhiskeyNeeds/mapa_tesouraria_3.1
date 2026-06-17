@@ -25,6 +25,8 @@ interface ReceivableListItem {
   status: TreasuryDocStatus
   settledVia: TreasurySettlementSource | null
   settledAt: Date | null
+  /** Referência do recibo registado manualmente ao liquidar (null se não houver). */
+  receiptReference: string | null
   origin: TreasuryDocOrigin
   tocSalesDocId: string | null
   tocCustomerId: string | null
@@ -80,6 +82,7 @@ function mapTocSalesToReceivable(d: TocDocForOverlay): ReceivableListItem | null
     status: mappedStatus,
     settledVia: null,
     settledAt: null,
+    receiptReference: null,
     origin: 'TOCONLINE',
     tocSalesDocId: String(d.tocId),
     tocCustomerId: d.customerId != null ? String(d.customerId) : null,
@@ -137,6 +140,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
       status: local.status,
       settledVia: local.settledVia,
       settledAt: local.settledAt,
+      receiptReference: local.receiptReference,
       origin: local.origin,
       tocSalesDocId: local.tocSalesDocId,
       tocCustomerId: local.tocCustomerId,
@@ -170,6 +174,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
     status: merged.status,
     settledVia: local.settledVia,
     settledAt: local.settledAt,
+    receiptReference: local.receiptReference,
     origin: 'TOCONLINE',
     tocSalesDocId: local.tocSalesDocId,
     tocCustomerId: local.tocCustomerId ?? (tocDoc.customerId != null ? String(tocDoc.customerId) : null),
@@ -924,18 +929,26 @@ export class TreasuryReceivablesService {
     return syncParentDocStatus(this.prisma, clientId, 'receivable', parentId)
   }
 
-  async settle(clientId: string, userId: string, id: string) {
+  async settle(clientId: string, userId: string, id: string, opts: { receiptReference?: string; date?: string } = {}) {
     id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
-    // Faturas do TOConline não podem ser liquidadas manualmente: a liquidação é
-    // gerida pelo recibo emitido no TOConline (sync status 3 → SETTLED).
-    if (item.tocSalesDocId) throw httpError(409, 'A liquidação de faturas do TOConline é gerida automaticamente pelo recibo no TOConline')
+    const ref = opts.receiptReference?.trim()
+    const manual = !!ref
+    // Via manual (registo do recibo): exige documento Pago + referência + data.
+    // É a única forma de liquidar manualmente (incl. faturas TOConline, cuja
+    // liquidação automática continua a vir do recibo emitido no sync).
+    if (item.tocSalesDocId && !manual) throw httpError(409, 'A liquidação de faturas do TOConline é gerida automaticamente pelo recibo no TOConline')
+    if (manual) {
+      if (item.status !== 'PAID') throw httpError(409, 'Só é possível registar recibo numa conta paga (Pago → Liquidado)')
+      if (!opts.date) throw httpError(400, 'A data do recibo é obrigatória')
+    }
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided receivable')
     if (item.recurrenceId && item.parentId) {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
       if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
     }
+    const settledAt = manual && opts.date ? new Date(opts.date) : new Date()
 
     const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
     const isSplitParent = nonRecurChildren.length > 0
@@ -944,9 +957,10 @@ export class TreasuryReceivablesService {
       if (isSplitParent) {
         await tx.$executeRaw`
           UPDATE "treasury_receivables"
-          SET "status" = 'SETTLED', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = NOW(), "settledVia" = 'LOCAL', "updatedAt" = NOW()
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "receivedAmount" = "totalAmount", "settledAt" = ${settledAt}, "settledVia" = 'LOCAL', "updatedAt" = NOW()
           WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('SETTLED','VOID')
         `
+        if (manual) await tx.treasuryReceivable.update({ where: { id }, data: { receiptReference: ref } })
         await audit(tx, { clientId, userId, action: 'receivable.settle', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
         return null
       }
@@ -957,11 +971,12 @@ export class TreasuryReceivablesService {
           pendingAmount: item.tocSalesDocId ? null : 0,
           receivedAmount: item.tocSalesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
-          settledAt: new Date(),
+          settledAt,
           settledVia: 'LOCAL',
+          ...(manual ? { receiptReference: ref } : {}),
         },
       })
-      await audit(tx, { clientId, userId, action: 'receivable.settle', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL' } })
+      await audit(tx, { clientId, userId, action: 'receivable.settle', entityType: 'Receivable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL', receiptReference: ref ?? null } })
       return parent
     })
 
@@ -1036,6 +1051,7 @@ export class TreasuryReceivablesService {
           receivedAmount: item.tocSalesDocId ? null : 0,
           settledAt: null,
           settledVia: null,
+          receiptReference: null,
         },
       })
       await audit(tx, {
