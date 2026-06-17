@@ -103,6 +103,7 @@ interface Payable {
   parentId?: string | null
   settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
   settledAt?: string | null
+  paymentDate?: string | null
   category?: { id: string; name: string; color: string } | null
   budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
@@ -1315,9 +1316,9 @@ export default function PayablesPage() {
                                   return (
                                     <div>
                                       <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
-                                      {p.settledAt && (
+                                      {p.paymentDate && (
                                         <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de pagamento">
-                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(p.settledAt)} pago
+                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(p.paymentDate)} pago
                                         </div>
                                       )}
                                     </div>
@@ -1441,9 +1442,9 @@ export default function PayablesPage() {
                                   return (
                                     <div>
                                       <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
-                                      {row.item.settledAt && (
+                                      {row.item.paymentDate && (
                                         <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de pagamento">
-                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(row.item.settledAt)} pago
+                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(row.item.paymentDate)} pago
                                         </div>
                                       )}
                                     </div>
@@ -1717,9 +1718,9 @@ export default function PayablesPage() {
                                   return (
                                     <div>
                                       <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
-                                      {p.settledAt && (
+                                      {p.paymentDate && (
                                         <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de pagamento">
-                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(p.settledAt)} pago
+                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(p.paymentDate)} pago
                                         </div>
                                       )}
                                     </div>

@@ -25,6 +25,9 @@ interface PayableListItem {
   status: TreasuryDocStatus
   settledVia: TreasurySettlementSource | null
   settledAt: Date | null
+  /** Data efetiva de pagamento (calculada): pagamento ao fornecedor no TOConline ›
+   *  última parcela paga › settledAt manual. null enquanto não houver pagamento. */
+  paymentDate: Date | string | null
   origin: TreasuryDocOrigin
   tocPurchasesDocId: string | null
   tocSupplierId: string | null
@@ -65,6 +68,7 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
     status: mappedStatus,
     settledVia: null,
     settledAt: null,
+    paymentDate: null,
     origin: 'TOCONLINE',
     tocPurchasesDocId: String(d.tocId),
     tocSupplierId: d.supplierId != null ? String(d.supplierId) : null,
@@ -90,6 +94,18 @@ type LocalPayableRow = Prisma.TreasuryPayableGetPayload<{
   }
 }>
 
+/** Data-base de pagamento (sem TOC): a maior data de liquidação das parcelas
+ *  (última parcela paga) quando o doc está dividido; caso contrário o `settledAt`
+ *  da marcação manual de Pago/Liquidado. O pagamento ao fornecedor no TOConline,
+ *  quando existe, sobrepõe-se a isto na fase de enriquecimento da listagem. */
+function basePaymentDate(local: LocalPayableRow): Date | null {
+  const paidSplits = (local.children ?? []).filter((c) => c.recurrenceId == null && c.settledAt != null)
+  if (paidSplits.length > 0) {
+    return paidSplits.reduce<Date>((max, c) => (c.settledAt! > max ? c.settledAt! : max), paidSplits[0].settledAt!)
+  }
+  return local.settledAt ?? null
+}
+
 function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchaseDocument): PayableListItem | null {
   if (!tocDoc) {
     return {
@@ -104,6 +120,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
       status: local.status,
       settledVia: local.settledVia,
       settledAt: local.settledAt,
+      paymentDate: basePaymentDate(local),
       origin: local.origin,
       tocPurchasesDocId: local.tocPurchasesDocId,
       tocSupplierId: local.tocSupplierId,
@@ -138,6 +155,7 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
     status: merged.status,
     settledVia: local.settledVia,
     settledAt: local.settledAt,
+    paymentDate: basePaymentDate(local),
     origin: 'TOCONLINE',
     tocPurchasesDocId: local.tocPurchasesDocId,
     tocSupplierId: local.tocSupplierId ?? (tocDoc.supplierId != null ? String(tocDoc.supplierId) : null),
@@ -322,6 +340,36 @@ export class TreasuryPayablesService {
 
     const total = allItems.length
     const items = allItems.slice((page - 1) * limit, page * limit)
+
+    // Enriquecimento: data efetiva de pagamento via pagamento ao fornecedor no
+    // TOConline (precedência máxima sobre a data-base). Só para docs liquidados/
+    // pagos da página com ligação a um doc TOC (que tem `paymentsIds`).
+    const paymentIdsByItem = new Map<string, number[]>()
+    const allPaymentIds = new Set<number>()
+    for (const it of items) {
+      if (!it.tocPurchasesDocId || (it.status !== 'SETTLED' && it.status !== 'PAID')) continue
+      const toc = tocById.get(Number(it.tocPurchasesDocId))
+      const ids = Array.isArray(toc?.paymentsIds)
+        ? (toc!.paymentsIds as unknown[]).map(Number).filter((n) => !Number.isNaN(n))
+        : []
+      if (ids.length) {
+        paymentIdsByItem.set(it.id, ids)
+        ids.forEach((n) => allPaymentIds.add(n))
+      }
+    }
+    if (allPaymentIds.size) {
+      const payments = await this.prisma.tocPurchasePayment.findMany({
+        where: { clientId, tocId: { in: [...allPaymentIds] } },
+        select: { tocId: true, date: true },
+      })
+      const dateByPayment = new Map(payments.map((pm) => [pm.tocId, pm.date]))
+      for (const it of items) {
+        const ids = paymentIdsByItem.get(it.id)
+        if (!ids) continue
+        const dates = ids.map((id) => dateByPayment.get(id)).filter((d): d is string => !!d).sort()
+        if (dates.length) it.paymentDate = dates[dates.length - 1] // ISO date mais recente
+      }
+    }
 
     // Sinaliza as faturas (da página atual) com tarefa de contacto pendente
     // (CALL_TASK PENDING) — o frontend mostra o ícone "Contatar Cliente". Só os
