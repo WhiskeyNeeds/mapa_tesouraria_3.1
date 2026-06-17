@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { TreasuryBankMovementsService } from './bank-movements.service.js'
 import { parseStatementFile, parsePDF } from './parsers/index.js'
 import type { SupportedBank } from './parsers/index.js'
+import { findBalanceInconsistencies } from './balance-consistency.js'
 import type { TreasuryMovementStatus } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 
@@ -160,34 +161,16 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
         issues.push({ row, field: 'Valor', message: 'Valor em falta ou igual a zero' })
     }
 
-    // Balance consistency check — same algorithm as checkBalanceConsistency:
-    // sort by date, consider only movements with balanceAfter, compare consecutive pairs.
-    // For same-date movements, sort by (balanceAfter - amount) = balance before the movement,
-    // which determines the correct chronological order regardless of file ordering direction.
-    const indexed = movements.map((m, i) => ({ ...m, _row: i + 1 }))
-    const sorted = [...indexed].sort((a, b) => {
-      const dateCmp = a.date.localeCompare(b.date)
-      if (dateCmp !== 0) return dateCmp
-      if (a.balanceAfter != null && b.balanceAfter != null) {
-        return (a.balanceAfter - a.amount) - (b.balanceAfter - b.amount)
-      }
-      return 0
-    })
-    const withBalance = sorted.filter((m) => m.balanceAfter != null && !isNaN(m.balanceAfter))
-
-    for (let i = 1; i < withBalance.length; i++) {
-      const prev = withBalance[i - 1]
-      const curr = withBalance[i]
-      const calculated = Math.round((prev.balanceAfter! + curr.amount) * 100) / 100
-      const actual = Math.round(curr.balanceAfter! * 100) / 100
-      const gap = Math.round((calculated - actual) * 100) / 100
-      if (Math.abs(gap) > 0.01)
-        issues.push({
-          row: curr._row,
-          field: 'Saldo pós movimento',
-          message: `Saldo inconsistente: esperado ${calculated.toFixed(2)} €, tem ${actual.toFixed(2)} € (diferença: ${gap > 0 ? '+' : ''}${gap.toFixed(2)} €)`,
-        })
-    }
+    // Balance consistency check: reconstructs each day's true order by following
+    // the balance chain, so same-day movements that arrive out of order in the
+    // file (exports are typically newest-first) no longer produce phantom gaps.
+    // See balance-consistency.ts.
+    issues.push(...findBalanceInconsistencies(movements.map((m, i) => ({
+      date: m.date,
+      amount: m.amount,
+      balanceAfter: m.balanceAfter,
+      row: i + 1,
+    }))))
 
     return reply.send({ parsed: movements.length, issues })
   })
