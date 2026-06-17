@@ -1417,8 +1417,11 @@ export default function ReceivablesPage() {
                             const customer = d.customer_business_name || '—'
                             const date = d.date
                             const dueDate = d.due_date ?? date
-                            const total = d.gross_total
-                            const pending = d.pending_total
+                            // Valores com overlay TOC (row.item) — respeitam o override
+                            // local (ex.: marcado "Recebido" -> pendente 0), ao contrário
+                            // dos valores crus do espelho TOC (d.gross_total/d.pending_total).
+                            const total = row.item.totalAmount
+                            const pending = row.item.pendingAmount
                             const key = `t-${docId}`
                             const isExpanded = expandedIds.has(key)
                             const receiptCount = Array.isArray(d.receipts_ids) ? (d.receipts_ids as unknown[]).length : 0
@@ -1593,8 +1596,8 @@ export default function ReceivablesPage() {
                             )
                           }
                           // Com filtros: subtotal da página actual
-                          const totalAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.r.totalAmount) : Number(row.d.gross_total)), 0)
-                          const pendingAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.r.pendingAmount) : Number(row.d.pending_total)), 0)
+                          const totalAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.r.totalAmount) : Number(row.item.totalAmount)), 0)
+                          const pendingAmt = rows.reduce((s, row) => s + (row._src === 'local' ? Number(row.r.pendingAmount) : Number(row.item.pendingAmount)), 0)
                           return (
                             <tfoot>
                               <tr className="border-t-2 border-gray-200 bg-gray-50 text-xs font-semibold text-gray-600 uppercase">
