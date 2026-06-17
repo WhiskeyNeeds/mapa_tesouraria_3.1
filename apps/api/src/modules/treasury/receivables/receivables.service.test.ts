@@ -80,6 +80,44 @@ describe('unsettle gating por settledVia', () => {
   })
 })
 
+describe('create — origin pela ligação ao TOConline, não pela categoria', () => {
+  function makeCreateService(category: Record<string, unknown>) {
+    const tx = {
+      treasuryReceivable: {
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn(async (args: { data: Record<string, unknown> }) => ({ id: 'r1', ...args.data })),
+      },
+    }
+    const prisma = {
+      treasuryCategory: { findFirst: vi.fn().mockResolvedValue(category) },
+      treasuryReceivable: { findFirst: vi.fn().mockResolvedValue(null) },
+      treasuryAuditLog: { create: vi.fn().mockResolvedValue({}) },
+      $transaction: vi.fn(async (cb: (t: unknown) => unknown) => cb(tx)),
+    }
+    const budgetsSvc = { assertCompatible: vi.fn() }
+    const budgetRulesSvc = { suggest: vi.fn().mockResolvedValue(null) }
+    const svc = new TreasuryReceivablesService(prisma as never, budgetsSvc as never, budgetRulesSvc as never)
+    return { svc, tx }
+  }
+
+  it('doc manual com categoria launchToc=true fica LOCAL e recebe numeração interna', async () => {
+    const { svc, tx } = makeCreateService({ id: 'cat1', launchToc: true, type: 'REVENUE' })
+    await svc.create('c1', 'u1', { categoryId: 'cat1', dueDate: '2026-06-18', totalAmount: 100 })
+    const created = tx.treasuryReceivable.create.mock.calls[0][0].data
+    expect(created.origin).toBe('LOCAL')
+    expect(created.tocSalesDocId).toBeUndefined()
+    expect(String(created.reference)).toMatch(/^INT \d{4}\/\d+$/)
+  })
+
+  it('doc associado a TOConline (com tocSalesDocId) fica TOCONLINE e mantém a referência', async () => {
+    const { svc, tx } = makeCreateService({ id: 'cat1', launchToc: false, type: 'REVENUE' })
+    await svc.create('c1', 'u1', { categoryId: 'cat1', dueDate: '2026-06-18', totalAmount: 100, tocSalesDocId: '999', reference: 'FT 2026/5' })
+    const created = tx.treasuryReceivable.create.mock.calls[0][0].data
+    expect(created.origin).toBe('TOCONLINE')
+    expect(created.reference).toBe('FT 2026/5')
+  })
+})
+
 describe('split (parcelas locais — Abordagem A)', () => {
   it('cria parcelas com referência sufixada, valor próprio e SEM tocSalesDocId', async () => {
     const created: Array<{ data: Record<string, unknown> }> = []

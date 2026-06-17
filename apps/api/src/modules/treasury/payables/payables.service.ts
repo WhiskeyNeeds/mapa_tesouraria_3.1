@@ -537,7 +537,11 @@ export class TreasuryPayablesService {
       recurrenceId = rec.id
     }
 
-    const origin: TreasuryDocOrigin = category?.launchToc ? 'TOCONLINE' : 'LOCAL'
+    // Origem determinada pela ligação ao TOConline (tocPurchasesDocId), não pela
+    // categoria: `launchToc` está descontinuado (a app já não escreve no TOC).
+    // Um documento só é 'TOCONLINE' quando está efetivamente associado a um doc
+    // TOConline; caso contrário é local e totalmente editável.
+    const origin: TreasuryDocOrigin = data.tocPurchasesDocId ? 'TOCONLINE' : 'LOCAL'
     const created = await this.prisma.$transaction(async (tx) => {
       // Faturas criadas localmente (origin LOCAL, não recorrência-template) recebem
       // sempre numeração interna INT{ano}/{n}, ignorando referência manual. Docs TOC
@@ -670,7 +674,9 @@ export class TreasuryPayablesService {
       if (!category) throw httpError(404, 'Category not found')
       if (category.type !== 'EXPENSE') throw httpError(400, `Categoria '${category.name}' é de Receita; não pode ser associada a uma conta a pagar`)
       updateData.category = { connect: { id: data.categoryId } }
-      updateData.origin = category.launchToc ? 'TOCONLINE' : 'LOCAL'
+      // A origem reflete a ligação ao TOConline, não a categoria. Considera também
+      // uma associação feita nesta mesma chamada (data.tocPurchasesDocId).
+      updateData.origin = (data.tocPurchasesDocId ?? item.tocPurchasesDocId) ? 'TOCONLINE' : 'LOCAL'
     }
 
     if (data.budgetId !== undefined) {

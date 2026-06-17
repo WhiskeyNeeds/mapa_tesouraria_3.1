@@ -2368,7 +2368,7 @@ export default function ReceivablesPage() {
                     </a>
                   ) : null
                 })()}
-                {panelDoc.origin !== 'TOCONLINE' && (
+                {!panelDoc.tocSalesDocId && (
                   <div className="flex items-center gap-1 ml-auto">
                     <button
                       title="Editar"
@@ -2613,7 +2613,7 @@ export default function ReceivablesPage() {
                   })()}
 
                   {/* Marcar como Liquidada — direto ou a partir de "Pago" (não disponível em documentos TOC) */}
-                  {panelDoc.origin !== 'TOCONLINE' && (panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
+                  {!panelDoc.tocSalesDocId && (panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
                     const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
                     return (
                       <button

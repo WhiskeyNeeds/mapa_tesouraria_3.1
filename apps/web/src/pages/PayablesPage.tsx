@@ -2229,7 +2229,7 @@ export default function PayablesPage() {
                     </a>
                   ) : null
                 })()}
-                {panelDoc.origin !== 'TOCONLINE' && (
+                {!panelDoc.tocPurchasesDocId && (
                   <div className="flex items-center gap-1 ml-auto">
                     <button
                       title="Editar"
@@ -2440,7 +2440,7 @@ export default function PayablesPage() {
                   })()}
 
                   {/* Marcar como Liquidada — direto ou a partir de "Pago" (não disponível em documentos TOC) */}
-                  {panelDoc.origin !== 'TOCONLINE' && (panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
+                  {!panelDoc.tocPurchasesDocId && (panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL' || panelDoc.status === 'PAID') && (() => {
                     const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
                     return (
                       <button
