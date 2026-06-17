@@ -313,7 +313,13 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
           <td className="px-3 py-2" />
           <td className="px-3 py-2 text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</td>
           <td className="px-3 py-2" />
-          <td className="px-3 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(rc.gross_total)}</td>
+          <td className="px-3 py-2 text-right text-xs text-gray-600 font-medium">
+            {(() => {
+              const forDoc = rc._received_for_doc != null ? Number(rc._received_for_doc) : null
+              const showSplit = forDoc != null && forDoc !== Number(rc.gross_total)
+              return <>−{formatCurrency(forDoc ?? rc.gross_total)}{showSplit && <span className="block text-[10px] text-gray-400 font-normal">de {formatCurrency(rc.gross_total)}</span>}</>
+            })()}
+          </td>
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
@@ -2567,17 +2573,18 @@ export default function ReceivablesPage() {
                     <button key={String(rc.id)}
                       onClick={() => setDetailReceipt(rc)}
                       className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-xs text-gray-400">Recibo</span>
-                        <div className="text-right">
-                          <div className="text-xs font-semibold text-gray-700">{formatCurrency(receivedForDoc ?? rc.gross_total)}</div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-medium text-sm text-gray-900 truncate">{rc.document_no}</div>
+                          <div className="text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className="text-sm font-semibold text-gray-800">{formatCurrency(receivedForDoc ?? rc.gross_total)}</div>
                           {showSplit && (
                             <div className="text-[10px] text-gray-400">de {formatCurrency(rc.gross_total)}</div>
                           )}
                         </div>
                       </div>
-                      <div className="font-medium text-sm text-gray-900">{rc.document_no}</div>
-                      <div className="text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</div>
                     </button>
                   )
                 })}
@@ -2590,12 +2597,13 @@ export default function ReceivablesPage() {
               <div className="border-b border-gray-100 px-4 py-3 space-y-2">
                 <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recibo interno</div>
                 <div className="rounded-lg border border-gray-200 p-2.5">
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-xs text-gray-400">Recibo</span>
-                    <span className="text-xs font-semibold text-gray-700">{panelDoc.receiptAmount != null ? formatCurrency(panelDoc.receiptAmount) : '—'}</span>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm text-gray-900 truncate">{panelDoc.receiptReference}</div>
+                      <div className="text-xs text-gray-500">{panelDoc.receivedDate ? formatDate(panelDoc.receivedDate) : '—'}</div>
+                    </div>
+                    <div className="text-sm font-semibold text-gray-800 flex-shrink-0">{panelDoc.receiptAmount != null ? formatCurrency(panelDoc.receiptAmount) : '—'}</div>
                   </div>
-                  <div className="font-medium text-sm text-gray-900">{panelDoc.receiptReference}</div>
-                  <div className="text-xs text-gray-500">{panelDoc.receivedDate ? formatDate(panelDoc.receivedDate) : '—'}</div>
                 </div>
               </div>
             )}
