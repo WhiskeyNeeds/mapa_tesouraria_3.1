@@ -10,6 +10,7 @@ export interface SortableDoc {
   reference?: string | null
   promisedPaymentDate?: Date | null
   dueDate?: Date | null
+  settledAt?: Date | null
   [key: string]: unknown
 }
 

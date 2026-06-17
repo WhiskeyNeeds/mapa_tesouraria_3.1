@@ -322,6 +322,7 @@ export class TreasuryReconciliationsService {
                 // fica reservada ao recibo emitido no TOConline (sync status 3).
                 status: newPending <= 0.01 ? 'PAID' : 'PARTIAL',
                 settledVia: newPending <= 0.01 ? 'RECONCILIATION' : null,
+                settledAt: newPending <= 0.01 ? new Date() : null,
               },
             })
             // Regista na timeline da própria fatura (entityType Payable).
@@ -422,6 +423,7 @@ export class TreasuryReconciliationsService {
               pendingAmount: Math.max(0, total - newPaid),
               status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
               settledVia: null,
+              settledAt: null,
             },
           })
           await tx.treasuryAuditLog.create({

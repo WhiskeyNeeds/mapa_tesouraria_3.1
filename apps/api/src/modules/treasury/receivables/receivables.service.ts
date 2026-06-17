@@ -24,6 +24,7 @@ interface ReceivableListItem {
   receivedAmount: number | Prisma.Decimal | null
   status: TreasuryDocStatus
   settledVia: TreasurySettlementSource | null
+  settledAt: Date | null
   origin: TreasuryDocOrigin
   tocSalesDocId: string | null
   tocCustomerId: string | null
@@ -78,6 +79,7 @@ function mapTocSalesToReceivable(d: TocDocForOverlay): ReceivableListItem | null
     receivedAmount: received,
     status: mappedStatus,
     settledVia: null,
+    settledAt: null,
     origin: 'TOCONLINE',
     tocSalesDocId: String(d.tocId),
     tocCustomerId: d.customerId != null ? String(d.customerId) : null,
@@ -134,6 +136,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
       receivedAmount: local.receivedAmount,
       status: local.status,
       settledVia: local.settledVia,
+      settledAt: local.settledAt,
       origin: local.origin,
       tocSalesDocId: local.tocSalesDocId,
       tocCustomerId: local.tocCustomerId,
@@ -166,6 +169,7 @@ function overlayLocalWithToc(local: LocalReceivableRow, tocDoc?: TocDocForOverla
     receivedAmount: merged.settled,
     status: merged.status,
     settledVia: local.settledVia,
+    settledAt: local.settledAt,
     origin: 'TOCONLINE',
     tocSalesDocId: local.tocSalesDocId,
     tocCustomerId: local.tocCustomerId ?? (tocDoc.customerId != null ? String(tocDoc.customerId) : null),
@@ -210,7 +214,7 @@ type ReceivableListFilters = {
   // Modo de reconciliação: mostra as parcelas (filhas de split) em vez da mãe
   // dividida. Inverte a exclusão padrão (que esconde parcelas e mostra a mãe).
   reconcilable?: boolean
-  sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
+  sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'settledAt' | 'status'
   sortDir?: 'asc' | 'desc'
   page?: number
   limit?: number

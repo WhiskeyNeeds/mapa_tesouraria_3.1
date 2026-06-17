@@ -102,6 +102,7 @@ interface Payable {
   needsContact?: boolean
   parentId?: string | null
   settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
+  settledAt?: string | null
   category?: { id: string; name: string; color: string } | null
   budget?: { id: string; name: string; color?: string | null } | null
   children?: Array<{ id: string; reference: string; dueDate: string; totalAmount: number; pendingAmount: number; paidAmount: number; status: string; entityName: string; promisedPaymentDate?: string | null; recurrenceId?: string | null }>
@@ -1311,7 +1312,16 @@ export default function PayablesPage() {
                                 <td className="pl-3 pr-1 py-3 whitespace-nowrap">{(() => {
                                   const payDate = p.promisedPaymentDate ?? p.dueDate
                                   const overdue = (p.status === 'OPEN' || p.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                  return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                  return (
+                                    <div>
+                                      <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                      {p.settledAt && (
+                                        <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de pagamento">
+                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(p.settledAt)} pago
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
                                 })()}</td>
                                 <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(p.totalAmount)}</td>
                                 <td className="px-3 py-3 text-center">
@@ -1428,7 +1438,16 @@ export default function PayablesPage() {
                                   const payDate = row.item.promisedPaymentDate ?? row.item.dueDate ?? dueDate
                                   if (!payDate) return <span className="text-gray-400">—</span>
                                   const overdue = (row.item.status === 'OPEN' || row.item.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                  return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                  return (
+                                    <div>
+                                      <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                      {row.item.settledAt && (
+                                        <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de pagamento">
+                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(row.item.settledAt)} pago
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
                                 })()}</td>
                                 <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(total)}</td>
                                 <td className="px-3 py-3 text-center font-semibold text-red-700">{formatCurrency(pending)}</td>
@@ -1695,7 +1714,16 @@ export default function PayablesPage() {
                                 <td className="pl-3 pr-1 py-3 whitespace-nowrap">{(() => {
                                   const payDate = p.promisedPaymentDate ?? p.dueDate
                                   const overdue = (p.status === 'OPEN' || p.status === 'PARTIAL') && new Date(payDate).getTime() < Date.now()
-                                  return <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                  return (
+                                    <div>
+                                      <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-500'}>{formatDate(payDate)}</span>
+                                      {p.settledAt && (
+                                        <div className="text-xs text-green-600 flex items-center gap-0.5" title="Data de pagamento">
+                                          <CheckCircle className="w-3 h-3 flex-shrink-0" />{formatDate(p.settledAt)} pago
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
                                 })()}</td>
                                 <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(p.totalAmount)}</td>
                                 <td className="px-3 py-3 text-center">
