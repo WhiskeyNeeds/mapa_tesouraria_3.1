@@ -369,7 +369,7 @@ export class TreasuryPayablesService {
     }
     if (allPaymentIds.size) {
       const payments = await this.prisma.tocPurchasePayment.findMany({
-        where: { clientId, tocId: { in: [...allPaymentIds] } },
+        where: { clientId, tocId: { in: [...allPaymentIds] }, NOT: { raw: { path: ['deleted'], equals: true } } },
         select: { tocId: true, date: true },
       })
       const dateByPayment = new Map(payments.map((pm) => [pm.tocId, pm.date]))

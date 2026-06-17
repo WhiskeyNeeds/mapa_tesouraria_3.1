@@ -484,9 +484,11 @@ export class ToconlineService {
         const matchLine = lines.find((line) => Number(line.receivable_id) === numericDocId)
         return {
           ...raw,
+          deleted: attrs.deleted,
           _received_for_doc: matchLine ? Number(matchLine.received_value ?? 0) : null,
         }
       })
+      .filter((rc) => (rc as { deleted?: boolean }).deleted !== true)
   }
 
   async getPurchaseDocumentPayments(clientId: string, docId: string, knownIds?: number[]) {
@@ -526,9 +528,11 @@ export class ToconlineService {
         const matchLine = lines.find((line) => Number(line.payable_id) === numericDocId)
         return {
           ...raw,
+          deleted: attrs.deleted,
           _paid_for_doc: matchLine ? Number(matchLine.paid_value ?? matchLine.received_value ?? 0) : null,
         }
       })
+      .filter((pm) => (pm as { deleted?: boolean }).deleted !== true)
   }
 
   async getSalesReceiptLines(clientId: string, receiptId: string) {

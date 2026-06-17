@@ -303,7 +303,7 @@ export class TreasuryReceivablesService {
     }
     if (allReceiptIds.size) {
       const receipts = await this.prisma.tocSalesReceipt.findMany({
-        where: { clientId, tocId: { in: [...allReceiptIds] } },
+        where: { clientId, tocId: { in: [...allReceiptIds] }, NOT: { raw: { path: ['deleted'], equals: true } } },
         select: { tocId: true, date: true },
       })
       const dateByReceipt = new Map(receipts.map((r) => [r.tocId, r.date]))
