@@ -314,7 +314,6 @@ function ReceiptSubRows({ clientId, tocDocId, entityName, onReceiptClick }: { cl
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
           <td className="px-3 py-2" />
-          <td className="px-3 py-2" />
         </tr>
       ))}
     </>
@@ -1305,7 +1304,6 @@ export default function ReceivablesPage() {
                             </th>
                             <th className="text-left px-3 py-3">Categoria</th>
                             <th className="text-left px-3 py-3">Budget</th>
-                            <th className="w-48 px-3 py-3" />
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
@@ -1398,9 +1396,6 @@ export default function ReceivablesPage() {
                                       budgets={budgets}
                                       onSelect={(budgetId) => classifyBudget.mutate({ id: r.id, budgetId })}
                                     />
-                                  </td>
-                                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" />
                                   </td>
                                 </tr>
                               )
@@ -1517,7 +1512,6 @@ export default function ReceivablesPage() {
                                       onSelect={(budgetId) => classifyBudget.mutate({ id: row.item.id, budgetId })}
                                     />
                                   </td>
-                                  <td className="px-3 py-3" />
                                 </tr>
                                 {isExpanded && (
                                   <>
@@ -1542,7 +1536,6 @@ export default function ReceivablesPage() {
                                         <td className="px-3 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
                                         <td className="px-3 py-2" />
                                         <td className="px-3 py-2" />
-                                        <td className="px-3 py-2" />
                                       </tr>
                                     ))}
                                     {receiptCount > 0 && (
@@ -1559,7 +1552,7 @@ export default function ReceivablesPage() {
                             )
                           })}
                           {rows.length === 0 && (
-                            <tr><td colSpan={12} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
+                            <tr><td colSpan={11} className="px-3 py-10 text-center text-sm text-gray-400">{isLoading ? 'A carregar…' : 'Sem documentos'}</td></tr>
                           )}
                         </tbody>
                         {rows.length > 0 && (() => {
@@ -1575,7 +1568,7 @@ export default function ReceivablesPage() {
                                   <td className="px-3 py-2 text-right text-gray-500 normal-case font-normal">Vencidas: {combinedKpis.countOverdue > 0 ? <span className="text-red-600 font-semibold">{combinedKpis.countOverdue}</span> : 0}</td>
                                   <td className="px-3 py-2 text-right text-gray-400">—</td>
                                   <td className="px-3 py-2 text-right text-green-700">{formatCurrency(combinedKpis.totalPending)}</td>
-                                  <td colSpan={3} />
+                                  <td colSpan={2} />
                                 </tr>
                               </tfoot>
                             )
@@ -1589,7 +1582,7 @@ export default function ReceivablesPage() {
                                 <td colSpan={6} className="px-3 py-2">Subtotal — {rows.length} nesta pág. ({data?.total ?? 0} filtrados)</td>
                                 <td className="px-3 py-2 text-right">{formatCurrency(totalAmt)}</td>
                                 <td className="px-3 py-2 text-right text-green-700">{formatCurrency(pendingAmt)}</td>
-                                <td colSpan={4} />
+                                <td colSpan={3} />
                               </tr>
                             </tfoot>
                           )
