@@ -2514,15 +2514,15 @@ export default function PayablesPage() {
                         <div className="font-medium text-gray-900 text-sm">Definir Data Pagamento</div>
                         {panelDoc.promisedPaymentDate
                           ? <div className="text-xs text-blue-600">{formatDate(panelDoc.promisedPaymentDate)}</div>
-                          : <div className="text-xs text-gray-500">Sem data prometida</div>
+                          : <div className="text-xs text-gray-500">{formatDate(panelDoc.dueDate)} <span className="text-gray-400">(vencimento)</span></div>
                         }
                       </div>
                     </button>
                     {panelSection === 'promised' && panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID' && (
                       <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
-                        <input type="date" className="input" value={panelPromisedDate} onChange={(e) => setPanelPromisedDate(pickWorkday(e.target.value, panelPromisedDate))} />
+                        <input type="date" className="input" value={panelPromisedDate || (panelDoc.dueDate ? String(panelDoc.dueDate).slice(0, 10) : '')} onChange={(e) => setPanelPromisedDate(pickWorkday(e.target.value, panelPromisedDate))} />
                         <div className="flex gap-2">
-                          <button onClick={() => setPromisedDate.mutate({ id: panelDoc.id, date: panelPromisedDate || null })}
+                          <button onClick={() => setPromisedDate.mutate({ id: panelDoc.id, date: (panelPromisedDate || (panelDoc.dueDate ? String(panelDoc.dueDate).slice(0, 10) : '')) || null })}
                             disabled={setPromisedDate.isPending} className="btn-primary flex-1 text-sm py-1.5">
                             {setPromisedDate.isPending ? 'A guardar...' : 'Guardar'}
                           </button>
