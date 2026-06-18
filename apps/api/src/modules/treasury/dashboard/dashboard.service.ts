@@ -393,6 +393,49 @@ export class TreasuryDashboardService {
     }
   }
 
+  /**
+   * Fluxo de caixa líquido (entradas − saídas) num intervalo de datas, com a MESMA
+   * definição das barras mensais: movimentos bancários + pendentes locais
+   * (OPEN/PARTIAL, por data efetiva = promessa ?? vencimento, excluindo a mãe de
+   * splits) + docs TOConline não importados (por vencimento). Usado para projetar o
+   * saldo inicial de cada ano de forma consistente entre vistas.
+   */
+  private async netCashFlow(clientId: string, dateCond: { gt?: Date; gte?: Date; lt?: Date; lte?: Date }): Promise<number> {
+    const strCond: { gt?: string; gte?: string; lt?: string; lte?: string } = {}
+    if (dateCond.gt) strCond.gt = dateCond.gt.toISOString().slice(0, 10)
+    if (dateCond.gte) strCond.gte = dateCond.gte.toISOString().slice(0, 10)
+    if (dateCond.lt) strCond.lt = dateCond.lt.toISOString().slice(0, 10)
+    if (dateCond.lte) strCond.lte = dateCond.lte.toISOString().slice(0, 10)
+    const ACTIVE_TOC_STATUS = [1, 2, 5]
+    const effDate = { OR: [{ promisedPaymentDate: dateCond }, { promisedPaymentDate: null, dueDate: dateCond }] }
+    const [movs, rec, pay, tocLinkedRec, tocLinkedPay, tocSales, tocPurch] = await Promise.all([
+      this.prisma.treasuryBankMovement.findMany({ where: { clientId, deletedAt: null, date: dateCond }, select: { amount: true } }),
+      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true } }),
+      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true } }),
+      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocSalesDocId: { not: null } }, select: { tocSalesDocId: true } }),
+      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocPurchasesDocId: { not: null } }, select: { tocPurchasesDocId: true } }),
+      this.prisma.tocSalesDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
+      this.prisma.tocPurchaseDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
+    ])
+    let net = movs.reduce((s, m) => s + Number(m.amount), 0)
+    net += rec.reduce((s, r) => s + Number(r.pendingAmount ?? 0), 0)
+    net -= pay.reduce((s, p) => s + Number(p.pendingAmount ?? 0), 0)
+    const impSales = new Set(tocLinkedRec.map((r) => String(r.tocSalesDocId)))
+    const impPurch = new Set(tocLinkedPay.map((p) => String(p.tocPurchasesDocId)))
+    const SALES = new Set(['ft', 'fs', 'fr']), PURCH = new Set(['fc', 'dsp'])
+    for (const d of tocSales) {
+      if (impSales.has(String(d.tocId))) continue
+      const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (SALES.has(dt)) net += Number(d.pendingTotal ?? d.grossTotal ?? 0)
+    }
+    for (const d of tocPurch) {
+      if (impPurch.has(String(d.tocId))) continue
+      const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (PURCH.has(dt)) net -= Number(d.pendingTotal ?? d.grossTotal ?? 0)
+    }
+    return net
+  }
+
   async getCashflowStatement(clientId: string, year: number) {
     const start = new Date(year, 0, 1)
     const end = new Date(year, 11, 31, 23, 59, 59)
@@ -438,17 +481,17 @@ export class TreasuryDashboardService {
     const balances = await this.fetchAccountBalances(clientId)
     const currentBalance = bankAccounts.reduce((s, a) => s + (balances.get(a.id) ?? 0), 0)
 
-    // Saldo no início do ano = saldo atual − TODOS os movimentos desde o início
-    // desse ano até hoje. Para anos passados isto reconstrói o saldo histórico
-    // real (subtraindo tudo o que aconteceu desde então); subtrair apenas os
-    // movimentos do próprio ano dava o saldo de hoje em anos sem movimentos.
-    // (Para anos futuros o intervalo fica vazio → saldo atual; o encadeamento
-    // contínuo entre anos é feito no frontend.)
-    const movementsSinceYearStart = await this.prisma.treasuryBankMovement.findMany({
-      where: { clientId, deletedAt: null, date: { gte: start, lte: now } },
-      select: { amount: true },
-    })
-    const balanceAtYearStart = currentBalance - movementsSinceYearStart.reduce((s, m) => s + Number(m.amount), 0)
+    // Saldo no início do ano = saldo atual PROJETADO até 1 de Janeiro desse ano,
+    // com o mesmo fluxo das barras (movimentos + pendentes por data efetiva + TOC
+    // não importado). Garante que o mesmo mês mostra o mesmo saldo em qualquer vista
+    // (não "salta" na viragem de ano nem repõe ao saldo de hoje em anos futuros):
+    //   - ano passado/atual: subtrai o fluxo desde o início do ano até hoje;
+    //   - ano futuro: soma o fluxo de hoje até ao início do ano.
+    // (gt no início e lt no futuro evitam contar duas vezes o fluxo de 1 de Janeiro,
+    // que já entra no próprio ano via forward-prop.)
+    const balanceAtYearStart = start <= now
+      ? currentBalance - (await this.netCashFlow(clientId, { gt: start, lte: now }))
+      : currentBalance + (await this.netCashFlow(clientId, { gt: now, lt: start }))
 
     // Decomposição por status semântico:
     //   settled    = movimentos bancários realizados                  → "Atual" no chart
