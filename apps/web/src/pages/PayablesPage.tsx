@@ -1388,7 +1388,8 @@ export default function PayablesPage() {
                           const isExpanded = expandedIds.has(key)
                           const paymentCount = Array.isArray(d.payments_ids) ? (d.payments_ids as unknown[]).length : 0
                           const ncs = tocNcMap.get(docId) ?? []
-                          const expandCount = paymentCount + ncs.length
+                          const hasInternalPayment = !!row.item.paymentReference
+                          const expandCount = paymentCount + ncs.length + (hasInternalPayment ? 1 : 0)
                           return (
                             <Fragment key={key}>
                               <tr
@@ -1526,6 +1527,26 @@ export default function PayablesPage() {
                                       entityName={supplier}
                                       onPaymentClick={setDetailPayment}
                                     />
+                                  )}
+                                  {hasInternalPayment && (
+                                    <tr className="bg-gray-50/60 border-b border-gray-100/80">
+                                      <td className="px-3 py-2" />
+                                      <td className="px-2 py-2" />
+                                      <td className="pl-2 pr-3 py-2">
+                                        <div className="flex items-center gap-2 text-xs">
+                                          <span className="text-[10px] font-bold uppercase px-1 py-0.5 rounded bg-slate-100 text-slate-600 flex-shrink-0">Interno</span>
+                                          <span className="text-gray-700 font-medium">{row.item.paymentReference}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-3 py-2 text-xs text-gray-500">{supplier}</td>
+                                      <td className="px-3 py-2" />
+                                      <td className="px-3 py-2 text-xs text-gray-500">{row.item.paymentDate ? formatDate(row.item.paymentDate) : '—'}</td>
+                                      <td className="px-3 py-2" />
+                                      <td className="px-3 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(row.item.paymentAmount ?? 0)}</td>
+                                      <td className="px-3 py-2" />
+                                      <td className="px-3 py-2" />
+                                      <td className="px-3 py-2" />
+                                    </tr>
                                   )}
                                 </>
                               )}
