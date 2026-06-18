@@ -483,14 +483,26 @@ export class TreasuryDashboardService {
     // futuro). Exclui split parcelas (parentId set, recurrenceId null) para
     // evitar double-count com o pai. Subdivide entre "open" e "programmed"
     // consoante existir recurrenceId.
-    const [pendingRec, pendingPay] = await Promise.all([
+    const [pendingRec, pendingPay, splitRec, splitPay] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
         where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocSalesDocId: true, categoryId: true },
+        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocSalesDocId: true, categoryId: true, children: { where: { recurrenceId: null, deletedAt: null }, select: { id: true } } },
       }),
       this.prisma.treasuryPayable.findMany({
         where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocPurchasesDocId: true, categoryId: true },
+        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocPurchasesDocId: true, categoryId: true, children: { where: { recurrenceId: null, deletedAt: null }, select: { id: true } } },
+      }),
+      // Parcelas de splits: a data que conta é a promisedPaymentDate de CADA parcela
+      // (o dueDate da parcela é herdado da mãe). São contadas aqui pela sua data real
+      // e a mãe é excluída do cálculo (children.length > 0), para o valor ficar
+      // distribuído pelos meses reais de pagamento em vez de cair todo num só.
+      this.prisma.treasuryReceivable.findMany({
+        where: { clientId, deletedAt: null, parentId: { not: null }, recurrenceId: null, status: { in: ['OPEN', 'PARTIAL'] }, promisedPaymentDate: { gte: start, lte: end } },
+        select: { promisedPaymentDate: true, pendingAmount: true, categoryId: true },
+      }),
+      this.prisma.treasuryPayable.findMany({
+        where: { clientId, deletedAt: null, parentId: { not: null }, recurrenceId: null, status: { in: ['OPEN', 'PARTIAL'] }, promisedPaymentDate: { gte: start, lte: end } },
+        select: { promisedPaymentDate: true, pendingAmount: true, categoryId: true },
       }),
     ])
 
@@ -500,6 +512,7 @@ export class TreasuryDashboardService {
     const importedPurchTocIds = new Set(pendingPay.map(p => p.tocPurchasesDocId).filter((s): s is string => !!s))
 
     for (const r of pendingRec) {
+      if (r.children.length > 0) continue // mãe dividida: contam as parcelas (abaixo)
       if (!r.dueDate || r.dueDate.getFullYear() !== year) continue
       const idx = r.dueDate.getMonth()
       const amt = Number(r.pendingAmount ?? 0)
@@ -508,12 +521,30 @@ export class TreasuryDashboardService {
       addCatPending(r.categoryId, idx, amt, true)
     }
     for (const p of pendingPay) {
+      if (p.children.length > 0) continue // mãe dividida: contam as parcelas (abaixo)
       if (!p.dueDate || p.dueDate.getFullYear() !== year) continue
       const idx = p.dueDate.getMonth()
       const amt = Number(p.pendingAmount ?? 0)
       if (p.recurrenceId) monthlyProgrammedExpense[idx] += amt
       else monthlyOpenExpense[idx] += amt
       addCatPending(p.categoryId, idx, amt, false)
+    }
+    // Parcelas de splits — cada uma na sua data real (promisedPaymentDate). Sem
+    // recorrência → entram sempre como "open". Não têm tocSalesDocId (Abordagem A),
+    // logo não precisam do dedup TOC; a mãe mantém-se na pendingRec só para o dedup.
+    for (const c of splitRec) {
+      if (!c.promisedPaymentDate || c.promisedPaymentDate.getFullYear() !== year) continue
+      const idx = c.promisedPaymentDate.getMonth()
+      const amt = Number(c.pendingAmount ?? 0)
+      monthlyOpenIncome[idx] += amt
+      addCatPending(c.categoryId, idx, amt, true)
+    }
+    for (const c of splitPay) {
+      if (!c.promisedPaymentDate || c.promisedPaymentDate.getFullYear() !== year) continue
+      const idx = c.promisedPaymentDate.getMonth()
+      const amt = Number(c.pendingAmount ?? 0)
+      monthlyOpenExpense[idx] += amt
+      addCatPending(c.categoryId, idx, amt, false)
     }
 
     // Faturas TOC sincronizadas que ainda não foram importadas como
