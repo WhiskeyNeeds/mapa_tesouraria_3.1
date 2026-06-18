@@ -212,6 +212,12 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.settle(clientId, request.user.sub, id, { paymentReference: body.paymentReference, date: body.date }))
   })
 
+  fastify.post(`${prefix}/:id/commit`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const body = (request.body ?? {}) as { reference: string; amount: number; date: string }
+    return reply.send(await svc.commit(clientId, request.user.sub, id, { reference: body.reference, amount: body.amount, date: body.date }))
+  })
+
   fastify.post(`${prefix}/:id/unsettle`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     return reply.send(await svc.unsettle(clientId, request.user.sub, id))

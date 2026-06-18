@@ -951,6 +951,29 @@ export class TreasuryReceivablesService {
     return syncParentDocStatus(this.prisma, clientId, 'receivable', parentId)
   }
 
+  async commit(clientId: string, userId: string, id: string, opts: { reference: string; amount: number; date: string }) {
+    id = await this.resolveLocalReceivableId(clientId, userId, id)
+    const item = await this.getById(clientId, id)
+    if (item.status !== 'SCHEDULED') throw httpError(409, 'Só é possível comprometer uma fatura programada')
+    const reference = opts.reference?.trim()
+    if (!reference) throw httpError(400, 'A referência é obrigatória')
+    if (!opts.date) throw httpError(400, 'A data é obrigatória')
+    if (!(opts.amount > 0)) throw httpError(400, 'O valor é obrigatório')
+    const result = await this.prisma.treasuryReceivable.update({
+      where: { id },
+      data: {
+        status: 'OPEN',
+        reference,
+        totalAmount: opts.amount,
+        pendingAmount: opts.amount,
+        receivedAmount: 0,
+        dueDate: new Date(opts.date),
+      },
+    })
+    await audit(this.prisma, { clientId, userId, action: 'receivable.commit', entityType: 'Receivable', entityId: id, payload: { reference, amount: opts.amount, date: opts.date } })
+    return result
+  }
+
   async settle(clientId: string, userId: string, id: string, opts: { receiptReference?: string; date?: string } = {}) {
     id = await this.resolveLocalReceivableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
