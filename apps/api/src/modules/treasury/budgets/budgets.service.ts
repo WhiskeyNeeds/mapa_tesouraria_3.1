@@ -2,6 +2,7 @@
 import type { PrismaClient, TreasuryCategoryType, TreasuryBudgetStatus, Prisma } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
+import { resolveDocAmounts, resolveStatusOverlay, mapTocStatus } from '../../../lib/toc-overlay.js'
 
 export interface BudgetProgress {
   paidAmount: number
@@ -41,7 +42,7 @@ export class TreasuryBudgetsService {
         return {
           ...b,
           totalAmount: Number(b.totalAmount.toString()),
-          progress: await this.computeProgress(b.id, b.type, Number(b.totalAmount.toString())),
+          progress: await this.computeProgress(clientId, b.id, b.type, Number(b.totalAmount.toString())),
           pendingReviewCount,
         }
       }),
@@ -65,15 +66,42 @@ export class TreasuryBudgetsService {
     if (!budget) throw httpError(404, 'Budget not found')
 
     const totalAmount = Number(budget.totalAmount.toString())
-    const progress = await this.computeProgress(budget.id, budget.type, totalAmount)
+    const progress = await this.computeProgress(clientId, budget.id, budget.type, totalAmount)
 
     const docWhere = { budgetId: id, deletedAt: null, NOT: { recurrenceId: { not: null as string | null }, parentId: null } }
     const docInclude = { category: { select: { id: true, name: true, color: true } } }
     const docOrder = [{ dueDate: 'asc' as const }]
 
-    const documents = budget.type === 'REVENUE'
-      ? await this.prisma.treasuryReceivable.findMany({ where: docWhere, include: docInclude, orderBy: docOrder })
-      : await this.prisma.treasuryPayable.findMany({ where: docWhere, include: docInclude, orderBy: docOrder })
+    // Overlay TOC: documentos ligados ao TOConline guardam entityName/dueDate/
+    // totalAmount/status a null localmente (vivem no espelho TOC). Sobrepõe esses
+    // campos para a UI não mostrar linhas "vazias".
+    let documents: unknown[]
+    if (budget.type === 'REVENUE') {
+      const rows = await this.prisma.treasuryReceivable.findMany({ where: docWhere, include: docInclude, orderBy: docOrder })
+      const tocIds = rows.map((r) => r.tocSalesDocId).filter((s): s is string => !!s).map(Number).filter((n) => !Number.isNaN(n))
+      const mirrors = tocIds.length ? await this.prisma.tocSalesDocument.findMany({ where: { clientId, tocId: { in: tocIds } } }) : []
+      const byId = new Map(mirrors.map((m) => [m.tocId, m]))
+      documents = rows.map((r) => {
+        const m = r.tocSalesDocId ? byId.get(Number(r.tocSalesDocId)) : undefined
+        if (!m) return r
+        const gross = Number(m.grossTotal ?? 0)
+        const merged = resolveStatusOverlay(r.status, r.receivedAmount, mapTocStatus(m.status) ?? 'OPEN', gross, Number(m.pendingTotal ?? gross))
+        return { ...r, entityName: m.customerName ?? r.entityName, reference: m.documentNo ?? r.reference, dueDate: m.dueDate ?? r.dueDate, totalAmount: gross, status: merged.status }
+      })
+    } else {
+      const rows = await this.prisma.treasuryPayable.findMany({ where: docWhere, include: docInclude, orderBy: docOrder })
+      const tocIds = rows.map((r) => r.tocPurchasesDocId).filter((s): s is string => !!s).map(Number).filter((n) => !Number.isNaN(n))
+      const mirrors = tocIds.length ? await this.prisma.tocPurchaseDocument.findMany({ where: { clientId, tocId: { in: tocIds } } }) : []
+      const byId = new Map(mirrors.map((m) => [m.tocId, m]))
+      documents = rows.map((r) => {
+        const m = r.tocPurchasesDocId ? byId.get(Number(r.tocPurchasesDocId)) : undefined
+        if (!m) return r
+        const gross = Number(m.grossTotal ?? 0)
+        const merged = resolveStatusOverlay(r.status, r.paidAmount, mapTocStatus(m.status) ?? 'OPEN', gross, Number(m.pendingTotal ?? gross))
+        const raw = (m.raw ?? {}) as Record<string, unknown>
+        return { ...r, entityName: (raw.supplier_business_name as string) ?? r.entityName, reference: (raw.document_no as string) ?? r.reference, dueDate: m.dueDate ?? r.dueDate, totalAmount: gross, status: merged.status }
+      })
+    }
 
     return {
       ...budget,
@@ -83,31 +111,55 @@ export class TreasuryBudgetsService {
     }
   }
 
-  private async computeProgress(budgetId: string, type: TreasuryCategoryType, totalAmount: number): Promise<BudgetProgress> {
+  private async computeProgress(clientId: string, budgetId: string, type: TreasuryCategoryType, totalAmount: number): Promise<BudgetProgress> {
     // Recurrence template roots (parentId=null, recurrenceId set) are excluded — only actual
     // transaction instances (children) count. Old-style roots (pendingAmount>0) are still
     // counted because they predate the template convention.
     const excludeTemplates = { recurrenceId: { not: null as string | null }, parentId: null }
+    const isRevenue = type === 'REVENUE'
 
-    if (type === 'REVENUE') {
-      const docs = await this.prisma.treasuryReceivable.findMany({
-        where: { budgetId, deletedAt: null, status: { not: 'VOID' }, NOT: excludeTemplates },
-        select: { receivedAmount: true, pendingAmount: true },
-      })
-      const paidAmount = docs.reduce((s, d) => s + Number(d.receivedAmount ?? 0), 0)
-      const expectedAmount = docs.reduce((s, d) => s + Number(d.pendingAmount ?? 0), 0)
-      const totalAllocated = paidAmount + expectedAmount
-      const availableAmount = totalAmount - totalAllocated
-      const overrunAmount = availableAmount < 0 ? -availableAmount : 0
-      return { paidAmount, expectedAmount, availableAmount, totalAllocated, overrunAmount }
+    // Docs locais: para os ligados ao TOConline os valores reais vivem no espelho
+    // TOC — resolvemos via overlay para não contar 0 nesses documentos.
+    const rows = isRevenue
+      ? await this.prisma.treasuryReceivable.findMany({
+          where: { budgetId, deletedAt: null, status: { not: 'VOID' }, NOT: excludeTemplates },
+          select: { status: true, reference: true, totalAmount: true, pendingAmount: true, receivedAmount: true, tocSalesDocId: true },
+        })
+      : await this.prisma.treasuryPayable.findMany({
+          where: { budgetId, deletedAt: null, status: { not: 'VOID' }, NOT: excludeTemplates },
+          select: { status: true, reference: true, totalAmount: true, pendingAmount: true, paidAmount: true, tocPurchasesDocId: true },
+        })
+
+    const tocIds = rows
+      .map((r) => (isRevenue ? (r as { tocSalesDocId: string | null }).tocSalesDocId : (r as { tocPurchasesDocId: string | null }).tocPurchasesDocId))
+      .filter((s): s is string => !!s).map(Number).filter((n) => !Number.isNaN(n))
+    const mirrors = tocIds.length
+      ? (isRevenue
+          ? await this.prisma.tocSalesDocument.findMany({ where: { clientId, tocId: { in: tocIds } } })
+          : await this.prisma.tocPurchaseDocument.findMany({ where: { clientId, tocId: { in: tocIds } } }))
+      : []
+    const byId = new Map(mirrors.map((m) => [m.tocId, m]))
+
+    let paidAmount = 0
+    let expectedAmount = 0
+    for (const r of rows) {
+      const tocId = isRevenue ? (r as { tocSalesDocId: string | null }).tocSalesDocId : (r as { tocPurchasesDocId: string | null }).tocPurchasesDocId
+      const m = tocId ? byId.get(Number(tocId)) : undefined
+      const resolved = resolveDocAmounts(
+        {
+          status: r.status,
+          reference: r.reference,
+          totalAmount: r.totalAmount,
+          pendingAmount: r.pendingAmount,
+          settledAmount: isRevenue ? (r as { receivedAmount: Prisma.Decimal | null }).receivedAmount : (r as { paidAmount: Prisma.Decimal | null }).paidAmount,
+          isTocLinked: !!tocId,
+        },
+        m ? { status: m.status, grossTotal: m.grossTotal, pendingTotal: m.pendingTotal, raw: m.raw } : null,
+      )
+      paidAmount += resolved.settled
+      expectedAmount += resolved.pending
     }
 
-    const docs = await this.prisma.treasuryPayable.findMany({
-      where: { budgetId, deletedAt: null, status: { not: 'VOID' }, NOT: excludeTemplates },
-      select: { paidAmount: true, pendingAmount: true },
-    })
-    const paidAmount = docs.reduce((s, d) => s + Number(d.paidAmount ?? 0), 0)
-    const expectedAmount = docs.reduce((s, d) => s + Number(d.pendingAmount ?? 0), 0)
     const totalAllocated = paidAmount + expectedAmount
     const availableAmount = totalAmount - totalAllocated
     const overrunAmount = availableAmount < 0 ? -availableAmount : 0
