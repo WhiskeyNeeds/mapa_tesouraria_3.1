@@ -46,8 +46,10 @@ export function formatCurrency(value: number, currency = 'EUR'): string {
   return parts.map((p) => (p.type === 'group' ? '\u202F' : p.value)).join('')
 }
 
-export function formatDate(date: string | Date, fmt = 'dd/MM/yyyy'): string {
+export function formatDate(date: string | Date | null | undefined, fmt = 'dd/MM/yyyy'): string {
+  if (date == null || date === '') return '—'
   const d = typeof date === 'string' ? parseISO(date) : date
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—'
   return format(d, fmt, { locale: pt })
 }
 
