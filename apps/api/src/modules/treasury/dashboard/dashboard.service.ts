@@ -438,11 +438,14 @@ export class TreasuryDashboardService {
     const balances = await this.fetchAccountBalances(clientId)
     const currentBalance = bankAccounts.reduce((s, a) => s + (balances.get(a.id) ?? 0), 0)
 
-    // Balance at start of year = currentBalance - sum(movements entre year_start e now).
-    // Permite forward-prop dos saldos mensais (em vez de back-prop, que se quebra
-    // quando há projeções de pending docs em meses futuros do ano corrente).
+    // Saldo no início do ano = saldo atual − TODOS os movimentos desde o início
+    // desse ano até hoje. Para anos passados isto reconstrói o saldo histórico
+    // real (subtraindo tudo o que aconteceu desde então); subtrair apenas os
+    // movimentos do próprio ano dava o saldo de hoje em anos sem movimentos.
+    // (Para anos futuros o intervalo fica vazio → saldo atual; o encadeamento
+    // contínuo entre anos é feito no frontend.)
     const movementsSinceYearStart = await this.prisma.treasuryBankMovement.findMany({
-      where: { clientId, deletedAt: null, date: { gte: start, lte: now < end ? now : end } },
+      where: { clientId, deletedAt: null, date: { gte: start, lte: now } },
       select: { amount: true },
     })
     const balanceAtYearStart = currentBalance - movementsSinceYearStart.reduce((s, m) => s + Number(m.amount), 0)
