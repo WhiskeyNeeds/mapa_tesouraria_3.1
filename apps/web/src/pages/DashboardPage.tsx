@@ -251,7 +251,6 @@ function CashflowStatementTable() {
   const colExpenseOpen       = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseOpen       ? col.monthIndices.reduce((s, i) => s + (d.expenseOpen![i]       ?? 0), 0) : 0 }
   const colExpenseProgrammed = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseProgrammed ? col.monthIndices.reduce((s, i) => s + (d.expenseProgrammed![i] ?? 0), 0) : 0 }
   const colStartBal = (col: ColDef) => { const d = getYearData(col.colYear); return d ? (d.startingBalances[col.monthIndices[0]] ?? 0) : 0 }
-  const colEndBal = (col: ColDef) => { const d = getYearData(col.colYear); return d ? (d.endingBalances[col.monthIndices[col.monthIndices.length - 1]] ?? 0) : 0 }
   const colCatAmt = (col: ColDef, cat: CashflowStatCategory) => {
     const d = getYearData(col.colYear)
     if (!d) return 0
@@ -260,6 +259,19 @@ function CashflowStatementTable() {
   }
   const colUncatInc = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.uncategorizedIncome[i] ?? 0), 0) : 0 }
   const colUncatExp = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.uncategorizedExpense[i] ?? 0), 0) : 0 }
+
+  // Saldo corrido CONTÍNUO ao longo da janela visível. Cada ano vem do backend
+  // ancorado ao saldo atual do banco (startingBalances[0] = saldo de hoje), por
+  // isso ao cruzar a viragem de ano o saldo "saltava" de volta ao saldo atual.
+  // Aqui encadeia-se: o saldo inicial de cada coluna = saldo final da anterior,
+  // ancorando só a 1ª coluna ao valor do backend.
+  const runningStartBal: number[] = []
+  const runningEndBal: number[] = []
+  for (let k = 0; k < cols.length; k++) {
+    const start = k === 0 ? colStartBal(cols[0]) : runningEndBal[k - 1]
+    runningStartBal[k] = start
+    runningEndBal[k] = start + colIncome(cols[k]) - colExpense(cols[k])
+  }
 
   const incomeCats = (yearData?.categories ?? []).filter((c) => c.type === 'REVENUE')
   const expenseCats = (yearData?.categories ?? []).filter((c) => c.type === 'EXPENSE')
@@ -307,7 +319,7 @@ function CashflowStatementTable() {
     onClick: (e: React.MouseEvent) => { e.stopPropagation(); setSelectedColKey((p) => p === key ? null : key) },
   })
 
-  const chartData = cols.map((col) => ({
+  const chartData = cols.map((col, k) => ({
     label: col.label,
     income: colIncome(col),
     expense: colExpense(col),
@@ -317,7 +329,8 @@ function CashflowStatementTable() {
     expenseSettled: colExpenseSettled(col),
     expenseOpen: colExpenseOpen(col),
     expenseProgrammed: colExpenseProgrammed(col),
-    balance: col.isFuture ? null : colEndBal(col),
+    // Saldo projetado e contínuo (encadeado entre anos) — a linha não salta na viragem de ano.
+    balance: runningEndBal[k],
   }))
 
   // Weekly chart: o cash-positioning service não devolve subdivisão por status,
@@ -363,7 +376,7 @@ function CashflowStatementTable() {
   )
 
   function renderChart(
-    cData: typeof chartData,
+    cData: Array<Omit<(typeof chartData)[number], 'balance'> & { balance: number | null }>,
     nCols: number,
     _isFutureCol: (k: number) => boolean,
     _isCurrentCol: (k: number) => boolean,
@@ -472,8 +485,8 @@ function CashflowStatementTable() {
             {cols.map((col) => {
               const v = colCatAmt(col, cat)
               return (
-                <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? (hasChildren ? 'font-medium text-gray-700' : 'text-gray-700') : 'text-gray-300'}`} {...hoverProps(col.label)}>
-                  {v > 0 && !col.isFuture ? formatCurrency(v) : '—'}
+                <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 ? (col.isFuture ? 'text-gray-400 italic' : (hasChildren ? 'font-medium text-gray-700' : 'text-gray-700')) : 'text-gray-300'}`} {...hoverProps(col.label)}>
+                  {v > 0 ? formatCurrency(v) : '—'}
                 </td>
               )
             })}
@@ -965,9 +978,9 @@ function CashflowStatementTable() {
 
           <tr className="bg-white hover:bg-gray-50/50">
             <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>
-            {cols.map((col) => {
-              const v = colStartBal(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${col.isFuture ? 'text-gray-300' : 'text-gray-700'}`} {...hoverProps(col.label)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
+            {cols.map((col, k) => {
+              const v = runningStartBal[k]
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${col.isFuture ? 'text-gray-400 italic' : 'text-gray-700'}`} {...hoverProps(col.label)}>{formatCurrency(v)}</td>
             })}
             <td className="px-3 py-2 text-right text-xs text-gray-300">—</td>
           </tr>
@@ -981,7 +994,7 @@ function CashflowStatementTable() {
             </td>
             {cols.map((col) => {
               const v = colIncome(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-emerald-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-emerald-100' : ''} ${v > 0 ? (col.isFuture ? 'text-emerald-600 italic' : 'text-emerald-700') : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
             })}
             <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{totalIncome > 0 ? formatCurrency(totalIncome) : '—'}</td>
           </tr>
@@ -989,7 +1002,7 @@ function CashflowStatementTable() {
           {inflowOpen && cols.some((col) => colUncatInc(col) > 0) && (
             <tr className="bg-white hover:bg-gray-50/50">
               <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
-              {cols.map((col) => { const v = colUncatInc(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
+              {cols.map((col) => { const v = colUncatInc(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 ? (col.isFuture ? 'text-gray-400 italic' : 'text-gray-400') : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 ? formatCurrency(v) : '—'}</td> })}
               <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{(() => { const t = cols.reduce((s, col) => s + colUncatInc(col), 0); return t > 0 ? formatCurrency(t) : '—' })()}</td>
             </tr>
           )}
@@ -1003,7 +1016,7 @@ function CashflowStatementTable() {
             </td>
             {cols.map((col) => {
               const v = colExpense(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-red-100' : ''} ${col.isFuture ? 'text-gray-300' : v > 0 ? 'text-red-700' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td>
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-red-100' : ''} ${v > 0 ? (col.isFuture ? 'text-red-600 italic' : 'text-red-700') : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
             })}
             <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{totalExpense > 0 ? formatCurrency(totalExpense) : '—'}</td>
           </tr>
@@ -1011,7 +1024,7 @@ function CashflowStatementTable() {
           {outflowOpen && cols.some((col) => colUncatExp(col) > 0) && (
             <tr className="bg-white hover:bg-gray-50/50">
               <td className="pl-10 pr-5 py-1.5 text-xs text-gray-400 italic sticky left-0 bg-white z-10">Sem categoria</td>
-              {cols.map((col) => { const v = colUncatExp(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 && !col.isFuture ? 'text-gray-400' : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 && !col.isFuture ? formatCurrency(v) : '—'}</td> })}
+              {cols.map((col) => { const v = colUncatExp(col); return <td key={col.key} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${v > 0 ? (col.isFuture ? 'text-gray-400 italic' : 'text-gray-400') : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 ? formatCurrency(v) : '—'}</td> })}
               <td className="px-3 py-1.5 text-right text-xs text-gray-400 whitespace-nowrap">{(() => { const t = cols.reduce((s, col) => s + colUncatExp(col), 0); return t > 0 ? formatCurrency(t) : '—' })()}</td>
             </tr>
           )}
@@ -1020,16 +1033,16 @@ function CashflowStatementTable() {
             <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-gray-50 z-10">Variação líquida</td>
             {cols.map((col) => {
               const net = colIncome(col) - colExpense(col)
-              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${col.isFuture || net === 0 ? 'text-gray-300' : net > 0 ? 'text-emerald-700' : 'text-red-700'}`} {...hoverProps(col.label)}>{net !== 0 && !col.isFuture ? netFmt(net) : '—'}</td>
+              return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${net === 0 ? 'text-gray-300' : net > 0 ? (col.isFuture ? 'text-emerald-600 italic' : 'text-emerald-700') : (col.isFuture ? 'text-red-600 italic' : 'text-red-700')}`} {...hoverProps(col.label)}>{net !== 0 ? netFmt(net) : '—'}</td>
             })}
             <td className={`px-3 py-2 text-right text-xs font-semibold whitespace-nowrap ${netVariation === 0 ? 'text-gray-300' : netVariation > 0 ? 'text-emerald-700' : 'text-red-700'}`}>{netVariation !== 0 ? netFmt(netVariation) : '—'}</td>
           </tr>
 
           <tr className="bg-white border-t-2 border-gray-300">
             <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
-            {cols.map((col) => {
-              const v = colEndBal(col)
-              return <td key={col.key} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50 text-blue-900' : col.isFuture ? 'text-gray-300' : v < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(col.label)}>{col.isFuture ? '—' : formatCurrency(v)}</td>
+            {cols.map((col, k) => {
+              const v = runningEndBal[k]
+              return <td key={col.key} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50 text-blue-900' : col.isFuture ? (v < 0 ? 'text-red-500 italic' : 'text-blue-500 italic') : v < 0 ? 'text-red-700' : 'text-gray-900'}`} {...hoverProps(col.label)}>{formatCurrency(v)}</td>
             })}
             <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
           </tr>
