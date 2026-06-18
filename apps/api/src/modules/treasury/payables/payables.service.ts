@@ -635,7 +635,10 @@ export class TreasuryPayablesService {
           createdById: userId,
           origin,
           totalAmount: data.totalAmount,
-          pendingAmount: data.totalAmount,
+          // Raiz de recorrência = template (não é uma ocorrência): pendingAmount 0,
+          // para não duplicar com a 1.ª instância gerada. As ocorrências (filhas)
+          // levam o valor estimado. Faturas avulsas: pendingAmount = totalAmount.
+          pendingAmount: data.recurrence ? 0 : data.totalAmount,
           ...(data.recurrence ? { status: 'SCHEDULED' as const } : {}),
           documentDate: data.documentDate ? new Date(data.documentDate) : null,
           dueDate: new Date(data.dueDate),
