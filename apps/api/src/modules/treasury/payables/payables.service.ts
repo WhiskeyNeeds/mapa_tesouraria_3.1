@@ -593,6 +593,7 @@ export class TreasuryPayablesService {
     let recurrenceId = data.recurrenceId
 
     if (data.recurrence) {
+      if (!(data.totalAmount > 0)) throw httpError(400, 'Valor estimado obrigatório na recorrência')
       const firstDueDate = new Date(data.dueDate)
       const rec = await this.prisma.treasuryRecurrence.create({
         data: {
@@ -617,7 +618,9 @@ export class TreasuryPayablesService {
       // Faturas criadas localmente (origin LOCAL, não recorrência-template) recebem
       // sempre numeração interna INT{ano}/{n}, ignorando referência manual. Docs TOC
       // mantêm a referência do TOConline; templates de recorrência ficam fora.
-      let reference = data.reference ?? null
+      // Recorrências: a fatura-raiz nasce SCHEDULED, sem referência (ignora
+      // qualquer referência enviada), com o valor estimado do formulário.
+      let reference = data.recurrence ? null : (data.reference ?? null)
       if (origin === 'LOCAL' && !data.recurrence) {
         const year = new Date().getFullYear()
         const existing = await tx.treasuryPayable.findMany({
@@ -632,8 +635,8 @@ export class TreasuryPayablesService {
           createdById: userId,
           origin,
           totalAmount: data.totalAmount,
-          // Template roots have pendingAmount=0; actual transactions are the children
-          pendingAmount: data.recurrence ? 0 : data.totalAmount,
+          pendingAmount: data.totalAmount,
+          ...(data.recurrence ? { status: 'SCHEDULED' as const } : {}),
           documentDate: data.documentDate ? new Date(data.documentDate) : null,
           dueDate: new Date(data.dueDate),
           currency: data.currency ?? 'EUR',
