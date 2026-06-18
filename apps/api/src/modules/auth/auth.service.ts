@@ -50,7 +50,10 @@ export class AuthService {
     const refreshExpiresIn = this.parseExpiry(process.env.JWT_REFRESH_EXPIRES_IN ?? '7d')
 
     const accessToken = this.fastify.jwt.sign({ ...payload, type: 'access' }, { expiresIn: process.env.JWT_EXPIRES_IN ?? '15m' })
-    const refreshToken = this.fastify.jwt.sign({ ...payload, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d' })
+    // jti aleatório: garante que refresh tokens emitidos no mesmo segundo (refreshes
+    // concorrentes) são distintos — senão o JWT seria idêntico (mesmo sub/iat/exp) e
+    // o hash colidiria no índice único tokenHash (erro ao gravar).
+    const refreshToken = this.fastify.jwt.sign({ ...payload, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d', jti: randomBytes(16).toString('hex') })
 
     // Persiste o refresh token (hash) na BD — durável, sobrevive a reinícios e
     // suporta vários em simultâneo (multi-separador). Limpa expirados do utilizador.
@@ -115,7 +118,17 @@ export class AuthService {
     // Rotação: o token tem de existir na BD (não revogado/rodado) e estar válido.
     const row = await this.prisma.refreshToken.findUnique({ where: { tokenHash: hashToken(token) } })
     if (!row || row.expiresAt < new Date()) throw httpError(401, 'Refresh token revoked')
-    await this.prisma.refreshToken.delete({ where: { id: row.id } })
+
+    // Rotação COM período de graça: apagar o token de imediato fazia 401 a todos os
+    // refreshes concorrentes (vários pedidos ao expirar o access token, ou vários
+    // separadores) que usam o mesmo token — o 1.º apagava-o e os restantes falhavam,
+    // deitando a sessão abaixo. Em vez disso encurtamos a validade para uns segundos:
+    // refreshes concorrentes dentro da graça ainda validam; passada a graça, deixa
+    // de servir. (deleteMany de expirados no issueTokens limpa-os depois.)
+    const graceUntil = new Date(Date.now() + 30_000)
+    if (row.expiresAt > graceUntil) {
+      await this.prisma.refreshToken.update({ where: { id: row.id }, data: { expiresAt: graceUntil } }).catch(() => {})
+    }
 
     return this.issueTokens(payload.sub)
   }
