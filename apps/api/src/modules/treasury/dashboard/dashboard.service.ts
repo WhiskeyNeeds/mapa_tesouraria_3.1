@@ -458,6 +458,17 @@ export class TreasuryDashboardService {
     const monthlyProgrammedIncome = new Array(12).fill(0)
     const monthlyProgrammedExpense = new Array(12).fill(0)
 
+    // Pendentes (em aberto + programadas) desdobrados por categoria, para a
+    // tabela bater certo com os totais/saldo em todos os meses.
+    const catPendingMonthly = new Map<string, number[]>()
+    const uncatPendingIncome = new Array(12).fill(0)
+    const uncatPendingExpense = new Array(12).fill(0)
+    const addCatPending = (categoryId: string | null, idx: number, amt: number, income: boolean) => {
+      if (!categoryId) { (income ? uncatPendingIncome : uncatPendingExpense)[idx] += amt; return }
+      if (!catPendingMonthly.has(categoryId)) catPendingMonthly.set(categoryId, new Array(12).fill(0))
+      catPendingMonthly.get(categoryId)![idx] += amt
+    }
+
     for (const m of movements) {
       const idx = m.date.getMonth()
       const amt = Number(m.amount)
@@ -472,11 +483,11 @@ export class TreasuryDashboardService {
     const [pendingRec, pendingPay] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
         where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocSalesDocId: true },
+        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocSalesDocId: true, categoryId: true },
       }),
       this.prisma.treasuryPayable.findMany({
         where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocPurchasesDocId: true },
+        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocPurchasesDocId: true, categoryId: true },
       }),
     ])
 
@@ -491,6 +502,7 @@ export class TreasuryDashboardService {
       const amt = Number(r.pendingAmount ?? 0)
       if (r.recurrenceId) monthlyProgrammedIncome[idx] += amt
       else monthlyOpenIncome[idx] += amt
+      addCatPending(r.categoryId, idx, amt, true)
     }
     for (const p of pendingPay) {
       if (!p.dueDate || p.dueDate.getFullYear() !== year) continue
@@ -498,6 +510,7 @@ export class TreasuryDashboardService {
       const amt = Number(p.pendingAmount ?? 0)
       if (p.recurrenceId) monthlyProgrammedExpense[idx] += amt
       else monthlyOpenExpense[idx] += amt
+      addCatPending(p.categoryId, idx, amt, false)
     }
 
     // Faturas TOC sincronizadas que ainda não foram importadas como
@@ -515,6 +528,7 @@ export class TreasuryDashboardService {
       const amt = Number(d.pendingTotal ?? d.grossTotal ?? 0)
       if (amt <= 0) continue
       monthlyOpenIncome[due.getMonth()] += amt
+      addCatPending(null, due.getMonth(), amt, true)
     }
     for (const d of tocPurchPending) {
       if (importedPurchTocIds.has(String(d.tocId))) continue
@@ -526,33 +540,25 @@ export class TreasuryDashboardService {
       const amt = Number(d.pendingTotal ?? d.grossTotal ?? 0)
       if (amt <= 0) continue
       monthlyOpenExpense[due.getMonth()] += amt
+      addCatPending(null, due.getMonth(), amt, false)
     }
 
-    // Totais agregados para tabela e back-compute do saldo.
-    //
-    // IMPORTANTE: para meses **passados e atual** usa-se SÓ settled (movimentos
-    // bancários realizados) — pending docs em aberto não contam como cash já
-    // realizado, e contá-los aqui distorceria o saldo histórico. Para meses
-    // **futuros** somam-se as 3 séries (settled + open + programmed) porque
-    // representam a projeção de saldo assumindo que os pending vão liquidar.
-    // Os arrays separados (Settled/Open/Programmed) continuam disponíveis para
-    // o chart, que renderiza as 3 séries independentemente da fase temporal.
-    const sameYear = now.getFullYear() === year
-    const currentMonthIdx = sameYear ? now.getMonth() : (now.getFullYear() > year ? 12 : -1)
+    // Totais agregados para tabela e saldo. Em TODOS os meses somam-se as 3
+    // séries (settled + open + programmed): o saldo é uma projeção contínua de
+    // forecast — pendentes vencidos em meses passados também contam, porque
+    // influenciam o saldo projetado dali em diante. (Para a visão puramente
+    // contabilística "só banco", o ajuste é mudar as datas de pagamento.)
+    // Sem dupla contagem: a parte já paga de uma fatura é movimento (settled) e
+    // só a parte por liquidar (pendingAmount) entra em open/programmed.
     const monthlyIncome = new Array(12).fill(0)
     const monthlyExpense = new Array(12).fill(0)
     for (let i = 0; i < 12; i++) {
-      monthlyIncome[i] = monthlySettledIncome[i]
-      monthlyExpense[i] = monthlySettledExpense[i]
-      if (i > currentMonthIdx) {
-        monthlyIncome[i]  += monthlyOpenIncome[i]  + monthlyProgrammedIncome[i]
-        monthlyExpense[i] += monthlyOpenExpense[i] + monthlyProgrammedExpense[i]
-      }
+      monthlyIncome[i]  = monthlySettledIncome[i]  + monthlyOpenIncome[i]  + monthlyProgrammedIncome[i]
+      monthlyExpense[i] = monthlySettledExpense[i] + monthlyOpenExpense[i] + monthlyProgrammedExpense[i]
     }
 
-    // Forward-prop a partir de balanceAtYearStart (correctamente derivado do
-    // histórico). Para passado/atual usa só movements (settled). Para futuro
-    // soma os pending (open + programmed) — projeção do saldo no fim do mês.
+    // Forward-prop a partir de balanceAtYearStart: saldo no fim de cada mês =
+    // saldo inicial + entradas - saídas (já com settled + open + programmed).
     const endingBalances = new Array(12).fill(0)
     const startingBalances = new Array(12).fill(0)
     startingBalances[0] = balanceAtYearStart
@@ -576,6 +582,19 @@ export class TreasuryDashboardService {
       }
       if (!catDirectMonthly.has(m.categoryId)) catDirectMonthly.set(m.categoryId, new Array(12).fill(0))
       catDirectMonthly.get(m.categoryId)![idx] += Math.abs(amt)
+    }
+
+    // Funde os pendentes (em aberto + programadas) nas categorias e no "Sem
+    // categoria" — assim a soma das linhas de categoria = total da secção =
+    // reflete no saldo, em todos os meses.
+    for (const [catId, arr] of catPendingMonthly) {
+      if (!catDirectMonthly.has(catId)) catDirectMonthly.set(catId, new Array(12).fill(0))
+      const target = catDirectMonthly.get(catId)!
+      for (let i = 0; i < 12; i++) target[i] += arr[i]
+    }
+    for (let i = 0; i < 12; i++) {
+      uncatIncome[i] += uncatPendingIncome[i]
+      uncatExpense[i] += uncatPendingExpense[i]
     }
 
     // Build hierarchy tree
