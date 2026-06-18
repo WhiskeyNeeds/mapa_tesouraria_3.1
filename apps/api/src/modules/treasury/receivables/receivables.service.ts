@@ -285,13 +285,13 @@ export class TreasuryReceivablesService {
       }
     }
 
-    // Enriquecimento: data efetiva de recebimento via recibo do TOConline
-    // (precedência máxima sobre a data-base). Só para docs liquidados/pagos da
-    // página cujo raw (com `receipts_ids`) já foi carregado acima.
+    // Enriquecimento via recibos do TOConline (do raw já carregado acima):
+    //  - filtra `receipts_ids` para só os ATIVOS (exclui anulados/eliminados),
+    //    para o contador de recibos do frontend não incluir recibos anulados;
+    //  - data efetiva de recebimento (precedência máxima) para docs liquidados/pagos.
     const receiptIdsByItem = new Map<string, number[]>()
     const allReceiptIds = new Set<number>()
     for (const it of items) {
-      if (!it.tocSalesDocId || (it.status !== 'SETTLED' && it.status !== 'PAID')) continue
       const raw = it._tocRaw as { receipts_ids?: unknown } | null
       const ids = Array.isArray(raw?.receipts_ids)
         ? raw!.receipts_ids.map(Number).filter((n) => !Number.isNaN(n))
@@ -306,12 +306,20 @@ export class TreasuryReceivablesService {
         where: { clientId, tocId: { in: [...allReceiptIds] }, NOT: { raw: { path: ['deleted'], equals: true } } },
         select: { tocId: true, date: true },
       })
+      const activeIds = new Set(receipts.map((r) => r.tocId))
       const dateByReceipt = new Map(receipts.map((r) => [r.tocId, r.date]))
       for (const it of items) {
         const ids = receiptIdsByItem.get(it.id)
         if (!ids) continue
-        const dates = ids.map((id) => dateByReceipt.get(id)).filter((d): d is string => !!d).sort()
-        if (dates.length) it.receivedDate = dates[dates.length - 1] // ISO date mais recente
+        const active = ids.filter((id) => activeIds.has(id))
+        // Reescreve receipts_ids no raw com só os ativos (alimenta o contador).
+        if (it._tocRaw && typeof it._tocRaw === 'object') {
+          it._tocRaw = { ...(it._tocRaw as Record<string, unknown>), receipts_ids: active }
+        }
+        if (it.status === 'SETTLED' || it.status === 'PAID') {
+          const dates = active.map((id) => dateByReceipt.get(id)).filter((d): d is string => !!d).sort()
+          if (dates.length) it.receivedDate = dates[dates.length - 1] // ISO date mais recente
+        }
       }
     }
 

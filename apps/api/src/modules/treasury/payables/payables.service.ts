@@ -351,13 +351,14 @@ export class TreasuryPayablesService {
     const total = allItems.length
     const items = allItems.slice((page - 1) * limit, page * limit)
 
-    // Enriquecimento: data efetiva de pagamento via pagamento ao fornecedor no
-    // TOConline (precedência máxima sobre a data-base). Só para docs liquidados/
-    // pagos da página com ligação a um doc TOC (que tem `paymentsIds`).
+    // Enriquecimento via pagamentos ao fornecedor no TOConline:
+    //  - filtra `payments_ids` no raw para só os ATIVOS (exclui anulados), para o
+    //    contador de pagamentos do frontend não os incluir;
+    //  - data efetiva de pagamento (precedência máxima) para docs liquidados/pagos.
     const paymentIdsByItem = new Map<string, number[]>()
     const allPaymentIds = new Set<number>()
     for (const it of items) {
-      if (!it.tocPurchasesDocId || (it.status !== 'SETTLED' && it.status !== 'PAID')) continue
+      if (!it.tocPurchasesDocId) continue
       const toc = tocById.get(Number(it.tocPurchasesDocId))
       const ids = Array.isArray(toc?.paymentsIds)
         ? (toc!.paymentsIds as unknown[]).map(Number).filter((n) => !Number.isNaN(n))
@@ -372,12 +373,20 @@ export class TreasuryPayablesService {
         where: { clientId, tocId: { in: [...allPaymentIds] }, NOT: { raw: { path: ['deleted'], equals: true } } },
         select: { tocId: true, date: true },
       })
+      const activeIds = new Set(payments.map((pm) => pm.tocId))
       const dateByPayment = new Map(payments.map((pm) => [pm.tocId, pm.date]))
       for (const it of items) {
         const ids = paymentIdsByItem.get(it.id)
         if (!ids) continue
-        const dates = ids.map((id) => dateByPayment.get(id)).filter((d): d is string => !!d).sort()
-        if (dates.length) it.paymentDate = dates[dates.length - 1] // ISO date mais recente
+        const active = ids.filter((id) => activeIds.has(id))
+        // Reescreve payments_ids no raw com só os ativos (alimenta o contador).
+        if (it._tocRaw && typeof it._tocRaw === 'object') {
+          it._tocRaw = { ...(it._tocRaw as Record<string, unknown>), payments_ids: active }
+        }
+        if (it.status === 'SETTLED' || it.status === 'PAID') {
+          const dates = active.map((id) => dateByPayment.get(id)).filter((d): d is string => !!d).sort()
+          if (dates.length) it.paymentDate = dates[dates.length - 1] // ISO date mais recente
+        }
       }
     }
 
