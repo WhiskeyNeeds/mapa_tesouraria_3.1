@@ -346,7 +346,8 @@ function CashflowStatementTable() {
     expenseSettled:    (!wk.isFuture && !wk.isCurrent) ? wk.expense : 0,
     expenseOpen:       wk.isCurrent ? wk.expense : 0,
     expenseProgrammed: wk.isFuture ? wk.expense : 0,
-    balance: wk.isFuture ? null : wk.closingBalance,
+    // Saldo projetado: a linha continua pelas semanas futuras (forecast).
+    balance: wk.closingBalance,
   }))
 
   const toggleGroup = (id: string) => setClosedGroups((prev) => {
