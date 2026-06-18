@@ -158,6 +158,7 @@ model User {
 
   userRoles   UserRole[]
   userClients UserClient[]
+  refreshTokens RefreshToken[]
 
   treasuryReceivablesCreated      TreasuryReceivable[]        @relation("ReceivablesCreated")
   treasuryPayablesCreated         TreasuryPayable[]           @relation("PayablesCreated")
@@ -174,6 +175,23 @@ model User {
   @@index([email])
   @@index([isActive])
   @@map("users")
+}
+
+/// Refresh tokens persistidos (durável, sobrevive a reinícios e suporta vários
+/// em simultâneo). Guarda-se o hash SHA-256 do token, nunca o token em claro.
+/// A rotação apaga a linha usada; o logout apaga todas as do utilizador.
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 model AppRole {

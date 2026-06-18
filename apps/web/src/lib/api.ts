@@ -7,8 +7,20 @@ function getToken(): string | null {
 // Shared refresh promise — prevents concurrent 401s from triggering multiple refresh calls.
 // All requests that hit 401 simultaneously wait on the same promise; only one refresh is made.
 let refreshing: Promise<boolean> | null = null
+// Once a refresh fails, the session is dead: short-circuit todos os pedidos
+// seguintes e redireciona uma única vez (evita a tempestade de /auth/refresh).
+let sessionDead = false
+
+function endSession() {
+  if (sessionDead) return
+  sessionDead = true
+  localStorage.removeItem('access_token')
+  localStorage.removeItem('refresh_token')
+  window.location.href = '/auth/login'
+}
 
 async function tryRefresh(): Promise<boolean> {
+  if (sessionDead) return false
   if (refreshing) return refreshing
 
   refreshing = (async () => {
@@ -36,6 +48,7 @@ async function tryRefresh(): Promise<boolean> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (sessionDead) throw new Error('Unauthorized')
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
     ...init,
@@ -49,9 +62,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 401) {
     const refreshed = await tryRefresh()
     if (refreshed) return request(path, init)
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
-    window.location.href = '/auth/login'
+    endSession()
     throw new Error('Unauthorized')
   }
 

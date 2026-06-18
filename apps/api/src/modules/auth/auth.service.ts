@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import type { PrismaClient } from '@prisma/client'
 import type { FastifyInstance } from 'fastify'
 import type { JwtPayload } from '../../plugins/auth.js'
@@ -13,7 +13,11 @@ export interface TokenPair {
 }
 
 const BCRYPT_ROUNDS = 12
-const REDIS_RT_PREFIX = 'rt:'
+
+/** Hash determinístico (SHA-256) do refresh token — guardamos só o hash na BD. */
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
 
 export class AuthService {
   constructor(
@@ -48,7 +52,12 @@ export class AuthService {
     const accessToken = this.fastify.jwt.sign({ ...payload, type: 'access' }, { expiresIn: process.env.JWT_EXPIRES_IN ?? '15m' })
     const refreshToken = this.fastify.jwt.sign({ ...payload, type: 'refresh' }, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d' })
 
-    await this.fastify.redis.setex(`${REDIS_RT_PREFIX}${userId}`, refreshExpiresIn, refreshToken)
+    // Persiste o refresh token (hash) na BD — durável, sobrevive a reinícios e
+    // suporta vários em simultâneo (multi-separador). Limpa expirados do utilizador.
+    await this.prisma.refreshToken.deleteMany({ where: { userId, expiresAt: { lt: new Date() } } })
+    await this.prisma.refreshToken.create({
+      data: { userId, tokenHash: hashToken(refreshToken), expiresAt: new Date(Date.now() + refreshExpiresIn * 1000) },
+    })
 
     return { accessToken, refreshToken, expiresIn }
   }
@@ -103,15 +112,16 @@ export class AuthService {
 
     if (payload.type !== 'refresh') throw httpError(401, 'Invalid token type')
 
-    const stored = await this.fastify.redis.get(`${REDIS_RT_PREFIX}${payload.sub}`)
-    if (!stored || stored !== token) throw httpError(401, 'Refresh token revoked')
+    // Rotação: o token tem de existir na BD (não revogado/rodado) e estar válido.
+    const row = await this.prisma.refreshToken.findUnique({ where: { tokenHash: hashToken(token) } })
+    if (!row || row.expiresAt < new Date()) throw httpError(401, 'Refresh token revoked')
+    await this.prisma.refreshToken.delete({ where: { id: row.id } })
 
-    await this.fastify.redis.del(`${REDIS_RT_PREFIX}${payload.sub}`)
     return this.issueTokens(payload.sub)
   }
 
   async logout(userId: string): Promise<void> {
-    await this.fastify.redis.del(`${REDIS_RT_PREFIX}${userId}`)
+    await this.prisma.refreshToken.deleteMany({ where: { userId } })
   }
 
   async setPassword(token: string, password: string): Promise<TokenPair> {
