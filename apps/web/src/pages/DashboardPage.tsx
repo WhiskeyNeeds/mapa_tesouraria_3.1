@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight, Eye, EyeOff, HelpCircle } from 'lucide-react'
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ChevronDown, ChevronRight, Eye, EyeOff, HelpCircle } from 'lucide-react'
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Bar, ComposedChart, Line, PieChart, Pie, Cell,
@@ -1576,14 +1576,6 @@ export default function DashboardPage() {
                 </span>
               </div>
               <div className="pt-1 space-y-2.5">
-                {stats.liquidezImediata !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5" />Liquidez imediata<InfoHint text="Saldo em banco ÷ total a pagar. Quantas vezes o dinheiro que tens cobre as contas a pagar. 1× = cobre exatamente; abaixo de 1× não chega." /></span>
-                    <span className={`text-xs font-semibold ${stats.liquidezImediata >= 1 ? 'text-green-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-700'}`}>
-                      {stats.liquidezImediata.toFixed(2)}×
-                    </span>
-                  </div>
-                )}
                 {stats.coverageRatio !== null && (
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-gray-500 flex items-center gap-1.5"><ArrowDownToLine className="w-3.5 h-3.5" />Rácio CR/CP<InfoHint text="Contas a Receber ÷ Contas a Pagar. Indica se o que tens a receber chega para o que tens a pagar. 1× = chega; abaixo de 1× não chega." /></span>
@@ -1600,29 +1592,9 @@ export default function DashboardPage() {
                     </span>
                   </div>
                 )}
-                {stats.dso !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" />DSO est.<InfoHint text="Days Sales Outstanding: dias médios estimados até receberes uma fatura. = A receber ÷ média diária de entrada. Menor é melhor." /></span>
-                    <span className={`text-xs font-semibold ${stats.dso <= 30 ? 'text-green-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-700'}`}>
-                      {stats.dso} dias
-                    </span>
-                  </div>
-                )}
-                {stats.dpo !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ReceiptText className="w-3.5 h-3.5" />DPO est.<InfoHint text="Days Payable Outstanding: dias médios estimados até pagares uma fatura. = A pagar ÷ média diária de saída." /></span>
-                    <span className="text-xs font-semibold text-gray-700">{stats.dpo} dias</span>
-                  </div>
-                )}
               </div>
               <div className="pt-2 border-t border-gray-100">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Capital de trabalho<InfoHint text="Saldo + a receber − a pagar. O que sobraria se recebesses e pagasses tudo. É o mesmo valor da Posição Líquida." /></span>
-                  <span className={`text-xs font-semibold ${stats.workingCapital >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {formatCurrency(stats.workingCapital)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
                   <span className="text-xs text-gray-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Média diária entrada<InfoHint text={`Total de entradas dos últimos ${days} dias ÷ ${days}. Ritmo médio de recebimentos por dia.`} /></span>
                   <span className="text-xs font-medium text-green-700">{formatCurrency(stats.avgDailyIncome)}</span>
                 </div>
@@ -1643,7 +1615,7 @@ export default function DashboardPage() {
           <h2 className="text-sm font-semibold text-gray-700">Painel de Controlo</h2>
           <p className="text-xs text-gray-400 mt-0.5">Indicadores de saúde financeira</p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 
           {/* Saldo & Liquidez */}
           <div className="rounded-xl border border-gray-100 p-4">
@@ -1662,20 +1634,6 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-gray-500 flex items-center gap-1">Liquidez imediata<InfoHint text="Saldo em banco ÷ total a pagar. Quantas vezes o dinheiro que tens cobre as contas a pagar. 1× = cobre exatamente; abaixo de 1× não chega." /></span>
                   <span className={`font-semibold ${stats.liquidezImediata >= 1 ? 'text-emerald-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-600'}`}>{stats.liquidezImediata.toFixed(2)}×</span>
-                </div>
-              )}
-              {stats?.cashRunway != null && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500 flex items-center gap-1">Autonomia de caixa<InfoHint text="Quantos dias o dinheiro aguenta ao ritmo de despesa atual. = Saldo após pagamentos ÷ média diária de saída. Maior é melhor." /></span>
-                  <span className={`font-semibold ${stats.cashRunway > 90 ? 'text-emerald-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-600'}`}>
-                    {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
-                  </span>
-                </div>
-              )}
-              {stats?.workingCapital != null && (
-                <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
-                  <span className="text-gray-500 flex items-center gap-1">Capital de trabalho<InfoHint text="Saldo + a receber − a pagar. O que sobraria se recebesses e pagasses tudo. É o mesmo valor da Posição Líquida." /></span>
-                  <span className={`font-semibold tabular-nums ${stats.workingCapital >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(stats.workingCapital)}</span>
                 </div>
               )}
             </div>
@@ -1726,56 +1684,85 @@ export default function DashboardPage() {
             )
           })()}
 
-          {/* Operações a Vencer */}
+          {/* Previsão de Tesouraria */}
+          <div className="rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <TrendingDown className="w-4 h-4 text-purple-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Previsão de Tesouraria<InfoHint text="Projeção do saldo total para os próximos 90 dias, com base nos recebimentos e pagamentos previstos (em aberto e programados)." /></span>
+            </div>
+            {forecastStats ? (
+              <>
+                <div className={`text-2xl font-bold tabular-nums ${forecastStats.minBalance < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(forecastStats.minBalance)}</div>
+                <div className="text-xs text-gray-400 mt-0.5 mb-3">saldo mínimo previsto (90d){forecastStats.minDate ? ` · ${new Date(forecastStats.minDate).toLocaleDateString('pt-PT', { day: '2-digit', month: 'short' })}` : ''}</div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-500 flex items-center gap-1">Dias até saldo negativo<InfoHint text="Em quantos dias a projeção indica o saldo total a ficar abaixo de zero. 'Sem risco' = não fica negativo no horizonte de 90 dias." /></span>
+                    <span className={`font-semibold ${forecastStats.daysUntilNegative != null ? 'text-red-600' : 'text-emerald-700'}`}>{forecastStats.daysUntilNegative != null ? `${forecastStats.daysUntilNegative} dias` : 'Sem risco'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-500 flex items-center gap-1">Saldo projetado (fim)<InfoHint text="Saldo total estimado no fim do horizonte de 90 dias, após todos os recebimentos e pagamentos previstos." /></span>
+                    <span className={`font-semibold tabular-nums ${forecastStats.projectedFinal >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(forecastStats.projectedFinal)}</span>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-xs text-gray-400 py-6 text-center">Sem dados de previsão</div>
+            )}
+          </div>
+
+          {/* Prazos Médios */}
           <div className="rounded-xl border border-gray-100 p-4">
             <div className="flex items-center gap-2 mb-3">
               <CalendarDays className="w-4 h-4 text-indigo-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Operações a Vencer<InfoHint text="Documentos por liquidar: faturas a receber + a pagar ainda em aberto." /></span>
+              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Prazos Médios<InfoHint text={`Prazos médios de recebimento e pagamento, estimados sobre a janela de ${days} dias (selecionável no cartão Indicadores Financeiros).`} /></span>
             </div>
-            <div className="text-2xl font-bold text-gray-900">{kpis.countReceivablesOpen + kpis.countPayablesOpen}</div>
-            <div className="text-xs text-gray-400 mt-0.5 mb-3">documentos em aberto</div>
-            <div className="space-y-2">
+            <div className="space-y-2.5 pt-1">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />A receber ({kpis.countReceivablesOpen})</span>
-                <span className="font-semibold tabular-nums text-emerald-700">{formatCurrency(kpis.toReceive)}</span>
+                <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />DSO — receber<InfoHint text="Days Sales Outstanding: dias médios estimados até receberes uma fatura. = A receber ÷ média diária de entrada. Menor é melhor." /></span>
+                <span className={`font-semibold ${stats?.dso == null ? 'text-gray-400' : stats.dso <= 30 ? 'text-emerald-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-600'}`}>{stats?.dso != null ? `${stats.dso} dias` : '—'}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />A pagar ({kpis.countPayablesOpen})</span>
-                <span className="font-semibold tabular-nums text-red-600">{formatCurrency(kpis.toPay)}</span>
+                <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />DPO — pagar<InfoHint text="Days Payable Outstanding: dias médios estimados até pagares uma fatura. = A pagar ÷ média diária de saída." /></span>
+                <span className={`font-semibold ${stats?.dpo == null ? 'text-gray-400' : 'text-gray-700'}`}>{stats?.dpo != null ? `${stats.dpo} dias` : '—'}</span>
               </div>
               <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
-                <span className="text-gray-500 flex items-center gap-1">Saldo líquido<InfoHint text="A receber − a pagar, apenas dos documentos em aberto. Não inclui o saldo em banco." /></span>
-                <span className={`font-semibold tabular-nums ${kpis.toReceive - kpis.toPay >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(kpis.toReceive - kpis.toPay)}</span>
+                <span className="text-gray-500 flex items-center gap-1">Ciclo de caixa<InfoHint text="DSO − DPO: diferença entre o prazo a receber e o prazo a pagar. Negativo é bom (recebes antes de pagar); positivo significa que financias o ciclo." /></span>
+                <span className={`font-semibold ${stats?.dso != null && stats?.dpo != null ? (stats.dso - stats.dpo <= 0 ? 'text-emerald-700' : 'text-amber-600') : 'text-gray-400'}`}>{stats?.dso != null && stats?.dpo != null ? `${stats.dso - stats.dpo} dias` : '—'}</span>
               </div>
             </div>
           </div>
 
-          {/* Cobranças a Fazer */}
-          <div className={`rounded-xl border p-4 ${kpis.overdueReceivables > 0 ? 'border-amber-200 bg-amber-50/40' : 'border-gray-100'}`}>
-            <div className="flex items-center gap-2 mb-3">
-              <Clock className="w-4 h-4 text-orange-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Cobranças a Fazer<InfoHint text="Recebimentos já vencidos (em atraso) que deves cobrar aos clientes." /></span>
-            </div>
-            <div className={`text-2xl font-bold ${kpis.overdueReceivables > 0 ? 'text-amber-700' : 'text-gray-900'}`}>{kpis.overdueReceivables}</div>
-            <div className="text-xs text-gray-500 mt-0.5 mb-3">
-              {kpis.overdueReceivables === 0 ? 'Nenhum vencimento em atraso' : `recebimento${kpis.overdueReceivables > 1 ? 's' : ''} vencido${kpis.overdueReceivables > 1 ? 's' : ''}`}
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">Total a receber</span>
-                <span className="font-semibold tabular-nums text-gray-700">{formatCurrency(kpis.toReceive)}</span>
-              </div>
-              {kpis.overduePayables > 0 && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-red-500">Pagamentos vencidos</span>
-                  <span className="font-semibold text-red-600">{kpis.overduePayables}</span>
+          {/* Concentração */}
+          {(() => {
+            const topC = data.topClients?.[0]
+            const topS = data.topSuppliers?.[0]
+            const pctC = topC && rawKpis.toReceive > 0 ? Math.round((topC.amount / rawKpis.toReceive) * 100) : null
+            const pctS = topS && rawKpis.toPay > 0 ? Math.round((topS.amount / rawKpis.toPay) * 100) : null
+            return (
+              <div className="rounded-xl border border-gray-100 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                  <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Concentração<InfoHint text="Peso da maior contraparte no total a receber/pagar. Concentração alta = maior dependência se essa entidade falhar ou atrasar." /></span>
                 </div>
-              )}
-              <div className="pt-2 border-t border-gray-100 mt-1">
-                <Link to="/contas-a-receber" className="text-xs text-primary-600 hover:underline">Ver cobranças →</Link>
+                <div className="space-y-3 pt-1">
+                  <div>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />Maior cliente</span>
+                      <span className={`font-semibold tabular-nums ${pctC != null && pctC >= 40 ? 'text-amber-600' : 'text-emerald-700'}`}>{pctC != null ? `${pctC}%` : '—'}</span>
+                    </div>
+                    <div className="text-[11px] text-gray-400 truncate">{topC ? `${topC.name} · ${formatCurrency(topC.amount)}` : 'Sem dados'}</div>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />Maior fornecedor</span>
+                      <span className={`font-semibold tabular-nums ${pctS != null && pctS >= 40 ? 'text-amber-600' : 'text-red-600'}`}>{pctS != null ? `${pctS}%` : '—'}</span>
+                    </div>
+                    <div className="text-[11px] text-gray-400 truncate">{topS ? `${topS.name} · ${formatCurrency(topS.amount)}` : 'Sem dados'}</div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            )
+          })()}
 
         </div>
       </div>
