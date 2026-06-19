@@ -308,11 +308,11 @@ export class TreasuryDashboardService {
 
       const [pendingRec, pendingPay] = await Promise.all([
         this.prisma.treasuryReceivable.findMany({
-          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: futureStart, lte: endOfYear } },
+          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, dueDate: { gte: futureStart, lte: endOfYear } },
           select: { dueDate: true, pendingAmount: true },
         }),
         this.prisma.treasuryPayable.findMany({
-          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: futureStart, lte: endOfYear } },
+          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, dueDate: { gte: futureStart, lte: endOfYear } },
           select: { dueDate: true, pendingAmount: true },
         }),
       ])
@@ -410,8 +410,8 @@ export class TreasuryDashboardService {
     const effDate = { OR: [{ promisedPaymentDate: dateCond }, { promisedPaymentDate: null, dueDate: dateCond }] }
     const [movs, rec, pay, tocLinkedRec, tocLinkedPay, tocSales, tocPurch] = await Promise.all([
       this.prisma.treasuryBankMovement.findMany({ where: { clientId, deletedAt: null, date: dateCond }, select: { amount: true } }),
-      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true } }),
-      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true } }),
+      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true } }),
+      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true } }),
       this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocSalesDocId: { not: null } }, select: { tocSalesDocId: true } }),
       this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, tocPurchasesDocId: { not: null } }, select: { tocPurchasesDocId: true } }),
       this.prisma.tocSalesDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
@@ -531,12 +531,12 @@ export class TreasuryDashboardService {
     const byEffectiveDate = { OR: [{ promisedPaymentDate: inYear }, { promisedPaymentDate: null, dueDate: inYear }] }
     const [pendingRec, pendingPay, tocLinkedRec, tocLinkedPay] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...byEffectiveDate },
-        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, recurrenceId: true, categoryId: true },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...byEffectiveDate },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, recurrenceId: true, status: true, categoryId: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...byEffectiveDate },
-        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, recurrenceId: true, categoryId: true },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...byEffectiveDate },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, recurrenceId: true, status: true, categoryId: true },
       }),
       // Dedup TOC: todos os locais OPEN/PARTIAL ligados ao TOConline (inclui as mães
       // divididas, que ficam de fora da contagem mas têm de suprimir o espelho TOC).
@@ -560,7 +560,9 @@ export class TreasuryDashboardService {
       if (!eff || eff.getFullYear() !== year) continue
       const idx = eff.getMonth()
       const amt = Number(r.pendingAmount ?? 0)
-      if (r.recurrenceId) monthlyProgrammedIncome[idx] += amt
+      // Programadas = SCHEDULED (recorrência futura ainda não comprometida).
+      // Comprometida (OPEN) entra em "em aberto".
+      if (r.status === 'SCHEDULED') monthlyProgrammedIncome[idx] += amt
       else monthlyOpenIncome[idx] += amt
       addCatPending(r.categoryId, idx, amt, true)
     }
@@ -569,7 +571,8 @@ export class TreasuryDashboardService {
       if (!eff || eff.getFullYear() !== year) continue
       const idx = eff.getMonth()
       const amt = Number(p.pendingAmount ?? 0)
-      if (p.recurrenceId) monthlyProgrammedExpense[idx] += amt
+      // Programadas = SCHEDULED (recorrência futura ainda não comprometida).
+      if (p.status === 'SCHEDULED') monthlyProgrammedExpense[idx] += amt
       else monthlyOpenExpense[idx] += amt
       addCatPending(p.categoryId, idx, amt, false)
     }
@@ -808,11 +811,11 @@ export class TreasuryDashboardService {
       // janela visível — incl. semanas passadas (forecast contínuo, como no mensal).
       // Exclui a mãe de um split (children); as parcelas entram pela sua promessa.
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: rangeStart, lte: rangeEnd } }, { promisedPaymentDate: null, dueDate: { gte: rangeStart, lte: rangeEnd } }] },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: rangeStart, lte: rangeEnd } }, { promisedPaymentDate: null, dueDate: { gte: rangeStart, lte: rangeEnd } }] },
         select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, categoryId: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: rangeStart, lte: rangeEnd } }, { promisedPaymentDate: null, dueDate: { gte: rangeStart, lte: rangeEnd } }] },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: rangeStart, lte: rangeEnd } }, { promisedPaymentDate: null, dueDate: { gte: rangeStart, lte: rangeEnd } }] },
         select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, categoryId: true },
       }),
       this.prisma.treasuryCategory.findMany({
@@ -937,11 +940,11 @@ export class TreasuryDashboardService {
     const horizon = new Date(Date.now() + days * 86400000)
     const [pendingReceivables, pendingPayables] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: now, lte: horizon } }, { promisedPaymentDate: null, dueDate: { gte: now, lte: horizon } }] },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: now, lte: horizon } }, { promisedPaymentDate: null, dueDate: { gte: now, lte: horizon } }] },
         select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: now, lte: horizon } }, { promisedPaymentDate: null, dueDate: { gte: now, lte: horizon } }] },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: now, lte: horizon } }, { promisedPaymentDate: null, dueDate: { gte: now, lte: horizon } }] },
         select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true },
       }),
     ])
