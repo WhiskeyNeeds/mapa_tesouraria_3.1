@@ -9,7 +9,9 @@ import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import Badge from '@/components/ui/Badge'
 import KpiCard from '@/components/ui/KpiCard'
+import Modal from '@/components/ui/Modal'
 import TocSyncStatus from '@/components/ui/TocSyncStatus'
+import DocDetailPanel from '@/components/treasury/DocDetailPanel'
 
 interface Props {
   entityType: 'supplier' | 'customer'
@@ -171,6 +173,7 @@ export default function EntityDetailPage({ entityType }: Props) {
   const toast = useToast()
   const [tab, setTab] = useState<'current' | 'history'>('current')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [panelDocId, setPanelDocId] = useState<string | null>(null)
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -183,6 +186,22 @@ export default function EntityDetailPage({ entityType }: Props) {
 
   const isSupplier = entityType === 'supplier'
   const typeParam = isSupplier ? 'supplier' : 'customer'
+  const docType = isSupplier ? 'payable' : 'receivable'
+  const seg = isSupplier ? 'payables' : 'receivables'
+
+  async function openDocPanel(doc: TocDoc) {
+    if (doc.status === 0 || doc.status === 4) return            // rascunho/anulado: sem painel
+    if (doc._local) {                                            // doc local: id directo
+      setPanelDocId(String(doc.id).replace(/^local-/, ''))
+      return
+    }
+    try {
+      const r = await api.get<{ id: string }>(`/treasury/${clientId}/${seg}/by-toc/${doc.id}`)
+      setPanelDocId(r.id)
+    } catch {
+      toggleExpand(String(doc.id))                               // fallback: comportamento atual (expandir)
+    }
+  }
 
   const entityQuery = useQuery<Record<string, unknown>>({
     queryKey: isSupplier
@@ -464,15 +483,18 @@ export default function EntityDetailPage({ entityType }: Props) {
                     const pendingVal = Number(doc.pending_total ?? doc.gross_total ?? 0)
                     return (
                       <Fragment key={key}>
-                        <tr className={cn(
-                          'border-b border-gray-50 transition-colors duration-100',
-                          isOverdue ? 'hover:bg-red-50/40' : 'hover:bg-blue-50/30',
-                        )}>
+                        <tr
+                          onClick={() => openDocPanel(doc)}
+                          className={cn(
+                            'border-b border-gray-50 transition-colors duration-100 cursor-pointer',
+                            isOverdue ? 'hover:bg-red-50/40' : 'hover:bg-blue-50/30',
+                          )}
+                        >
                           <td className="px-5 py-3">
                             <div className="flex items-start gap-1.5">
                               {expandCount > 0 && !doc._local ? (
                                 <button
-                                  onClick={() => toggleExpand(key)}
+                                  onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
                                   className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
                                   title={isExpanded ? 'Ocultar detalhe' : isSupplier ? 'Ver pagamentos' : 'Ver recibos'}
                                 >
@@ -705,6 +727,21 @@ export default function EntityDetailPage({ entityType }: Props) {
 
         </div>
       </div>
+
+      <Modal open={panelDocId !== null} onClose={() => setPanelDocId(null)} title="" size="lg" hideHeader noPadding>
+        {panelDocId && (
+          <DocDetailPanel
+            docId={panelDocId}
+            docType={docType}
+            variant="modal"
+            onClose={() => setPanelDocId(null)}
+            onMutated={() => {
+              qc.invalidateQueries({ queryKey: isSupplier ? ['toc-purchases', clientId, tocId] : ['toc-sales', clientId, tocId] })
+              qc.invalidateQueries({ queryKey: isSupplier ? ['toc-supplier-local-docs', clientId, tocId] : ['toc-customer-local-docs', clientId, tocId] })
+            }}
+          />
+        )}
+      </Modal>
     </div>
   )
 }
