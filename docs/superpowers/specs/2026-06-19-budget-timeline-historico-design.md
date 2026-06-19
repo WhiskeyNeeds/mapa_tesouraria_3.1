@@ -1,162 +1,139 @@
 # Timeline de Histórico (auditoria) no Budget
 
 **Data:** 2026-06-19
-**Estado:** Aprovado (design) — pendente plano de implementação
+**Estado:** Aprovado (design revisto) — pendente plano de implementação
 
 ## Objetivo
 
-Adicionar ao budget uma **timeline de histórico de atividade** (audit log): um registo
-cronológico do que aconteceu ao budget — criação, edições, regras e associação de
-transações — com o autor de cada ação. Hoje não existe qualquer registo de eventos.
+Adicionar ao budget uma **timeline de histórico de atividade**: um registo cronológico do
+que aconteceu ao budget — criação, edições, regras e associação de transações — com o
+autor de cada ação, num novo separador "Histórico" do painel do budget.
+
+## Decisão de arquitetura (revista)
+
+A app **já tem** um sistema de auditoria genérico que vamos **reutilizar** (não se cria
+tabela nova):
+
+- Tabela `TreasuryAuditLog` (`prisma/schema.prisma`): `id, clientId, userId?, action,
+  entityType, entityId?, payload Json?, createdAt`, com índices `[entityType, entityId]` e
+  `[clientId, createdAt desc]`, e relação `user`.
+- Helper `audit(prisma, { clientId, userId?, action, entityType, entityId, payload })` em
+  `src/lib/audit.ts` — escrita **best-effort** (try/catch, não quebra a operação).
+- `diffEntity(before, after)` em `src/lib/audit.ts` — produz `{ campo: { from, to } }`.
+- O `budgets.service` **já regista** `budget.create`, `budget.update` (com diff via
+  `diffEntity`) e `budget.delete`. Budgets são **soft-delete** (sobrevivem).
+- Já existe padrão de leitura (`treasuryAuditLog.findMany` com `include: { user }`) em
+  `bank-movements.routes.ts` e `followups.service.ts`.
+
+Todos os eventos do budget usam `entityType: 'Budget'` e `entityId: <budgetId>`. A leitura
+da timeline filtra por esses dois campos.
 
 ## Âmbito
 
-Eventos a registar (decidido com o utilizador):
+Eventos (decidido com o utilizador): ciclo de vida do budget, regras, e associação de
+transações. **Fora:** pagamentos/liquidações das faturas. Sem backfill/migração (os logs
+existentes mantêm-se; novos eventos acumulam).
 
-- **Ciclo de vida do budget:** criado, editado (com diff dos campos), arquivado, reativado.
-- **Regras:** regra de categoria adicionada / removida.
-- **Transações (associação):** fatura atribuída automaticamente (TOC), confirmada, movida
-  para/de outro budget, associação removida.
+### Ações (`action`) e `payload`
 
-**Fora de âmbito:**
+| `action` | Quando | `payload` | Estado |
+|---|---|---|---|
+| `budget.create` | criar budget | `{ name, type, totalAmount, startDate, endDate }` | **já existe** |
+| `budget.update` | editar (inclui arquivar/reativar via `status`) | `{ changes: { campo: { from, to } } }` | **já existe** |
+| `budget.delete` | eliminar (soft) | `{ name, totalAmount }` | **já existe** |
+| `budget.rule_add` | regra criada | `{ ruleId, categoryName, textPattern }` | **novo** |
+| `budget.rule_remove` | regra removida | `{ ruleId, categoryName, textPattern }` | **novo** |
+| `budget.txn_auto_assign` | fatura atribuída por regra/TOC | `{ docId, docType, entityName, amount }` | **novo** (autor Sistema) |
+| `budget.txn_confirm` | auto-atribuição confirmada | `{ docId, docType, entityName, amount }` | **novo** |
+| `budget.txn_move_in` | fatura associada/movida PARA este budget | `{ docId, docType, entityName, amount, fromBudgetName? }` | **novo** |
+| `budget.txn_move_out` | fatura movida DESTE budget | `{ docId, docType, entityName, amount, toBudgetName? }` | **novo** |
+| `budget.txn_unassign` | associação removida | `{ docId, docType, entityName, amount }` | **novo** |
 
-- Pagamentos/liquidações das faturas associadas (não geram evento).
-- Evento de eliminação do budget — ao eliminar, o budget e o seu histórico desaparecem
-  por *cascade* e o painel deixa de existir; o **arquivar** (reversível, fica visível) é a
-  alternativa que regista evento.
-- Reconstrução de histórico passado além de um evento inicial "criado" (ver Backfill).
+`entityName`/`*BudgetName` são **congelados** no payload (legíveis mesmo que mudem depois).
 
-## Arquitetura
+## Pontos de registo (backend)
 
-Abordagem escolhida: **tabela dedicada + serviço central com chamadas explícitas**.
-Cada ponto de mutação chama um helper que escreve um evento. Controlo total sobre a
-metadata (diffs legíveis, nomes congelados, autor) e sobre o que é mostrado.
-
-### Modelo de dados (Prisma)
-
-Nova model `TreasuryBudgetEvent`:
-
-| Campo | Tipo | Notas |
+| Origem | Ação(ões) | Autor |
 |---|---|---|
-| `id` | `String @id @default(cuid())` | |
-| `clientId` | `String` | scoping/queries |
-| `budgetId` | `String` | FK → `TreasuryBudget`, `onDelete: Cascade` |
-| `type` | `TreasuryBudgetEventType` | enum (abaixo) |
-| `actorUserId` | `String?` | FK → `User`; `null` = **Sistema** |
-| `metadata` | `Json?` | payload específico do evento |
-| `createdAt` | `DateTime @default(now())` | |
+| `budgets.service.create/update/delete` | já registadas | utilizador (já passado) |
+| `budget-rules.service.create/delete` | `budget.rule_add` / `budget.rule_remove` | utilizador (passar `userId` às rotas — hoje não recebem) |
+| `receivables`/`payables` `update` + `bulkSetBudget` | transição de `budgetId`/`budgetAutoAssigned` (ver abaixo) | utilizador (já passado) |
+| auto-atribuição por regras (caminho que põe `budgetAutoAssigned=true`) | `budget.txn_auto_assign` | **Sistema** (`userId` null) |
 
-Índice: `@@index([budgetId, createdAt])`. Relação inversa em `TreasuryBudget`
-(`events TreasuryBudgetEvent[]`) e, opcionalmente, em `User`.
+### Transições de transação (lê estado antigo antes do update)
 
-Enum `TreasuryBudgetEventType`:
+Antes de gravar o update, lê-se o `budgetId`/`budgetAutoAssigned` atuais do documento:
 
-- `BUDGET_CREATED`, `BUDGET_UPDATED`, `BUDGET_ARCHIVED`, `BUDGET_REACTIVATED`
-- `RULE_ADDED`, `RULE_REMOVED`
-- `TXN_AUTO_ASSIGNED`, `TXN_CONFIRMED`, `TXN_MOVED_IN`, `TXN_MOVED_OUT`, `TXN_UNASSIGNED`
+- `null → X` com `budgetAutoAssigned=true`: `budget.txn_auto_assign` em X (Sistema).
+- `null → X` manual: `budget.txn_move_in` em X (sem `fromBudgetName`).
+- `budgetAutoAssigned: true → false`, mesmo budget: `budget.txn_confirm`.
+- `X → Y`: `budget.txn_move_out` em X **e** `budget.txn_move_in` em Y (`from/toBudgetName`).
+- `X → null`: `budget.txn_unassign` em X.
 
-### `metadata` por tipo
-
-- `BUDGET_UPDATED`: `{ changes: [{ field, from, to }] }` (apenas campos alterados:
-  `name`, `totalAmount`, `startDate`, `endDate`, `color`, `description`).
-- `BUDGET_ARCHIVED` / `BUDGET_REACTIVATED`: sem metadata (ou vazia).
-- `RULE_ADDED` / `RULE_REMOVED`: `{ categoryName, textPattern }`.
-- `TXN_*`: `{ docId, docType: 'receivable'|'payable', entityName, amount, fromBudgetName?, toBudgetName? }`.
-  Os nomes (`entityName`, `*BudgetName`) são **congelados** no momento do evento, para o
-  histórico continuar legível mesmo que a fatura/budget mude ou seja eliminado depois.
-
-### Serviço central
-
-Novo `apps/api/src/modules/treasury/budget-events/budget-events.service.ts` (ou módulo
-equivalente) com:
-
-- `recordBudgetEvent(prisma, { clientId, budgetId, type, actorUserId, metadata })` —
-  escrita **best-effort**: envolvida em `try/catch`; se falhar, **não** quebra a operação
-  principal (apenas regista no log do servidor). É auditoria, não deve bloquear
-  pagamentos/edições.
-- `listBudgetEvents(prisma, clientId, budgetId, { limit, before })` — leitura paginada
-  por `(createdAt, id)` descendente.
-
-## Pontos de registo (emissores)
-
-| Origem | Evento(s) | Autor |
-|---|---|---|
-| `budgets.service.create` | `BUDGET_CREATED` | utilizador (`user.sub`, já disponível) |
-| `budgets.service.update` | `BUDGET_UPDATED` (diff) e/ou `BUDGET_ARCHIVED` / `BUDGET_REACTIVATED` se `status` mudou | utilizador |
-| `budget-rules.service.create` / `delete` | `RULE_ADDED` / `RULE_REMOVED` | utilizador (passar `user.sub` às rotas — hoje não recebem) |
-| `receivables`/`payables` `update` + `bulkSetBudget` | transição de `budgetId`/`budgetAutoAssigned` (ver abaixo) | utilizador (já disponível) |
-| auto-atribuição por regras (import/sync TOC) | `TXN_AUTO_ASSIGNED` | **Sistema** (`null`) |
-
-### Transições de transação (estado antigo → novo no `update`/`bulkSetBudget`)
-
-- `null → X` com `budgetAutoAssigned=true`: `TXN_AUTO_ASSIGNED` em X (autor Sistema).
-- `null → X` manual: `TXN_MOVED_IN` em X (autor utilizador).
-- `budgetAutoAssigned: true → false`, mesmo budget: `TXN_CONFIRMED`.
-- `X → Y`: `TXN_MOVED_OUT` em X **e** `TXN_MOVED_IN` em Y (dois eventos coerentes).
-- `X → null`: `TXN_UNASSIGNED` em X.
-
-O cálculo da transição lê o estado anterior do documento antes do `update` (já há um
-`findUnique`/leitura no fluxo; reutiliza-se). A mesma lógica serve `bulkSetBudget`
-(itera os ids).
+`bulkSetBudget` aplica a mesma lógica por cada id.
 
 ## API
 
-Novo endpoint:
+Novo endpoint, seguindo o padrão de leitura existente:
 
 ```
-GET /treasury/:clientId/budgets/:id/events?limit=50&before=<cursor>
+GET /treasury/:clientId/budgets/:id/events?limit=50&before=<ISO createdAt cursor>
 ```
 
-- `onRequest: [authenticate, requireClientAccess]` (igual às restantes rotas de budget).
-- Devolve `{ events: BudgetEventDTO[], nextCursor: string | null }`.
-- `BudgetEventDTO`: `{ id, type, createdAt, actor: { id, name } | null, metadata }`.
-  O nome do autor é resolvido via join a `User` (ou `null` → Sistema no frontend).
-
-O payload de `GET /budgets/:id` **não** muda (mantém-se pequeno; a tab carrega à parte).
+- `onRequest: [authenticate, requireClientAccess]`.
+- Lê `treasuryAuditLog.findMany({ where: { clientId, entityType: 'Budget', entityId: id,
+  ...(before ? { createdAt: { lt: new Date(before) } } : {}) }, include: { user: { select:
+  { id: true, name: true } } }, orderBy: { createdAt: 'desc' }, take: limit + 1 })`.
+- Devolve `{ events: BudgetEventDTO[], nextCursor: string | null }` onde
+  `BudgetEventDTO = { id, action, createdAt, actor: { id, name } | null, payload }`.
+  `nextCursor` = `createdAt` do último item quando há mais (take+1).
+- O payload de `GET /budgets/:id` **não** muda.
 
 ## Frontend
 
-Nova tab **"Histórico"** no `BudgetPanel.tsx`, ao lado de Transações / Regras / Para rever.
+Nova tab **"Histórico"** no `BudgetPanel.tsx` (junto a Transações / Regras / Para rever).
 
-- Query lazy `['budget-events', clientId, budgetId]`, ativa só quando a tab está aberta
-  (padrão idêntico ao da query de categorias).
-- Render: timeline vertical. Cada item = ícone por tipo + texto em PT + autor
-  (`por <nome>` ou `Sistema`) + data (absoluta; tooltip/relativa opcional).
-- Formatador `formatBudgetEvent(type, metadata)` → string PT. Exemplos:
-  - `BUDGET_CREATED` → "Budget criado"
-  - `BUDGET_UPDATED` → "Valor alterado de 5.000 € para 7.000 €" (uma linha por campo, ou resumo)
-  - `BUDGET_ARCHIVED` → "Budget arquivado"
-  - `RULE_ADDED` → "Regra adicionada: categoria Marketing"
-  - `TXN_AUTO_ASSIGNED` → "Fatura de ACME (123 €) atribuída automaticamente"
-  - `TXN_MOVED_OUT` → "Fatura de ACME (123 €) movida para «Outro budget»"
-- Botão "Carregar mais" usa `nextCursor`.
+- Query lazy `['budget-events', clientId, budgetId]`, ativa só quando a tab abre (padrão
+  igual ao da query de categorias). Paginação "Carregar mais" via `nextCursor`.
+- Timeline vertical: ícone por `action` + texto PT + autor (`por <nome>` ou `Sistema`) +
+  data (`formatDate`/hora).
+- Formatador `formatBudgetEvent(action, payload)` → string PT. Casos:
+  - `budget.create` → "Budget criado"
+  - `budget.update` → uma linha por campo em `payload.changes`
+    (ex.: "Valor: 5.000 € → 7.000 €"); `status: ACTIVE→ARCHIVED` → "Budget arquivado";
+    `ARCHIVED→ACTIVE` → "Budget reativado"
+  - `budget.delete` → "Budget eliminado"
+  - `budget.rule_add` → "Regra adicionada: «Categoria»" (+ filtro de texto se houver)
+  - `budget.rule_remove` → "Regra removida: «Categoria»"
+  - `budget.txn_auto_assign` → "Fatura de ACME (123 €) atribuída automaticamente"
+  - `budget.txn_confirm` → "Fatura de ACME (123 €) confirmada"
+  - `budget.txn_move_in` → "Fatura de ACME (123 €) adicionada" / "… movida de «Y»"
+  - `budget.txn_move_out` → "Fatura de ACME (123 €) movida para «Z»"
+  - `budget.txn_unassign` → "Fatura de ACME (123 €) removida do budget"
 
 ## Casos limite e erros
 
-- **Best-effort:** falha a escrever evento ⇒ a operação principal continua; erro logado.
-- **Backfill (migração):** semear um `BUDGET_CREATED` por cada budget existente, com
-  `createdAt = budget.createdAt` e `actorUserId = null`. Histórico anterior (edições,
-  associações) não é reconstruível.
-- **Cascade:** `onDelete: Cascade` remove os eventos quando o budget é eliminado.
-- **Mover fatura:** gera 2 eventos (out + in), um em cada budget.
+- **Best-effort:** `audit()` já não propaga falhas; mantém-se.
+- **Soft-delete:** o budget e os seus logs sobrevivem; o evento de eliminação é registado.
+- **Mover fatura:** 2 eventos (out + in), coerentes em ambos os budgets.
 - **Documento eliminado depois:** o evento mantém `entityName`/`amount` congelados.
+- **Sem backfill:** budgets antigos sem `budget.create` mostram só eventos futuros.
 
-## Testes
+## Testes (vitest)
 
-- `recordBudgetEvent`: escreve a linha correta; tolera falha sem propagar.
-- `budgets.service`: `create` → `BUDGET_CREATED`; `update` com diff → `BUDGET_UPDATED`
-  com os campos certos; mudança de `status` → `ARCHIVED`/`REACTIVATED`.
-- `budget-rules.service`: `create`/`delete` → `RULE_ADDED`/`RULE_REMOVED` com categoria.
-- `receivables`/`payables` `update`/`bulkSetBudget`: cada transição emite o(s) evento(s)
-  correto(s) (auto-assign, confirm, move in/out, unassign).
-- Endpoint `GET .../events`: paginação por cursor; resolve autor; Sistema quando `null`.
+- `budget-rules.service`: `create`/`delete` chamam `audit()` com a ação e payload certos
+  (mock do prisma, à imagem de `bank-movements.service.test.ts`).
+- `receivables`/`payables` `update`/`bulkSetBudget`: cada transição emite a(s) ação(ões)
+  correta(s) — auto_assign (userId null), confirm, move_in/out (2 logs), unassign.
+- Endpoint `GET .../events`: filtra por `entityType='Budget'`+`entityId`; paginação por
+  `before`; resolve autor; `actor=null` → Sistema.
 
-## Ficheiros afetados (estimativa)
+## Ficheiros afetados
 
-- `apps/api/prisma/schema.prisma` — model + enum + relações; migração + backfill.
-- `apps/api/src/modules/treasury/budget-events/budget-events.service.ts` — **novo**.
-- `apps/api/src/modules/treasury/budgets/{budgets.service.ts, budgets.routes.ts}` — emitir + endpoint GET.
-- `apps/api/src/modules/treasury/budget-rules/{budget-rules.service.ts, budget-rules.routes.ts}` — passar user + emitir.
-- `apps/api/src/modules/treasury/{receivables,payables}/*.service.ts` — emitir nas transições.
-- (auto-assign TOC) — emitir `TXN_AUTO_ASSIGNED`.
-- `apps/web/src/components/budgets/BudgetPanel.tsx` — tab "Histórico" + formatador.
+- `apps/api/src/modules/treasury/budget-rules/{budget-rules.service.ts, budget-rules.routes.ts}`
+  — passar `userId` + `audit()` em create/delete.
+- `apps/api/src/modules/treasury/{receivables,payables}/*.service.ts` — `audit()` scoped ao
+  budget nas transições de `update`/`bulkSetBudget`; idem no caminho de auto-atribuição.
+- `apps/api/src/modules/treasury/budgets/budgets.routes.ts` — endpoint `GET .../:id/events`.
+- `apps/web/src/components/budgets/BudgetPanel.tsx` — tab "Histórico" + `formatBudgetEvent`.
+- **Sem** alterações ao `schema.prisma` (reutiliza `TreasuryAuditLog`).
