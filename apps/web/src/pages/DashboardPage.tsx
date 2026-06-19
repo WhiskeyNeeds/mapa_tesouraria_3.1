@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight, Eye, EyeOff } from 'lucide-react'
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight, Eye, EyeOff, HelpCircle } from 'lucide-react'
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Bar, ComposedChart, Line, PieChart, Pie, Cell,
@@ -1312,6 +1312,18 @@ function CashflowStatementTable({ showOpen, showProgrammed }: { showOpen: boolea
   )
 }
 
+// Balão de ajuda (hover) reutilizável para explicar cada indicador/rácio.
+function InfoHint({ text }: { text: string }) {
+  return (
+    <span className="group relative inline-flex items-center align-middle">
+      <HelpCircle className="w-3 h-3 text-gray-300 hover:text-gray-500 cursor-help flex-shrink-0" />
+      <span className="pointer-events-none absolute left-1/2 bottom-full z-30 mb-1.5 w-56 -translate-x-1/2 rounded-md bg-gray-900 px-2.5 py-1.5 text-[11px] font-normal leading-snug text-white text-left opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+        {text}
+      </span>
+    </span>
+  )
+}
+
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
   // Janela dos indicadores (médias/rácios de fluxo) e dos painéis por categoria.
@@ -1319,7 +1331,7 @@ export default function DashboardPage() {
   // governa o gráfico (navegação própria) nem os KPIs (fotografia do momento).
   const [days, setDays] = useState(30)
   // Filtro de página (topo): "Em aberto" e "Programadas". Aplica-se a TODA a página
-  // — KPIs (A Receber/A Pagar/Posição Líquida/Disponível) e gráfico de cash flow.
+  // — KPIs (A Receber/A Pagar/Posição Líquida/Saldo após pagamentos) e gráfico de cash flow.
   // Os dados fechados (movimentos reais) contam sempre. Default: ambos visíveis.
   const [showOpen, setShowOpen] = useState(true)
   const [showProgrammed, setShowProgrammed] = useState(true)
@@ -1401,7 +1413,7 @@ export default function DashboardPage() {
   )
   if (!data) return null
 
-  // kpis efetivo: A Receber/A Pagar/Disponível/Posição Líquida refletem o filtro de
+  // kpis efetivo: A Receber/A Pagar/Saldo após pagamentos/Posição Líquida refletem o filtro de
   // página ("em aberto" e/ou "programadas"). Saldo Total fica sempre inalterado.
   const rawKpis = data.kpis
   const toReceiveEff = (showOpen ? rawKpis.toReceive : 0) + (showProgrammed ? (rawKpis.toReceiveProgrammed ?? 0) : 0)
@@ -1558,7 +1570,7 @@ export default function DashboardPage() {
             <div className="space-y-2.5">
               {/* Net cash flow highlight */}
               <div className={`rounded-lg px-3 py-2 flex items-center justify-between ${stats.netCashFlow >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
-                <span className="text-xs text-gray-600 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Fluxo líquido ({days}d)</span>
+                <span className="text-xs text-gray-600 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Fluxo líquido ({days}d)<InfoHint text={`Entradas menos saídas de dinheiro (movimentos reais) nos últimos ${days} dias. Positivo = entrou mais do que saiu.`} /></span>
                 <span className={`text-sm font-bold ${stats.netCashFlow >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                   {stats.netCashFlow >= 0 ? '+' : ''}{formatCurrency(stats.netCashFlow)}
                 </span>
@@ -1566,7 +1578,7 @@ export default function DashboardPage() {
               <div className="pt-1 space-y-2.5">
                 {stats.liquidezImediata !== null && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5" />Liquidez imediata</span>
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5" />Liquidez imediata<InfoHint text="Saldo em banco ÷ total a pagar. Quantas vezes o dinheiro que tens cobre as contas a pagar. 1× = cobre exatamente; abaixo de 1× não chega." /></span>
                     <span className={`text-xs font-semibold ${stats.liquidezImediata >= 1 ? 'text-green-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-700'}`}>
                       {stats.liquidezImediata.toFixed(2)}×
                     </span>
@@ -1574,7 +1586,7 @@ export default function DashboardPage() {
                 )}
                 {stats.coverageRatio !== null && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ArrowDownToLine className="w-3.5 h-3.5" />Rácio CR/CP</span>
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ArrowDownToLine className="w-3.5 h-3.5" />Rácio CR/CP<InfoHint text="Contas a Receber ÷ Contas a Pagar. Indica se o que tens a receber chega para o que tens a pagar. 1× = chega; abaixo de 1× não chega." /></span>
                     <span className={`text-xs font-semibold ${stats.coverageRatio >= 1 ? 'text-green-700' : 'text-amber-600'}`}>
                       {stats.coverageRatio.toFixed(2)}×
                     </span>
@@ -1582,7 +1594,7 @@ export default function DashboardPage() {
                 )}
                 {stats.cashRunway !== null && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />Autonomia de caixa</span>
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />Autonomia de caixa<InfoHint text="Quantos dias o dinheiro aguenta ao ritmo de despesa atual. = Saldo após pagamentos ÷ média diária de saída. Maior é melhor." /></span>
                     <span className={`text-xs font-semibold ${stats.cashRunway > 90 ? 'text-green-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-700'}`}>
                       {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
                     </span>
@@ -1590,7 +1602,7 @@ export default function DashboardPage() {
                 )}
                 {stats.dso !== null && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" />DSO est.</span>
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" />DSO est.<InfoHint text="Days Sales Outstanding: dias médios estimados até receberes uma fatura. = A receber ÷ média diária de entrada. Menor é melhor." /></span>
                     <span className={`text-xs font-semibold ${stats.dso <= 30 ? 'text-green-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-700'}`}>
                       {stats.dso} dias
                     </span>
@@ -1598,24 +1610,24 @@ export default function DashboardPage() {
                 )}
                 {stats.dpo !== null && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ReceiptText className="w-3.5 h-3.5" />DPO est.</span>
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ReceiptText className="w-3.5 h-3.5" />DPO est.<InfoHint text="Days Payable Outstanding: dias médios estimados até pagares uma fatura. = A pagar ÷ média diária de saída." /></span>
                     <span className="text-xs font-semibold text-gray-700">{stats.dpo} dias</span>
                   </div>
                 )}
               </div>
               <div className="pt-2 border-t border-gray-100">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Capital de trabalho</span>
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Capital de trabalho<InfoHint text="Saldo + a receber − a pagar. O que sobraria se recebesses e pagasses tudo. É o mesmo valor da Posição Líquida." /></span>
                   <span className={`text-xs font-semibold ${stats.workingCapital >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                     {formatCurrency(stats.workingCapital)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Média diária entrada</span>
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Média diária entrada<InfoHint text={`Total de entradas dos últimos ${days} dias ÷ ${days}. Ritmo médio de recebimentos por dia.`} /></span>
                   <span className="text-xs font-medium text-green-700">{formatCurrency(stats.avgDailyIncome)}</span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" />Média diária saída</span>
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" />Média diária saída<InfoHint text={`Total de saídas dos últimos ${days} dias ÷ ${days}. Ritmo médio de despesa por dia.`} /></span>
                   <span className="text-xs font-medium text-red-700">{formatCurrency(stats.avgDailyExpense)}</span>
                 </div>
               </div>
@@ -1643,18 +1655,18 @@ export default function DashboardPage() {
             <div className="text-xs text-gray-400 mt-0.5 mb-3">saldo total em bancos</div>
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">Disponível</span>
+                <span className="text-gray-500 flex items-center gap-1">Saldo após pagamentos<InfoHint text="O que sobra no banco depois de pagar tudo o que deves. = Saldo total − a pagar (não conta com o que tens a receber). Negativo = o saldo não chega para as obrigações." /></span>
                 <span className={`font-semibold tabular-nums ${kpis.cashAvailable >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(kpis.cashAvailable)}</span>
               </div>
               {stats?.liquidezImediata != null && (
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500">Liquidez imediata</span>
+                  <span className="text-gray-500 flex items-center gap-1">Liquidez imediata<InfoHint text="Saldo em banco ÷ total a pagar. Quantas vezes o dinheiro que tens cobre as contas a pagar. 1× = cobre exatamente; abaixo de 1× não chega." /></span>
                   <span className={`font-semibold ${stats.liquidezImediata >= 1 ? 'text-emerald-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-600'}`}>{stats.liquidezImediata.toFixed(2)}×</span>
                 </div>
               )}
               {stats?.cashRunway != null && (
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500">Autonomia de caixa</span>
+                  <span className="text-gray-500 flex items-center gap-1">Autonomia de caixa<InfoHint text="Quantos dias o dinheiro aguenta ao ritmo de despesa atual. = Saldo após pagamentos ÷ média diária de saída. Maior é melhor." /></span>
                   <span className={`font-semibold ${stats.cashRunway > 90 ? 'text-emerald-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-600'}`}>
                     {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
                   </span>
@@ -1662,7 +1674,7 @@ export default function DashboardPage() {
               )}
               {stats?.workingCapital != null && (
                 <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
-                  <span className="text-gray-500">Capital de trabalho</span>
+                  <span className="text-gray-500 flex items-center gap-1">Capital de trabalho<InfoHint text="Saldo + a receber − a pagar. O que sobraria se recebesses e pagasses tudo. É o mesmo valor da Posição Líquida." /></span>
                   <span className={`font-semibold tabular-nums ${stats.workingCapital >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(stats.workingCapital)}</span>
                 </div>
               )}
@@ -1694,7 +1706,7 @@ export default function DashboardPage() {
               <div className="rounded-xl border border-gray-100 p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                  <span className="text-xs font-semibold text-gray-700">Risco de Liquidez</span>
+                  <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Risco de Liquidez<InfoHint text="Nível de risco (Baixo/Médio/Alto) que combina recebimentos/pagamentos vencidos, autonomia de caixa, liquidez e previsão de saldo negativo." /></span>
                 </div>
                 <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 mb-3 ${riskBg}`}>
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
@@ -1718,7 +1730,7 @@ export default function DashboardPage() {
           <div className="rounded-xl border border-gray-100 p-4">
             <div className="flex items-center gap-2 mb-3">
               <CalendarDays className="w-4 h-4 text-indigo-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-gray-700">Operações a Vencer</span>
+              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Operações a Vencer<InfoHint text="Documentos por liquidar: faturas a receber + a pagar ainda em aberto." /></span>
             </div>
             <div className="text-2xl font-bold text-gray-900">{kpis.countReceivablesOpen + kpis.countPayablesOpen}</div>
             <div className="text-xs text-gray-400 mt-0.5 mb-3">documentos em aberto</div>
@@ -1732,7 +1744,7 @@ export default function DashboardPage() {
                 <span className="font-semibold tabular-nums text-red-600">{formatCurrency(kpis.toPay)}</span>
               </div>
               <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
-                <span className="text-gray-500">Saldo líquido</span>
+                <span className="text-gray-500 flex items-center gap-1">Saldo líquido<InfoHint text="A receber − a pagar, apenas dos documentos em aberto. Não inclui o saldo em banco." /></span>
                 <span className={`font-semibold tabular-nums ${kpis.toReceive - kpis.toPay >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(kpis.toReceive - kpis.toPay)}</span>
               </div>
             </div>
@@ -1742,7 +1754,7 @@ export default function DashboardPage() {
           <div className={`rounded-xl border p-4 ${kpis.overdueReceivables > 0 ? 'border-amber-200 bg-amber-50/40' : 'border-gray-100'}`}>
             <div className="flex items-center gap-2 mb-3">
               <Clock className="w-4 h-4 text-orange-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-gray-700">Cobranças a Fazer</span>
+              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Cobranças a Fazer<InfoHint text="Recebimentos já vencidos (em atraso) que deves cobrar aos clientes." /></span>
             </div>
             <div className={`text-2xl font-bold ${kpis.overdueReceivables > 0 ? 'text-amber-700' : 'text-gray-900'}`}>{kpis.overdueReceivables}</div>
             <div className="text-xs text-gray-500 mt-0.5 mb-3">
