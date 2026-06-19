@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import type { ToconlineService } from '../../modules/toconline/toconline.service.js'
+import { clearBareTocSalesStub, clearBareTocPurchaseStub } from './dedup.js'
 
 type Raw = Record<string, unknown>
 
@@ -222,7 +223,9 @@ export async function syncSalesDocuments(prisma: PrismaClient, svc: ToconlineSer
       const localId = byRef.get(ref)
       if (!localId) continue
       byRef.delete(ref)
-      await prisma.treasuryReceivable.update({ where: { id: localId }, data: { tocSalesDocId: String(i.tocId) } })
+      const tocId = String(i.tocId)
+      if (!(await clearBareTocSalesStub(prisma, clientId, tocId))) continue
+      await prisma.treasuryReceivable.update({ where: { id: localId }, data: { tocSalesDocId: tocId } })
     }
   }
   return result
@@ -266,7 +269,9 @@ export async function syncPurchaseDocuments(prisma: PrismaClient, svc: Toconline
       const localId = byRef.get(ref)
       if (!localId) continue
       byRef.delete(ref)
-      await prisma.treasuryPayable.update({ where: { id: localId }, data: { tocPurchasesDocId: String(i.tocId) } })
+      const tocId = String(i.tocId)
+      if (!(await clearBareTocPurchaseStub(prisma, clientId, tocId))) continue
+      await prisma.treasuryPayable.update({ where: { id: localId }, data: { tocPurchasesDocId: tocId } })
     }
   }
   return result

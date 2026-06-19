@@ -7,6 +7,7 @@ import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
+import { clearBareTocSalesStub } from '../../../lib/toc-sync/dedup.js'
 import { compareDocs } from '../../../lib/doc-sort.js'
 import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
 import { earliestPendingDueAt } from '../../../lib/pending-action.js'
@@ -761,11 +762,10 @@ export class TreasuryReceivablesService {
     })
     if (!toc) return null
     const tocId = String(toc.tocId)
-    const already = await this.prisma.treasuryReceivable.findFirst({
-      where: { clientId, tocSalesDocId: tocId, deletedAt: null },
-      select: { id: true },
-    })
-    return already ? null : tocId
+    // Unifica: se um stub vazio já estiver ligado a este TOC, remove-o; se houver um
+    // local com dados, é conflito real e não se liga.
+    const canLink = await clearBareTocSalesStub(this.prisma, clientId, tocId)
+    return canLink ? tocId : null
   }
 
   async update(clientId: string, userId: string, id: string, data: Partial<{
@@ -1532,7 +1532,14 @@ export class TreasuryReceivablesService {
       NOT: { parentId: { not: null }, recurrenceId: null },
       ...abertasClause,
     }
-    const [totalOpenLocal, overdueLocal, settledMonth] = await Promise.all([
+    // Programadas (SCHEDULED): recorrências futuras ainda não comprometidas. Não
+    // se aplica o abertasClause (são futuras por natureza); mantém-se a dedup de
+    // splits e a exclusão de docs TOC (SCHEDULED é sempre local).
+    const programmedClause: Prisma.TreasuryReceivableWhereInput = {
+      clientId, deletedAt: null, tocSalesDocId: null,
+      NOT: { parentId: { not: null }, recurrenceId: null },
+    }
+    const [totalOpenLocal, overdueLocal, settledMonth, totalProgrammedLocal] = await Promise.all([
       this.prisma.treasuryReceivable.aggregate({
         where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] } },
         _sum: { pendingAmount: true },
@@ -1547,6 +1554,11 @@ export class TreasuryReceivablesService {
           ...(settledFrom ? { settledAt: { gte: settledFrom } } : {}),
         },
         _sum: { totalAmount: true },
+      }),
+      this.prisma.treasuryReceivable.aggregate({
+        where: { ...programmedClause, status: 'SCHEDULED' },
+        _sum: { pendingAmount: true },
+        _count: true,
       }),
     ])
 
@@ -1620,6 +1632,9 @@ export class TreasuryReceivablesService {
 
     return {
       totalPending: Number(totalOpenLocal._sum?.pendingAmount ?? 0) + tocTotalPending,
+      // Programadas (SCHEDULED) — separado, para o dashboard poder incluir/excluir.
+      totalProgrammed: Number(totalProgrammedLocal._sum?.pendingAmount ?? 0),
+      countProgrammed: totalProgrammedLocal._count,
       countOpen: totalOpenLocal._count + tocOpenCount,
       countOverdue: overdueLocal + tocOverdue,
       settledThisMonth: Number(settledMonth._sum?.totalAmount ?? 0),
