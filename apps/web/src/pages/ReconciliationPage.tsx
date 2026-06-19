@@ -104,6 +104,7 @@ export default function ReconciliationPage() {
   const [docSearch, setDocSearch] = useState('')
   const [docFiltersOpen, setDocFiltersOpen] = useState(false)
   const [docType, setDocType] = useState<'all' | 'receivable' | 'payable'>('all')
+  const [docTab, setDocTab] = useState<'receivable' | 'payable'>('receivable')
   const [docDateFrom, setDocDateFrom] = useState('')
   const [docDateTo, setDocDateTo] = useState('')
   const [docAmountMin, setDocAmountMin] = useState('')
@@ -126,6 +127,8 @@ export default function ReconciliationPage() {
     const compatType = currentDirection === 'REVENUE' ? 'receivable' : 'payable'
     setSelectedDocs((prev) => prev.filter((d) => d.type === compatType))
     setAllocations((prev) => prev.filter((a) => a.type === compatType))
+    // Alinhar a tab visível com a direção do movimento selecionado
+    setDocTab(compatType)
   }, [currentDirection])
 
   // ── Queries ─────────────────────────────────────────────────────────────────
@@ -605,21 +608,6 @@ export default function ReconciliationPage() {
     )
   }
 
-  // ── Section headers ───────────────────────────────────────────────────────
-  // Render helper (not a component) — see renderMovRow above.
-  function renderSectionHeader({ label, count, sign }: { label: string; count: number; sign: 'credit' | 'debit' }) {
-    const isBlocked = currentDirection !== null &&
-      ((sign === 'credit' && currentDirection === 'EXPENSE') || (sign === 'debit' && currentDirection === 'REVENUE'))
-    const cls = sign === 'credit' ? 'bg-emerald-50/80 text-emerald-800' : 'bg-red-50/80 text-red-800'
-    if (!count) return null
-    return (
-      <div className={`px-4 py-1.5 flex items-center justify-between border-b border-gray-100 ${isBlocked ? 'bg-gray-100/80 opacity-50' : cls}`}>
-        <span className="text-[10px] font-bold uppercase tracking-wider">{label}</span>
-        <span className="text-[10px] font-medium opacity-70">{count}</span>
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-5 pb-28">
       {/* Page header */}
@@ -786,19 +774,6 @@ export default function ReconciliationPage() {
             {/* Filter panel */}
             {docFiltersOpen && (
               <div className="space-y-2 pt-1 pb-0.5 border-t border-gray-100 mt-1">
-                <FilterRow label="Tipo">
-                  <div className="flex gap-1">
-                    {(['all', 'receivable', 'payable'] as const).map((v) => (
-                      <button
-                        key={v}
-                        onClick={() => setDocType(v)}
-                        className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${docType === v ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
-                      >
-                        {v === 'all' ? 'Todos' : v === 'receivable' ? 'A Receber' : 'A Pagar'}
-                      </button>
-                    ))}
-                  </div>
-                </FilterRow>
                 <FilterRow label="Vencimento">
                   <input type="date" className="input text-xs py-1 flex-1" value={docDateFrom} onChange={(e) => setDocDateFrom(e.target.value)} />
                   <span className="text-gray-300 text-xs">–</span>
@@ -818,6 +793,37 @@ export default function ReconciliationPage() {
             )}
           </div>
 
+          {/* Tabs — Receber / Pagar (lista única) */}
+          {(() => {
+            const tabs = [
+              { key: 'receivable' as const, label: 'Contas a Receber', count: pendingReceivables.length, active: 'border-emerald-500 text-emerald-700' },
+              { key: 'payable' as const, label: 'Contas a Pagar', count: pendingPayables.length, active: 'border-red-500 text-red-700' },
+            ]
+            return (
+              <div className="flex border-b border-gray-100">
+                {tabs.map((t) => {
+                  const isActive = docTab === t.key
+                  const isBlocked = currentDirection !== null &&
+                    ((t.key === 'receivable' && currentDirection === 'EXPENSE') || (t.key === 'payable' && currentDirection === 'REVENUE'))
+                  return (
+                    <button
+                      key={t.key}
+                      onClick={() => setDocTab(t.key)}
+                      disabled={isBlocked}
+                      className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors
+                        ${isActive ? t.active : isBlocked ? 'border-transparent text-gray-300 cursor-not-allowed' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+                    >
+                      {t.label}
+                      <span className={`inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full text-[9px] font-bold leading-none ${isActive ? 'bg-current/10' : 'bg-gray-100 text-gray-400'}`}>
+                        {t.count}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            )
+          })()}
+
           {/* Document list */}
           <div className="flex-1 overflow-y-auto" style={{ maxHeight: '420px' }}>
             {docsTruncated && (
@@ -826,25 +832,19 @@ export default function ReconciliationPage() {
                 Existem mais documentos do que os mostrados. Use filtros para os localizar.
               </div>
             )}
-            {pendingReceivables.length > 0 && (
-              <>
-                {renderSectionHeader({ label: '↓ Contas a Receber', count: pendingReceivables.length, sign: 'credit' })}
-                {pendingReceivables.map((d) => renderDocRow(d))}
-              </>
-            )}
-            {pendingPayables.length > 0 && (
-              <>
-                {renderSectionHeader({ label: '↑ Contas a Pagar', count: pendingPayables.length, sign: 'debit' })}
-                {pendingPayables.map((d) => renderDocRow(d))}
-              </>
-            )}
-            {pendingDocs.length === 0 && (
-              <div className="px-4 py-10 text-center text-gray-400 text-sm">
-                {allDocs.length === 0
-                  ? 'Sem documentos pendentes (a receber ou a pagar) em aberto.'
-                  : 'Nenhum resultado para os filtros aplicados'}
-              </div>
-            )}
+            {(() => {
+              const list = docTab === 'receivable' ? pendingReceivables : pendingPayables
+              if (list.length === 0) {
+                return (
+                  <div className="px-4 py-10 text-center text-gray-400 text-sm">
+                    {allDocs.length === 0
+                      ? `Sem contas a ${docTab === 'receivable' ? 'receber' : 'pagar'} em aberto.`
+                      : 'Nenhum resultado para os filtros aplicados'}
+                  </div>
+                )
+              }
+              return list.map((d) => renderDocRow(d))
+            })()}
           </div>
 
           {/* Footer with selection info */}
