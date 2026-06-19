@@ -407,9 +407,12 @@ export default function PayablesPage() {
   const [panelTocDoc, setPanelTocDoc] = useState<TocPurchaseDoc | null>(null)
   const [detailPayment, setDetailPayment] = useState<TocPayment | null>(null)
   const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
-  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'settle'>(null)
+  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'settle' | 'commit'>(null)
   const [settleRef, setSettleRef] = useState('')
   const [settleDate, setSettleDate] = useState('')
+  const [commitRef, setCommitRef] = useState('')
+  const [commitAmount, setCommitAmount] = useState('')
+  const [commitDate, setCommitDate] = useState('')
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
   const [removeReadyOpen, setRemoveReadyOpen] = useState(false)
   const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
@@ -525,6 +528,9 @@ export default function PayablesPage() {
         budgetId: form.budgetId || undefined,
         budgetCategoryId: form.budgetCategoryId || undefined,
       }
+      // Recorrências são estimadas e sem referência: o backend ignora-a, mas
+      // evitamos enviá-la para manter o payload coerente.
+      if (recForm.isRecurrent) delete body.reference
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
@@ -806,6 +812,34 @@ export default function PayablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  // Promove uma fatura SCHEDULED (programada/estimada) para OPEN, fixando
+  // referência, valor e data. O backend devolve a fatura atualizada.
+  const commitPayable = useMutation({
+    mutationFn: (vars: { id: string; reference: string; amount: number; date: string }) =>
+      api.post<Payable>(`/treasury/${selectedClientId}/payables/${vars.id}/commit`, { reference: vars.reference, amount: vars.amount, date: vars.date }),
+    onSuccess: (updated, vars) => {
+      const id = vars.id
+      qc.invalidateQueries({ queryKey: ['payables'] })
+      qc.invalidateQueries({ queryKey: ['payables-kpis'] })
+      qc.invalidateQueries({ queryKey: ['activity'] })
+      // A promoção altera os valores/datas projetadas — refrescar o dashboard.
+      qc.invalidateQueries({ queryKey: ['dashboard-cashflow-statement'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+      setPanelDoc((d) => d && d.id === id ? {
+        ...d,
+        status: updated?.status ?? 'OPEN',
+        reference: updated?.reference ?? vars.reference,
+        totalAmount: updated?.totalAmount ?? vars.amount,
+        pendingAmount: updated?.pendingAmount ?? vars.amount,
+        dueDate: updated?.dueDate ?? vars.date,
+      } : d)
+      qc.setQueryData<Payable>(['payable-detail', selectedClientId, id], (old) => old ? { ...old, ...updated } : old)
+      setPanelSection(null)
+      toast.success('Fatura marcada como comprometida.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
 
 
   const createOutras = useMutation({
@@ -815,7 +849,7 @@ export default function PayablesPage() {
         categoryId: outrasForm.categoryId || undefined,
         entityName: outrasForm.entityName || undefined,
         entityNif: outrasForm.entityNif || undefined,
-        reference: outrasForm.reference || undefined,
+        ...(recForm.isRecurrent ? {} : { reference: outrasForm.reference || undefined }),
         description: outrasForm.description || undefined,
         dueDate: outrasForm.dueDate,
         ...(computedDocDate ? { documentDate: computedDocDate } : {}),
@@ -1005,6 +1039,12 @@ export default function PayablesPage() {
   const displayedPaid = kpisRange?.paidThisMonth ?? combinedKpis?.paidThisMonth ?? 0
 
   const isClosed = (status: string) => status === 'PAID' || status === 'SETTLED' || status === 'VOID'
+  // Estado SCHEDULED (programada/estimada): etiqueta dedicada local. Mantemos a
+  // alteração contida neste ficheiro (utils é partilhado com Recebimentos).
+  const payStatusLabel = (status: string, settledInToc = true, full = false) =>
+    status === 'SCHEDULED' ? 'Programada' : statusLabel(status, settledInToc, full)
+  const payStatusVariant = (status: string): ReturnType<typeof statusVariant> =>
+    status === 'SCHEDULED' ? 'yellow' : statusVariant(status)
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
   const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (p: Payable) => {
@@ -1349,7 +1389,7 @@ export default function PayablesPage() {
                                   )}
                                 </td>
                                 <td className="px-3 py-3">
-                                  <Badge variant={statusVariant(p.status)}>{statusLabel(p.status, p._statusToc === 'SETTLED')}</Badge>
+                                  <Badge variant={payStatusVariant(p.status)}>{payStatusLabel(p.status, p._statusToc === 'SETTLED')}</Badge>
                                   {p._statusDiffersFromToc && (
                                     <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${p._statusToc ?? '—'}`}>(Local)</span>
                                   )}
@@ -1474,7 +1514,7 @@ export default function PayablesPage() {
                                 <td className="pl-1 pr-3 py-3 text-center text-gray-700">{formatCurrency(total)}</td>
                                 <td className="px-3 py-3 text-center font-semibold text-red-700">{formatCurrency(pending)}</td>
                                 <td className="px-3 py-3">
-                                  <Badge variant={statusVariant(row.item.status)}>{statusLabel(row.item.status, row.item._statusToc === 'SETTLED')}</Badge>
+                                  <Badge variant={payStatusVariant(row.item.status)}>{payStatusLabel(row.item.status, row.item._statusToc === 'SETTLED')}</Badge>
                                   {row.item._statusDiffersFromToc && (
                                     <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${row.item._statusToc ?? '—'}`}>(Local)</span>
                                   )}
@@ -1774,7 +1814,7 @@ export default function PayablesPage() {
                                     <div className="text-xs text-gray-400">pago: {formatCurrency(Number(p.paidAmount))}</div>
                                   )}
                                 </td>
-                                <td className="px-3 py-3"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status, p._statusToc === 'SETTLED')}</Badge></td>
+                                <td className="px-3 py-3"><Badge variant={payStatusVariant(p.status)}>{payStatusLabel(p.status, p._statusToc === 'SETTLED')}</Badge></td>
                                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                                   <InlineCategoryPicker
                                     category={p.category}
@@ -1998,12 +2038,14 @@ export default function PayablesPage() {
                   <label className="label">NIF Fornecedor <span className="text-gray-400 font-normal">(opcional)</span></label>
                   <input className="input" value={form.entityNif} onChange={(e) => setForm({ ...form, entityNif: e.target.value })} placeholder="123456789" />
                 </div>
+                {!recForm.isRecurrent && (
+                  <div>
+                    <label className="label">Nº Documento</label>
+                    <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FC2024/001" />
+                  </div>
+                )}
                 <div>
-                  <label className="label">Nº Documento</label>
-                  <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FC2024/001" />
-                </div>
-                <div>
-                  <label className="label">Valor (€)</label>
+                  <label className="label">{recForm.isRecurrent ? 'Valor estimado (€)' : 'Valor (€)'}</label>
                   <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} />
                 </div>
                 <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><WorkdayDatePicker value={form.dueDate} onChange={(v) => setForm({ ...form, dueDate: v })} /></div>
@@ -2190,12 +2232,14 @@ export default function PayablesPage() {
                     readOnly={!!outrasContact}
                   />
                 </div>
+                {!recForm.isRecurrent && (
+                  <div>
+                    <label className="label">Referência</label>
+                    <input className="input" value={outrasForm.reference} onChange={(e) => setOutrasForm({ ...outrasForm, reference: e.target.value })} placeholder="REF001" />
+                  </div>
+                )}
                 <div>
-                  <label className="label">Referência</label>
-                  <input className="input" value={outrasForm.reference} onChange={(e) => setOutrasForm({ ...outrasForm, reference: e.target.value })} placeholder="REF001" />
-                </div>
-                <div>
-                  <label className="label">Valor (€) <span className="text-red-500">*</span></label>
+                  <label className="label">{recForm.isRecurrent ? 'Valor estimado (€)' : 'Valor (€)'} <span className="text-red-500">*</span></label>
                   <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
                 </div>
                 <div>
@@ -2383,7 +2427,7 @@ export default function PayablesPage() {
               </div>
               <div className="text-xs text-gray-500 mt-0.5">{panelDoc.reference || '—'} · Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
               <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <Badge variant={statusVariant(panelDoc.status)}>{statusLabel(panelDoc.status, panelDoc._statusToc === 'SETTLED', true)}</Badge>
+                <Badge variant={payStatusVariant(panelDoc.status)}>{payStatusLabel(panelDoc.status, panelDoc._statusToc === 'SETTLED', true)}</Badge>
                 {panelDoc._statusDiffersFromToc && (
                   <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${panelDoc._statusToc ?? '—'}`}>(Local)</span>
                 )}
@@ -2535,6 +2579,54 @@ export default function PayablesPage() {
                     </div>
                   )}
 
+                  {/* Marcar como Comprometido — só para faturas programadas (SCHEDULED) */}
+                  {panelDoc.status === 'SCHEDULED' && (
+                    <div className="rounded-xl border border-gray-200 overflow-hidden">
+                      <button
+                        onClick={() => {
+                          if (panelSection !== 'commit') {
+                            setCommitRef('')
+                            setCommitAmount(String(panelDoc.totalAmount ?? ''))
+                            setCommitDate(panelDoc.dueDate ? String(panelDoc.dueDate).slice(0, 10) : '')
+                          }
+                          setPanelSection(panelSection === 'commit' ? null : 'commit')
+                        }}
+                        className="w-full flex items-center gap-3 p-3.5 hover:bg-green-50 text-left transition-colors group"
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
+                          <CheckCircle className="w-4 h-4 text-green-700" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900 text-sm">Marcar como Comprometido</div>
+                          <div className="text-xs text-gray-500">Fixar referência, valor e data</div>
+                        </div>
+                      </button>
+                      {panelSection === 'commit' && (
+                        <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Referência</label>
+                            <input className="input mt-1" value={commitRef} onChange={(e) => setCommitRef(e.target.value)} placeholder="FC2024/001" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Valor (€)</label>
+                            <input type="number" className="input mt-1" value={commitAmount} onChange={(e) => setCommitAmount(e.target.value)} />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Data de vencimento</label>
+                            <input type="date" className="input mt-1" value={commitDate} onChange={(e) => setCommitDate(pickWorkday(e.target.value, commitDate))} />
+                          </div>
+                          <button
+                            onClick={() => commitPayable.mutate({ id: panelDoc.id, reference: commitRef.trim(), amount: parseFloat(commitAmount) || 0, date: commitDate })}
+                            disabled={commitPayable.isPending || !commitRef.trim() || !(parseFloat(commitAmount) > 0) || !commitDate}
+                            className="btn-primary w-full text-sm py-1.5"
+                          >
+                            {commitPayable.isPending ? 'A guardar...' : 'Marcar como Comprometido'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Marcar como Pago — bloqueado em recorrências futuras (dueDate > hoje) */}
                   {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (() => {
                     const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
@@ -2632,7 +2724,8 @@ export default function PayablesPage() {
                     </>
                   )}
 
-                  {/* Data prometida — bloqueada em faturas pagas/liquidadas */}
+                  {/* Data prometida — bloqueada em faturas pagas/liquidadas; oculta em programadas (SCHEDULED) */}
+                  {panelDoc.status !== 'SCHEDULED' && (
                   <div className="rounded-xl border border-gray-200 overflow-hidden">
                     <button
                       onClick={() => { if (panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID') setPanelSection(panelSection === 'promised' ? null : 'promised') }}
@@ -2669,6 +2762,7 @@ export default function PayablesPage() {
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/* Dividir Fatura — bloqueada em faturas pagas/liquidadas */}
                   {(panelDoc.status === 'OPEN' || panelDoc.status === 'PAID' || panelDoc.status === 'SETTLED') && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
@@ -2911,7 +3005,7 @@ export default function PayablesPage() {
                         className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
                         <div className="flex items-center justify-between mb-0.5">
                           <span className="text-xs text-gray-400">Parcela {i + 1}</span>
-                          <Badge variant={statusVariant(child.status)}>{statusLabel(child.status, false)}</Badge>
+                          <Badge variant={payStatusVariant(child.status)}>{payStatusLabel(child.status, false)}</Badge>
                         </div>
                         <div className="font-semibold text-sm text-gray-900">{formatCurrency(child.totalAmount)}</div>
                         <div className="text-xs text-gray-500">{child.reference} · Pag. {formatDate(child.promisedPaymentDate ?? child.dueDate)}</div>
