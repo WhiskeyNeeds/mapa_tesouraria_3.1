@@ -468,6 +468,7 @@ export class TreasuryPayablesService {
         where: { clientId, tocPurchasesDocId, deletedAt: null },
         include: {
           category: true,
+          budget: { select: { id: true, name: true, color: true } },
           recurrence: true,
           reconciliationLinks: { include: { reconciliation: true } },
           children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
@@ -495,6 +496,7 @@ export class TreasuryPayablesService {
       where: { id, clientId, deletedAt: null },
       include: {
         category: true,
+        budget: { select: { id: true, name: true, color: true } },
         recurrence: true,
         reconciliationLinks: { include: { reconciliation: true } },
         children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
@@ -511,6 +513,36 @@ export class TreasuryPayablesService {
       }
     }
     return { ...item, _tocOverlay: null as Awaited<ReturnType<PrismaClient['tocPurchaseDocument']['findUnique']>> }
+  }
+
+  /** Como `getById`, mas enriquece os campos de exibição (entidade, referência,
+   *  datas, total, pendente, pago, estado) com o overlay do TOConline — igual ao
+   *  que a listagem faz. Usado pelas rotas de LEITURA do detalhe (painel). As
+   *  escritas continuam a usar `getById` (valores locais crus) para o gating, por
+   *  isso não são afetadas. */
+  async getDetail(clientId: string, id: string) {
+    const item = await this.getById(clientId, id)
+    const rec = item as Record<string, unknown>
+    const tocDoc = rec._tocOverlay as TocPurchaseDocument | null | undefined
+    // Só enriquece registos LOCAIS com espelho TOC (os de TOC puro já vêm mapeados, com `_src`).
+    if (!('_src' in rec) && tocDoc && rec.tocPurchasesDocId) {
+      const enriched = overlayLocalPayableWithToc(item as unknown as LocalPayableRow, tocDoc)
+      if (enriched) {
+        return {
+          ...item,
+          entityName: enriched.entityName,
+          reference: enriched.reference,
+          documentDate: enriched.documentDate,
+          dueDate: enriched.dueDate,
+          totalAmount: enriched.totalAmount,
+          pendingAmount: enriched.pendingAmount,
+          paidAmount: enriched.paidAmount,
+          status: enriched.status,
+          _tocRaw: enriched._tocRaw,
+        }
+      }
+    }
+    return item
   }
 
   async create(clientId: string, userId: string, data: {
@@ -1579,10 +1611,13 @@ export class TreasuryPayablesService {
         : new Date(now.getFullYear(), now.getMonth(), 1)
     // "Abertas": emitted but not settled. Excludes recurrence templates (parentless
     // with recurrenceId) and future recurrence instances (dueDate > now).
+    // "Em aberto" = OPEN/PARTIAL, independentemente da data (ver receivables).
+    // Recorrências comprometidas (OPEN) contam mesmo com vencimento futuro; as
+    // futuras não comprometidas são SCHEDULED e ficam de fora pelo filtro de estado.
     const abertasClause: Prisma.TreasuryPayableWhereInput = {
       OR: [
         { recurrenceId: null },
-        { AND: [{ parentId: { not: null } }, { dueDate: { lte: now } }] },
+        { parentId: { not: null } },
       ],
     }
     const localOnlyClause: Prisma.TreasuryPayableWhereInput = {

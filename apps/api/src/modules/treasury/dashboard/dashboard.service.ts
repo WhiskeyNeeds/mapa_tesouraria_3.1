@@ -120,12 +120,12 @@ export class TreasuryDashboardService {
         _count: true,
       }),
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null, date: { gte: from } },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: { gte: from } },
         select: { date: true, amount: true },
         orderBy: { date: 'asc' },
       }),
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null } },
         include: { category: { select: { name: true, color: true } }, bankAccount: { select: { name: true } } },
         orderBy: { date: 'desc' },
         take: 10,
@@ -136,6 +136,24 @@ export class TreasuryDashboardService {
       this.receivablesSvc.getKpis(clientId),
       this.payablesSvc.getKpis(clientId),
     ])
+
+    // Faturação dos últimos 12 meses — base para DSO/DPO (prazos médios). Inclui
+    // locais puros + espelho TOC; exclui SCHEDULED (estimativas), VOID e as
+    // parcelas-filhas de split (a mãe já tem o total). Usa a data do documento.
+    const yearAgo = new Date(Date.now() - 365 * 86400000)
+    const yearAgoStr = yearAgo.toISOString().slice(0, 10)
+    const SALES_INV = new Set(['ft', 'fs', 'fr'])
+    const PURCH_INV = new Set(['fc', 'dsp'])
+    const [salesLocalAgg, purchLocalAgg, salesTocDocs, purchTocDocs] = await Promise.all([
+      this.prisma.treasuryReceivable.aggregate({ where: { clientId, deletedAt: null, tocSalesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] }, NOT: { parentId: { not: null }, recurrenceId: null }, documentDate: { gte: yearAgo } }, _sum: { totalAmount: true } }),
+      this.prisma.treasuryPayable.aggregate({ where: { clientId, deletedAt: null, tocPurchasesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] }, NOT: { parentId: { not: null }, recurrenceId: null }, documentDate: { gte: yearAgo } }, _sum: { totalAmount: true } }),
+      this.prisma.tocSalesDocument.findMany({ where: { clientId, status: { in: [1, 2, 5] }, date: { gte: yearAgoStr } }, select: { grossTotal: true, documentType: true } }),
+      this.prisma.tocPurchaseDocument.findMany({ where: { clientId, status: { in: [1, 2, 5] }, date: { gte: yearAgoStr } }, select: { grossTotal: true, raw: true } }),
+    ])
+    const billedSales12m = Number(salesLocalAgg._sum.totalAmount ?? 0)
+      + salesTocDocs.filter((d) => SALES_INV.has((d.documentType ?? '').toLowerCase())).reduce((s, d) => s + Number(d.grossTotal ?? 0), 0)
+    const billedPurchases12m = Number(purchLocalAgg._sum.totalAmount ?? 0)
+      + purchTocDocs.filter((d) => PURCH_INV.has(String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase())).reduce((s, d) => s + Number(d.grossTotal ?? 0), 0)
 
     const totalBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
     // "A Receber"/"A Pagar" usam os mesmos critérios do "Total Pendente" das páginas
@@ -252,6 +270,7 @@ export class TreasuryDashboardService {
         countReceivablesProgrammed: receivablesPageKpis.countProgrammed,
         countPayablesProgrammed: payablesPageKpis.countProgrammed,
         overdueReceivables, overduePayables,
+        billedSales12m, billedPurchases12m,
       },
       bankAccounts: bankAccounts.map((a) => {
         const currentBalance = balances.get(a.id) ?? 0
@@ -435,12 +454,12 @@ export class TreasuryDashboardService {
     const ACTIVE_TOC_STATUS = [1, 2, 5]
     const effDate = { OR: [{ promisedPaymentDate: dateCond }, { promisedPaymentDate: null, dueDate: dateCond }] }
     const [movs, rec, pay, tocAnnotatedRec, tocAnnotatedPay, tocSales, tocPurch] = await Promise.all([
-      this.prisma.treasuryBankMovement.findMany({ where: { clientId, deletedAt: null, date: dateCond }, select: { amount: true } }),
+      this.prisma.treasuryBankMovement.findMany({ where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: dateCond }, select: { amount: true } }),
       // Só locais PUROS (sem tocLink): as faturas TOC contam pelo espelho.
       this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
       this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
-      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: { not: null } }, select: { tocSalesDocId: true, status: true } }),
-      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } }, select: { tocPurchasesDocId: true, status: true } }),
+      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: { not: null } }, select: { tocSalesDocId: true, status: true, _count: { select: { children: true } } } }),
+      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } }, select: { tocPurchasesDocId: true, status: true, _count: { select: { children: true } } } }),
       this.prisma.tocSalesDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
       this.prisma.tocPurchaseDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
     ])
@@ -448,21 +467,27 @@ export class TreasuryDashboardService {
     let open = 0, programmed = 0
     for (const r of rec) { const amt = Number(r.pendingAmount ?? 0); if (r.status === 'SCHEDULED') programmed += amt; else open += amt }
     for (const p of pay) { const amt = Number(p.pendingAmount ?? 0); if (p.status === 'SCHEDULED') programmed -= amt; else open -= amt }
-    // Docs TOC liquidados localmente (PAID/SETTLED/VOID) saem do total; os restantes
-    // contam pelo espelho (igual ao getKpis).
+    // Suprime do espelho TOC os docs cujo local: (a) está liquidado (PAID/SETTLED/VOID)
+    // — não é pendente; ou (b) é a mãe de um split — o valor já conta pelas parcelas
+    // locais (senão contava em duplicado: parcelas + espelho TOC). Os restantes
+    // (ex.: stubs vazios em aberto) contam pelo espelho. pending<=0 (notas de
+    // crédito) é ignorado, como no getKpis.
     const RESOLVED = new Set(['PAID', 'SETTLED', 'VOID'])
-    const overSales = new Set(tocAnnotatedRec.filter((r) => RESOLVED.has(r.status)).map((r) => String(r.tocSalesDocId)))
-    const overPurch = new Set(tocAnnotatedPay.filter((p) => RESOLVED.has(p.status)).map((p) => String(p.tocPurchasesDocId)))
+    const suppressed = (r: { status: string; _count: { children: number } }) => RESOLVED.has(r.status) || r._count.children > 0
+    const overSales = new Set(tocAnnotatedRec.filter(suppressed).map((r) => String(r.tocSalesDocId)))
+    const overPurch = new Set(tocAnnotatedPay.filter(suppressed).map((p) => String(p.tocPurchasesDocId)))
     const SALES = new Set(['ft', 'fs', 'fr']), PURCH = new Set(['fc', 'dsp'])
     for (const d of tocSales) {
       if (overSales.has(String(d.tocId))) continue
       const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
-      if (SALES.has(dt)) open += Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      const pend = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (SALES.has(dt) && pend > 0) open += pend
     }
     for (const d of tocPurch) {
       if (overPurch.has(String(d.tocId))) continue
       const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
-      if (PURCH.has(dt)) open -= Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      const pend = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (PURCH.has(dt) && pend > 0) open -= pend
     }
     return { settled, open, programmed }
   }
@@ -487,7 +512,7 @@ export class TreasuryDashboardService {
 
     const [movements, categories, bankAccounts, tocSalesPending, tocPurchPending] = await Promise.all([
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null, date: { gte: start, lte: end } },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: { gte: start, lte: end } },
         select: { date: true, amount: true, categoryId: true },
       }),
       this.prisma.treasuryCategory.findMany({
@@ -497,7 +522,7 @@ export class TreasuryDashboardService {
       }),
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
-        select: { id: true },
+        select: { id: true, openingBalance: true },
       }),
       this.prisma.tocSalesDocument.findMany({
         where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: { gte: startStr, lte: endStr } },
@@ -509,26 +534,18 @@ export class TreasuryDashboardService {
       }),
     ])
 
-    const balances = await this.fetchAccountBalances(clientId)
-    const currentBalance = bankAccounts.reduce((s, a) => s + (balances.get(a.id) ?? 0), 0)
-
-    // Saldo no início do ano = saldo atual PROJETADO até 1 de Janeiro desse ano,
-    // com o mesmo fluxo das barras (movimentos + pendentes por data efetiva + TOC
-    // não importado). Garante que o mesmo mês mostra o mesmo saldo em qualquer vista
-    // (não "salta" na viragem de ano nem repõe ao saldo de hoje em anos futuros):
-    //   - ano passado/atual: subtrai o fluxo desde o início do ano até hoje;
-    //   - ano futuro: soma o fluxo de hoje até ao início do ano.
-    // (gt no início e lt no futuro evitam contar duas vezes o fluxo de 1 de Janeiro,
-    // que já entra no próprio ano via forward-prop.)
-    // Âncora do saldo desdobrada por estado: balanceAtYearStart = saldoReal + sign*fluxo,
-    // onde sign=-1 (ano passado/atual) ou +1 (futuro). Guardamos a contribuição de cada
-    // componente (com o sinal aplicado) para o frontend poder "devolver" à âncora os
-    // componentes escondidos pelos toggles e reconciliar o saldo com o saldo real.
-    const anchorSign = start <= now ? -1 : 1
-    const anchorFlow = await this.netCashFlowComponents(clientId, start <= now ? { gt: start, lte: now } : { gt: now, lt: start })
-    const balanceAtYearStart = currentBalance + anchorSign * (anchorFlow.settled + anchorFlow.open + anchorFlow.programmed)
-    const anchorOpenContribution = anchorSign * anchorFlow.open
-    const anchorProgrammedContribution = anchorSign * anchorFlow.programmed
+    // Saldo no início do ano = soma dos saldos iniciais das contas (openingBalance,
+    // por defeito 0) MAIS todo o fluxo acumulado ANTES de 1 de Janeiro desse ano
+    // (movimentos/fechadas + faturas em aberto + programadas, pela data efetiva). É uma
+    // acumulação para a frente desde a abertura das contas — não depende do saldo
+    // bancário atual (balanceAfter). Forward-prop dentro do ano soma os fluxos do ano.
+    const openingTotal = bankAccounts.reduce((s, a) => s + Number(a.openingBalance ?? 0), 0)
+    const beforeFlow = await this.netCashFlowComponents(clientId, { lt: start })
+    const balanceAtYearStart = openingTotal + beforeFlow.settled + beforeFlow.open + beforeFlow.programmed
+    // Contribuição (positiva) de cada componente para a âncora, para o frontend remover
+    // do saldo o que estiver escondido pelos toggles (em aberto / programadas).
+    const anchorOpenContribution = beforeFlow.open
+    const anchorProgrammedContribution = beforeFlow.programmed
 
     // Decomposição por status semântico:
     //   settled    = movimentos bancários realizados                  → "Atual" no chart
@@ -590,11 +607,11 @@ export class TreasuryDashboardService {
       // espelho; os restantes só fornecem o override de categoria ao ramo TOC.
       this.prisma.treasuryReceivable.findMany({
         where: { clientId, deletedAt: null, tocSalesDocId: { not: null } },
-        select: { tocSalesDocId: true, status: true, categoryId: true },
+        select: { tocSalesDocId: true, status: true, categoryId: true, _count: { select: { children: true } } },
       }),
       this.prisma.treasuryPayable.findMany({
         where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } },
-        select: { tocPurchasesDocId: true, status: true, categoryId: true },
+        select: { tocPurchasesDocId: true, status: true, categoryId: true, _count: { select: { children: true } } },
       }),
     ])
 
@@ -605,14 +622,17 @@ export class TreasuryDashboardService {
     const overriddenPurchTocIds = new Set<string>()
     const salesAnnotationCat = new Map<string, string | null>()
     const purchAnnotationCat = new Map<string, string | null>()
+    // Suprime o espelho TOC quando o local está liquidado (PAID/SETTLED/VOID) OU é
+    // a mãe de um split — nesse caso o valor já conta pelas parcelas locais (senão
+    // contava em duplicado). Os restantes (ex.: stubs em aberto) contam pelo espelho.
     for (const r of tocAnnotatedRec) {
       const id = String(r.tocSalesDocId)
-      if (RESOLVED.has(r.status)) overriddenSalesTocIds.add(id)
+      if (RESOLVED.has(r.status) || r._count.children > 0) overriddenSalesTocIds.add(id)
       else salesAnnotationCat.set(id, r.categoryId)
     }
     for (const p of tocAnnotatedPay) {
       const id = String(p.tocPurchasesDocId)
-      if (RESOLVED.has(p.status)) overriddenPurchTocIds.add(id)
+      if (RESOLVED.has(p.status) || p._count.children > 0) overriddenPurchTocIds.add(id)
       else purchAnnotationCat.set(id, p.categoryId)
     }
 
@@ -870,11 +890,11 @@ export class TreasuryDashboardService {
       }),
       // Use endOfToday so movements recorded today are included in the current week's actuals
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null, date: { gte: rangeStart, lte: endOfToday } },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: { gte: rangeStart, lte: endOfToday } },
         select: { date: true, amount: true, categoryId: true, bankAccountId: true },
       }),
       this.prisma.treasuryBankMovement.findFirst({
-        where: { clientId, deletedAt: null },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null } },
         orderBy: { date: 'asc' },
         select: { date: true },
       }),

@@ -3,7 +3,7 @@
 // Painel de detalhe de um payable ou receivable — replica o painel lateral
 // da PayablesPage / ReceivablesPage para ser usado em contextos de modal.
 // Serve ambas as direções via `seg`/`isExpense`.
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -108,6 +108,18 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
   const [commitAmount, setCommitAmount] = useState('')
   const [commitDate, setCommitDate] = useState('')
   const [selectedPayment, setSelectedPayment] = useState<TocPayment | null>(null)
+
+  // O painel é reutilizado (mesma instância) quando se clica noutra fatura: o
+  // prop `docId` muda mas o estado interno não se atualizava sozinho. Ressincroniza
+  // o documento atual e repõe o estado por-documento quando o `docId` muda.
+  // (A navegação interna mãe/parcela altera `currentId` sem mexer em `docId`,
+  //  por isso continua preservada.)
+  useEffect(() => {
+    setCurrentId(docId)
+    setTab('details')
+    setSection(null)
+    setSelectedPayment(null)
+  }, [docId])
 
   const pickWorkday = (next: string, fallback: string): string => {
     if (next && isWeekend(next)) {

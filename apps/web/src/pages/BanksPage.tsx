@@ -64,7 +64,7 @@ function BankAvatar({ bankName }: { bankName: string }) {
   )
 }
 
-interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean; importedCount: number }
+interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; openingBalance?: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean; importedCount: number }
 interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { id: string; name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string }; reconciliation?: { state: 'RECONCILED' | 'PARTIAL'; isDryRun: boolean; allocated: number } | null }
 
 interface ReconciliationLink {
@@ -213,7 +213,7 @@ export default function BanksPage() {
   const [revertConfirmId, setRevertConfirmId] = useState<string | null>(null)
   const [confirmDeleteMovementId, setConfirmDeleteMovementId] = useState<string | null>(null)
   const [editAccountId, setEditAccountId] = useState<string | null>(null)
-  const [editAccountForm, setEditAccountForm] = useState({ name: '', minBalance: '' })
+  const [editAccountForm, setEditAccountForm] = useState({ name: '', openingBalance: '', minBalance: '' })
   const [newAccount, setNewAccount] = useState({ name: '', bankName: '', iban: '', openingBalance: '0', minBalance: '' })
   const [bankSearch, setBankSearch] = useState('')
   const [showBankDropdown, setShowBankDropdown] = useState(false)
@@ -356,7 +356,7 @@ export default function BanksPage() {
     mutationFn: (data: typeof newAccount) => api.post(`/treasury/${selectedClientId}/bank-accounts`, {
       ...data,
       iban: data.iban ? sanitizeIban(data.iban) : undefined,
-      openingBalance: parseFloat(data.openingBalance),
+      openingBalance: parseFloat(data.openingBalance) || 0,
       minBalance: data.minBalance ? parseFloat(data.minBalance) : undefined,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['bank-accounts'] }); setShowNewAccount(false); resetNewAccountForm() },
@@ -385,7 +385,7 @@ export default function BanksPage() {
   })
 
   const updateAccount = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name?: string; minBalance?: number | null } }) =>
+    mutationFn: ({ id, data }: { id: string; data: { name?: string; openingBalance?: number; minBalance?: number | null } }) =>
       api.patch(`/treasury/${selectedClientId}/bank-accounts/${id}`, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bank-accounts'] })
@@ -750,7 +750,7 @@ export default function BanksPage() {
                   <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); setEditAccountId(acc.id); setEditAccountForm({ name: acc.name, minBalance: acc.minBalance != null ? String(acc.minBalance) : '' }) }}
+                      onClick={(e) => { e.stopPropagation(); setEditAccountId(acc.id); setEditAccountForm({ name: acc.name, openingBalance: acc.openingBalance != null ? String(acc.openingBalance) : '0', minBalance: acc.minBalance != null ? String(acc.minBalance) : '' }) }}
                       className="p-1.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-all"
                       title="Editar conta"
                     >
@@ -1203,6 +1203,18 @@ export default function BanksPage() {
             <input className="input" value={editAccountForm.name} onChange={(e) => setEditAccountForm({ ...editAccountForm, name: e.target.value })} />
           </div>
           <div>
+            <label className="label">Saldo inicial (€)</label>
+            <input
+              type="number"
+              step="0.01"
+              className="input w-40"
+              value={editAccountForm.openingBalance}
+              onChange={(e) => setEditAccountForm({ ...editAccountForm, openingBalance: e.target.value })}
+              placeholder="0.00"
+            />
+            <p className="text-xs text-gray-400 mt-1">Saldo de abertura da conta — ponto de partida do cash flow.</p>
+          </div>
+          <div>
             <label className="label">Saldo mínimo (€)</label>
             <input
               type="number"
@@ -1222,6 +1234,7 @@ export default function BanksPage() {
                   id: editAccountId,
                   data: {
                     name: editAccountForm.name,
+                    openingBalance: editAccountForm.openingBalance !== '' ? parseFloat(editAccountForm.openingBalance) : 0,
                     minBalance: editAccountForm.minBalance !== '' ? parseFloat(editAccountForm.minBalance) : null,
                   },
                 })
@@ -1315,6 +1328,19 @@ export default function BanksPage() {
                 <p className={`text-xs mt-1 ${ibanInvalid ? 'text-red-500' : ibanChecksumWarning ? 'text-amber-600' : 'text-gray-400'}`}>
                   {ibanFeedback}
                 </p>
+              </div>
+
+              <div>
+                <label className="label">Saldo inicial (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="input w-40"
+                  value={newAccount.openingBalance}
+                  onChange={(e) => setNewAccount({ ...newAccount, openingBalance: e.target.value })}
+                  placeholder="0.00"
+                />
+                <p className="text-xs text-gray-400 mt-1">Saldo de abertura da conta — ponto de partida do cash flow.</p>
               </div>
 
               <div>

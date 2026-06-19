@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight, Eye, EyeOff } from 'lucide-react'
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ChevronDown, ChevronRight, Eye, EyeOff, HelpCircle } from 'lucide-react'
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Bar, ComposedChart, Line, PieChart, Pie, Cell,
@@ -21,6 +21,8 @@ interface DashboardData {
     toReceiveProgrammed?: number; toPayProgrammed?: number
     countReceivablesProgrammed?: number; countPayablesProgrammed?: number
     countReceivablesOpen: number; countPayablesOpen: number; overdueReceivables: number; overduePayables: number
+    // Faturação dos últimos 12 meses — base para DSO/DPO.
+    billedSales12m?: number; billedPurchases12m?: number
   }
   bankAccounts: Array<{ id: string; name: string; bankName: string; currentBalance: number; ibanLast4: string; lowBalanceWarning?: boolean; minBalance?: number | null; currency?: string }>
   chartData: Array<{ date: string; income: number; expense: number; balance: number }>
@@ -162,7 +164,7 @@ interface ColDef {
   isFuture: boolean; isCurrent: boolean
 }
 
-function CashflowStatementTable() {
+function CashflowStatementTable({ showOpen, showProgrammed }: { showOpen: boolean; showProgrammed: boolean }) {
   const { selectedClientId } = useAuth()
   const [inflowOpen, setInflowOpen] = useState(true)
   const [outflowOpen, setOutflowOpen] = useState(true)
@@ -171,10 +173,8 @@ function CashflowStatementTable() {
   const [hoveredColKey, setHoveredColKey] = useState<string | null>(null)
   const [viewType, setViewType] = useState<'cashflow' | 'balances'>('cashflow')
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly'>('monthly')
-  // Toggles do gráfico Cash Flow: dados fechados (históricos reais) são SEMPRE
-  // mostrados; em aberto e programados podem ser ocultados (default = visível).
-  const [showOpen, setShowOpen] = useState(true)
-  const [showProgrammed, setShowProgrammed] = useState(true)
+  // showOpen/showProgrammed vêm do filtro de página (topo do Dashboard), aplicado a
+  // toda a página. Dados fechados (históricos reais) são SEMPRE mostrados.
 
   const [year, setYear] = useState(() => new Date().getFullYear())
   const [monthOffset, setMonthOffset] = useState(0)
@@ -1291,20 +1291,6 @@ function CashflowStatementTable() {
                 </button>
               ))}
             </div>
-            {viewType === 'cashflow' && (
-              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                <button type="button" onClick={() => setShowOpen((v) => !v)} title="Mostrar/ocultar dados em aberto"
-                  className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${showOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
-                  {showOpen ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                  Em aberto
-                </button>
-                <button type="button" onClick={() => setShowProgrammed((v) => !v)} title="Mostrar/ocultar dados programados"
-                  className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${showProgrammed ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
-                  {showProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                  Programadas
-                </button>
-              </div>
-            )}
           </div>
           {periodType === 'weekly' ? (
             <div className="flex items-center gap-1">
@@ -1328,11 +1314,29 @@ function CashflowStatementTable() {
   )
 }
 
+// Balão de ajuda (hover) reutilizável para explicar cada indicador/rácio.
+function InfoHint({ text }: { text: string }) {
+  return (
+    <span className="group relative inline-flex items-center align-middle">
+      <HelpCircle className="w-3 h-3 text-gray-300 hover:text-gray-500 cursor-help flex-shrink-0" />
+      <span className="pointer-events-none absolute left-1/2 bottom-full z-30 mb-1.5 w-56 -translate-x-1/2 rounded-md bg-gray-900 px-2.5 py-1.5 text-[11px] font-normal leading-snug text-white text-left opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+        {text}
+      </span>
+    </span>
+  )
+}
+
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
+  // Janela dos indicadores (médias/rácios de fluxo) e dos painéis por categoria.
+  // O seletor vive no cartão "Indicadores Financeiros" (é o seu âmbito real); não
+  // governa o gráfico (navegação própria) nem os KPIs (fotografia do momento).
   const [days, setDays] = useState(30)
-  // Incluir Programadas (SCHEDULED) nos KPIs A Receber/A Pagar e indicadores derivados.
-  const [includeProgrammed, setIncludeProgrammed] = useState(true)
+  // Filtro de página (topo): "Em aberto" e "Programadas". Aplica-se a TODA a página
+  // — KPIs (A Receber/A Pagar/Posição Líquida/Saldo após pagamentos) e gráfico de cash flow.
+  // Os dados fechados (movimentos reais) contam sempre. Default: ambos visíveis.
+  const [showOpen, setShowOpen] = useState(true)
+  const [showProgrammed, setShowProgrammed] = useState(true)
   // forecastDays fixo em 90: a secção "Previsão de Tesouraria" foi removida do
   // Dashboard; o forecast continua a alimentar o indicador de risco (saldo negativo).
   const [forecastDays] = useState(90)
@@ -1365,19 +1369,23 @@ export default function DashboardPage() {
     const netCashFlow = totalIncome - totalExpense
     const avgDailyExpense = chart.length > 0 ? totalExpense / days : 0
     const avgDailyIncome = chart.length > 0 ? totalIncome / days : 0
-    // Valores efetivos: somam as Programadas (SCHEDULED) só quando o toggle está ligado.
-    const toReceive = data.kpis.toReceive + (includeProgrammed ? (data.kpis.toReceiveProgrammed ?? 0) : 0)
-    const toPay = data.kpis.toPay + (includeProgrammed ? (data.kpis.toPayProgrammed ?? 0) : 0)
+    // Valores efetivos: "em aberto" e "programadas" entram conforme o filtro de página.
+    const toReceive = (showOpen ? data.kpis.toReceive : 0) + (showProgrammed ? (data.kpis.toReceiveProgrammed ?? 0) : 0)
+    const toPay = (showOpen ? data.kpis.toPay : 0) + (showProgrammed ? (data.kpis.toPayProgrammed ?? 0) : 0)
     const cashAvailable = data.kpis.totalBalance - toPay
     const cashRunway = avgDailyExpense > 0 ? Math.floor(cashAvailable / avgDailyExpense) : null
     const coverageRatio = toPay > 0 ? toReceive / toPay : null
-    // Financial ratios
-    const dso = avgDailyIncome > 0 ? Math.round(toReceive / avgDailyIncome) : null
-    const dpo = avgDailyExpense > 0 ? Math.round(toPay / avgDailyExpense) : null
+    // DSO/DPO sobre a faturação dos últimos 12 meses (não sobre a janela curta):
+    // DSO = A Receber ÷ (vendas faturadas 12m ÷ 365); DPO análogo com compras.
+    const billedSales12m = data.kpis.billedSales12m ?? 0
+    const billedPurch12m = data.kpis.billedPurchases12m ?? 0
+    // Numerador = A Receber/A Pagar em aberto (faturado), sem as programadas (estimativas).
+    const dso = billedSales12m > 0 ? Math.round(data.kpis.toReceive / (billedSales12m / 365)) : null
+    const dpo = billedPurch12m > 0 ? Math.round(data.kpis.toPay / (billedPurch12m / 365)) : null
     const liquidezImediata = toPay > 0 ? data.kpis.totalBalance / toPay : null
     const workingCapital = data.kpis.totalBalance + toReceive - toPay
     return { totalIncome, totalExpense, netCashFlow, avgDailyExpense, avgDailyIncome, cashRunway, coverageRatio, dso, dpo, liquidezImediata, workingCapital }
-  }, [data, days, includeProgrammed])
+  }, [data, days, showOpen, showProgrammed])
 
   const forecastStats = useMemo(() => {
     if (!forecastData || forecastData.forecast.length === 0) return null
@@ -1411,19 +1419,22 @@ export default function DashboardPage() {
   )
   if (!data) return null
 
-  // kpis efetivo: A Receber/A Pagar/Disponível incluem Programadas conforme o toggle.
-  // Os restantes campos (saldo, contagens, vencidos) ficam inalterados.
+  // kpis efetivo: A Receber/A Pagar/Saldo após pagamentos/Posição Líquida refletem o filtro de
+  // página ("em aberto" e/ou "programadas"). Saldo Total fica sempre inalterado.
   const rawKpis = data.kpis
-  const toReceiveEff = rawKpis.toReceive + (includeProgrammed ? (rawKpis.toReceiveProgrammed ?? 0) : 0)
-  const toPayEff = rawKpis.toPay + (includeProgrammed ? (rawKpis.toPayProgrammed ?? 0) : 0)
+  const toReceiveEff = (showOpen ? rawKpis.toReceive : 0) + (showProgrammed ? (rawKpis.toReceiveProgrammed ?? 0) : 0)
+  const toPayEff = (showOpen ? rawKpis.toPay : 0) + (showProgrammed ? (rawKpis.toPayProgrammed ?? 0) : 0)
   const kpis = {
     ...rawKpis,
     toReceive: toReceiveEff,
     toPay: toPayEff,
     cashAvailable: rawKpis.totalBalance - toPayEff,
-    // Contagens coerentes com os valores: incluem os docs programados quando o toggle está ligado.
-    countReceivablesOpen: rawKpis.countReceivablesOpen + (includeProgrammed ? (rawKpis.countReceivablesProgrammed ?? 0) : 0),
-    countPayablesOpen: rawKpis.countPayablesOpen + (includeProgrammed ? (rawKpis.countPayablesProgrammed ?? 0) : 0),
+    // Contagens e vencidos coerentes com o filtro. Os vencidos são um conceito de
+    // "em aberto" (as programadas não vencem), por isso só contam com showOpen.
+    countReceivablesOpen: (showOpen ? rawKpis.countReceivablesOpen : 0) + (showProgrammed ? (rawKpis.countReceivablesProgrammed ?? 0) : 0),
+    countPayablesOpen: (showOpen ? rawKpis.countPayablesOpen : 0) + (showProgrammed ? (rawKpis.countPayablesProgrammed ?? 0) : 0),
+    overdueReceivables: showOpen ? rawKpis.overdueReceivables : 0,
+    overduePayables: showOpen ? rawKpis.overduePayables : 0,
   }
   const netPosition = kpis.totalBalance + kpis.toReceive - kpis.toPay
 
@@ -1434,21 +1445,19 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIncludeProgrammed((v) => !v)}
-            title={includeProgrammed ? 'A incluir as faturas programadas nos KPIs A Receber/A Pagar' : 'A excluir as faturas programadas dos KPIs'}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg font-medium border transition-colors ${includeProgrammed ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' : 'bg-gray-100 text-gray-400 border-gray-200 hover:text-gray-600'}`}
-          >
-            {includeProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-            Programadas
-          </button>
-          <div className="flex gap-2">
-            {[30, 60, 90].map((d) => (
-              <button key={d} onClick={() => setDays(d)} className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${days === d ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}>
-                {d}d
-              </button>
-            ))}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            <button type="button" onClick={() => setShowOpen((v) => !v)}
+              title="Mostrar/ocultar faturas em aberto em toda a página"
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-md transition-colors ${showOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
+              {showOpen ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              Em aberto
+            </button>
+            <button type="button" onClick={() => setShowProgrammed((v) => !v)}
+              title="Mostrar/ocultar faturas programadas em toda a página"
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-md transition-colors ${showProgrammed ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
+              {showProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              Programadas
+            </button>
           </div>
         </div>
       </div>
@@ -1519,7 +1528,7 @@ export default function DashboardPage() {
       )}
 
       {/* Cashflow Statement Table */}
-      <CashflowStatementTable />
+      <CashflowStatementTable showOpen={showOpen} showProgrammed={showProgrammed} />
 
       {/* Bank accounts + derived stats */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1550,30 +1559,32 @@ export default function DashboardPage() {
         {/* Indicadores financeiros */}
         {stats && (
           <div className="card p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Gauge className="w-4 h-4 text-gray-400" />
-              <h2 className="text-sm font-semibold text-gray-700">Indicadores Financeiros</h2>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="flex items-center gap-2">
+                <Gauge className="w-4 h-4 text-gray-400" />
+                <h2 className="text-sm font-semibold text-gray-700">Indicadores Financeiros</h2>
+              </div>
+              <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+                {[30, 60, 90].map((d) => (
+                  <button key={d} type="button" onClick={() => setDays(d)} title={`Janela de ${d} dias para médias, rácios e categorias`}
+                    className={`px-2 py-0.5 text-xs font-medium rounded-md transition-colors ${days === d ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    {d}d
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="space-y-2.5">
               {/* Net cash flow highlight */}
               <div className={`rounded-lg px-3 py-2 flex items-center justify-between ${stats.netCashFlow >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
-                <span className="text-xs text-gray-600 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Fluxo líquido ({days}d)</span>
+                <span className="text-xs text-gray-600 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Fluxo líquido ({days}d)<InfoHint text={`Entradas menos saídas de dinheiro (movimentos reais) nos últimos ${days} dias. Positivo = entrou mais do que saiu.`} /></span>
                 <span className={`text-sm font-bold ${stats.netCashFlow >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                   {stats.netCashFlow >= 0 ? '+' : ''}{formatCurrency(stats.netCashFlow)}
                 </span>
               </div>
               <div className="pt-1 space-y-2.5">
-                {stats.liquidezImediata !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5" />Liquidez imediata</span>
-                    <span className={`text-xs font-semibold ${stats.liquidezImediata >= 1 ? 'text-green-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-700'}`}>
-                      {stats.liquidezImediata.toFixed(2)}×
-                    </span>
-                  </div>
-                )}
                 {stats.coverageRatio !== null && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ArrowDownToLine className="w-3.5 h-3.5" />Rácio CR/CP</span>
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ArrowDownToLine className="w-3.5 h-3.5" />Rácio CR/CP<InfoHint text="Contas a Receber ÷ Contas a Pagar. Indica se o que tens a receber chega para o que tens a pagar. 1× = chega; abaixo de 1× não chega." /></span>
                     <span className={`text-xs font-semibold ${stats.coverageRatio >= 1 ? 'text-green-700' : 'text-amber-600'}`}>
                       {stats.coverageRatio.toFixed(2)}×
                     </span>
@@ -1581,40 +1592,20 @@ export default function DashboardPage() {
                 )}
                 {stats.cashRunway !== null && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />Autonomia de caixa</span>
+                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" />Autonomia de caixa<InfoHint text="Quantos dias o dinheiro aguenta ao ritmo de despesa atual. = Saldo após pagamentos ÷ média diária de saída. Maior é melhor." /></span>
                     <span className={`text-xs font-semibold ${stats.cashRunway > 90 ? 'text-green-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-700'}`}>
                       {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
                     </span>
                   </div>
                 )}
-                {stats.dso !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" />DSO est.</span>
-                    <span className={`text-xs font-semibold ${stats.dso <= 30 ? 'text-green-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-700'}`}>
-                      {stats.dso} dias
-                    </span>
-                  </div>
-                )}
-                {stats.dpo !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500 flex items-center gap-1.5"><ReceiptText className="w-3.5 h-3.5" />DPO est.</span>
-                    <span className="text-xs font-semibold text-gray-700">{stats.dpo} dias</span>
-                  </div>
-                )}
               </div>
               <div className="pt-2 border-t border-gray-100">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Capital de trabalho</span>
-                  <span className={`text-xs font-semibold ${stats.workingCapital >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {formatCurrency(stats.workingCapital)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Média diária entrada</span>
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" />Média diária entrada<InfoHint text={`Total de entradas dos últimos ${days} dias ÷ ${days}. Ritmo médio de recebimentos por dia.`} /></span>
                   <span className="text-xs font-medium text-green-700">{formatCurrency(stats.avgDailyIncome)}</span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" />Média diária saída</span>
+                  <span className="text-xs text-gray-500 flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" />Média diária saída<InfoHint text={`Total de saídas dos últimos ${days} dias ÷ ${days}. Ritmo médio de despesa por dia.`} /></span>
                   <span className="text-xs font-medium text-red-700">{formatCurrency(stats.avgDailyExpense)}</span>
                 </div>
               </div>
@@ -1630,7 +1621,7 @@ export default function DashboardPage() {
           <h2 className="text-sm font-semibold text-gray-700">Painel de Controlo</h2>
           <p className="text-xs text-gray-400 mt-0.5">Indicadores de saúde financeira</p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 
           {/* Saldo & Liquidez */}
           <div className="rounded-xl border border-gray-100 p-4">
@@ -1642,27 +1633,13 @@ export default function DashboardPage() {
             <div className="text-xs text-gray-400 mt-0.5 mb-3">saldo total em bancos</div>
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">Disponível</span>
+                <span className="text-gray-500 flex items-center gap-1">Saldo após pagamentos<InfoHint text="O que sobra no banco depois de pagar tudo o que deves. = Saldo total − a pagar (não conta com o que tens a receber). Negativo = o saldo não chega para as obrigações." /></span>
                 <span className={`font-semibold tabular-nums ${kpis.cashAvailable >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(kpis.cashAvailable)}</span>
               </div>
               {stats?.liquidezImediata != null && (
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500">Liquidez imediata</span>
+                  <span className="text-gray-500 flex items-center gap-1">Liquidez imediata<InfoHint text="Saldo em banco ÷ total a pagar. Quantas vezes o dinheiro que tens cobre as contas a pagar. 1× = cobre exatamente; abaixo de 1× não chega." /></span>
                   <span className={`font-semibold ${stats.liquidezImediata >= 1 ? 'text-emerald-700' : stats.liquidezImediata >= 0.5 ? 'text-amber-600' : 'text-red-600'}`}>{stats.liquidezImediata.toFixed(2)}×</span>
-                </div>
-              )}
-              {stats?.cashRunway != null && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500">Autonomia de caixa</span>
-                  <span className={`font-semibold ${stats.cashRunway > 90 ? 'text-emerald-700' : stats.cashRunway > 30 ? 'text-amber-600' : 'text-red-600'}`}>
-                    {stats.cashRunway > 365 ? '+1 ano' : `${stats.cashRunway} dias`}
-                  </span>
-                </div>
-              )}
-              {stats?.workingCapital != null && (
-                <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
-                  <span className="text-gray-500">Capital de trabalho</span>
-                  <span className={`font-semibold tabular-nums ${stats.workingCapital >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(stats.workingCapital)}</span>
                 </div>
               )}
             </div>
@@ -1693,7 +1670,7 @@ export default function DashboardPage() {
               <div className="rounded-xl border border-gray-100 p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                  <span className="text-xs font-semibold text-gray-700">Risco de Liquidez</span>
+                  <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Risco de Liquidez<InfoHint text="Nível de risco (Baixo/Médio/Alto) que combina recebimentos/pagamentos vencidos, autonomia de caixa, liquidez e previsão de saldo negativo." /></span>
                 </div>
                 <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 mb-3 ${riskBg}`}>
                   <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
@@ -1713,56 +1690,85 @@ export default function DashboardPage() {
             )
           })()}
 
-          {/* Operações a Vencer */}
+          {/* Previsão de Tesouraria */}
+          <div className="rounded-xl border border-gray-100 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <TrendingDown className="w-4 h-4 text-purple-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Previsão de Tesouraria<InfoHint text="Projeção do saldo total para os próximos 90 dias, com base nos recebimentos e pagamentos previstos (em aberto e programados)." /></span>
+            </div>
+            {forecastStats ? (
+              <>
+                <div className={`text-2xl font-bold tabular-nums ${forecastStats.minBalance < 0 ? 'text-red-600' : 'text-gray-900'}`}>{formatCurrency(forecastStats.minBalance)}</div>
+                <div className="text-xs text-gray-400 mt-0.5 mb-3">saldo mínimo previsto (90d){forecastStats.minDate ? ` · ${new Date(forecastStats.minDate).toLocaleDateString('pt-PT', { day: '2-digit', month: 'short' })}` : ''}</div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-500 flex items-center gap-1">Dias até saldo negativo<InfoHint text="Em quantos dias a projeção indica o saldo total a ficar abaixo de zero. 'Sem risco' = não fica negativo no horizonte de 90 dias." /></span>
+                    <span className={`font-semibold ${forecastStats.daysUntilNegative != null ? 'text-red-600' : 'text-emerald-700'}`}>{forecastStats.daysUntilNegative != null ? `${forecastStats.daysUntilNegative} dias` : 'Sem risco'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-500 flex items-center gap-1">Saldo projetado (fim)<InfoHint text="Saldo total estimado no fim do horizonte de 90 dias, após todos os recebimentos e pagamentos previstos." /></span>
+                    <span className={`font-semibold tabular-nums ${forecastStats.projectedFinal >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(forecastStats.projectedFinal)}</span>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-xs text-gray-400 py-6 text-center">Sem dados de previsão</div>
+            )}
+          </div>
+
+          {/* Prazos Médios */}
           <div className="rounded-xl border border-gray-100 p-4">
             <div className="flex items-center gap-2 mb-3">
               <CalendarDays className="w-4 h-4 text-indigo-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-gray-700">Operações a Vencer</span>
+              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Prazos Médios<InfoHint text="Prazos médios de recebimento e pagamento, com base na faturação dos últimos 12 meses (vendas e compras emitidas)." /></span>
             </div>
-            <div className="text-2xl font-bold text-gray-900">{kpis.countReceivablesOpen + kpis.countPayablesOpen}</div>
-            <div className="text-xs text-gray-400 mt-0.5 mb-3">documentos em aberto</div>
-            <div className="space-y-2">
+            <div className="space-y-2.5 pt-1">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />A receber ({kpis.countReceivablesOpen})</span>
-                <span className="font-semibold tabular-nums text-emerald-700">{formatCurrency(kpis.toReceive)}</span>
+                <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />DSO — receber<InfoHint text="Days Sales Outstanding: dias médios para receber. = A receber ÷ (vendas faturadas nos últimos 12 meses ÷ 365). Menor é melhor." /></span>
+                <span className={`font-semibold ${stats?.dso == null ? 'text-gray-400' : stats.dso <= 30 ? 'text-emerald-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-600'}`}>{stats?.dso != null ? `${stats.dso} dias` : '—'}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />A pagar ({kpis.countPayablesOpen})</span>
-                <span className="font-semibold tabular-nums text-red-600">{formatCurrency(kpis.toPay)}</span>
+                <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />DPO — pagar<InfoHint text="Days Payable Outstanding: dias médios para pagar. = A pagar ÷ (compras faturadas nos últimos 12 meses ÷ 365)." /></span>
+                <span className={`font-semibold ${stats?.dpo == null ? 'text-gray-400' : 'text-gray-700'}`}>{stats?.dpo != null ? `${stats.dpo} dias` : '—'}</span>
               </div>
               <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
-                <span className="text-gray-500">Saldo líquido</span>
-                <span className={`font-semibold tabular-nums ${kpis.toReceive - kpis.toPay >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{formatCurrency(kpis.toReceive - kpis.toPay)}</span>
+                <span className="text-gray-500 flex items-center gap-1">Ciclo de caixa<InfoHint text="DSO − DPO: diferença entre o prazo a receber e o prazo a pagar. Negativo é bom (recebes antes de pagar); positivo significa que financias o ciclo." /></span>
+                <span className={`font-semibold ${stats?.dso != null && stats?.dpo != null ? (stats.dso - stats.dpo <= 0 ? 'text-emerald-700' : 'text-amber-600') : 'text-gray-400'}`}>{stats?.dso != null && stats?.dpo != null ? `${stats.dso - stats.dpo} dias` : '—'}</span>
               </div>
             </div>
           </div>
 
-          {/* Cobranças a Fazer */}
-          <div className={`rounded-xl border p-4 ${kpis.overdueReceivables > 0 ? 'border-amber-200 bg-amber-50/40' : 'border-gray-100'}`}>
-            <div className="flex items-center gap-2 mb-3">
-              <Clock className="w-4 h-4 text-orange-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-gray-700">Cobranças a Fazer</span>
-            </div>
-            <div className={`text-2xl font-bold ${kpis.overdueReceivables > 0 ? 'text-amber-700' : 'text-gray-900'}`}>{kpis.overdueReceivables}</div>
-            <div className="text-xs text-gray-500 mt-0.5 mb-3">
-              {kpis.overdueReceivables === 0 ? 'Nenhum vencimento em atraso' : `recebimento${kpis.overdueReceivables > 1 ? 's' : ''} vencido${kpis.overdueReceivables > 1 ? 's' : ''}`}
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500">Total a receber</span>
-                <span className="font-semibold tabular-nums text-gray-700">{formatCurrency(kpis.toReceive)}</span>
-              </div>
-              {kpis.overduePayables > 0 && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-red-500">Pagamentos vencidos</span>
-                  <span className="font-semibold text-red-600">{kpis.overduePayables}</span>
+          {/* Concentração */}
+          {(() => {
+            const topC = data.topClients?.[0]
+            const topS = data.topSuppliers?.[0]
+            const pctC = topC && rawKpis.toReceive > 0 ? Math.round((topC.amount / rawKpis.toReceive) * 100) : null
+            const pctS = topS && rawKpis.toPay > 0 ? Math.round((topS.amount / rawKpis.toPay) * 100) : null
+            return (
+              <div className="rounded-xl border border-gray-100 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                  <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Concentração<InfoHint text="Peso da maior contraparte no total a receber/pagar. Concentração alta = maior dependência se essa entidade falhar ou atrasar." /></span>
                 </div>
-              )}
-              <div className="pt-2 border-t border-gray-100 mt-1">
-                <Link to="/contas-a-receber" className="text-xs text-primary-600 hover:underline">Ver cobranças →</Link>
+                <div className="space-y-3 pt-1">
+                  <div>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />Maior cliente</span>
+                      <span className={`font-semibold tabular-nums ${pctC != null && pctC >= 40 ? 'text-amber-600' : 'text-emerald-700'}`}>{pctC != null ? `${pctC}%` : '—'}</span>
+                    </div>
+                    <div className="text-[11px] text-gray-400 truncate">{topC ? `${topC.name} · ${formatCurrency(topC.amount)}` : 'Sem dados'}</div>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />Maior fornecedor</span>
+                      <span className={`font-semibold tabular-nums ${pctS != null && pctS >= 40 ? 'text-amber-600' : 'text-red-600'}`}>{pctS != null ? `${pctS}%` : '—'}</span>
+                    </div>
+                    <div className="text-[11px] text-gray-400 truncate">{topS ? `${topS.name} · ${formatCurrency(topS.amount)}` : 'Sem dados'}</div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            )
+          })()}
 
         </div>
       </div>

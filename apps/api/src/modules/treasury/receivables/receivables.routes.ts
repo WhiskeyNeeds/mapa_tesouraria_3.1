@@ -114,7 +114,7 @@ export async function receivablesRoutes(fastify: FastifyInstance) {
 
   fastify.get(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    return reply.send(await svc.getById(clientId, id))
+    return reply.send(await svc.getDetail(clientId, id))
   })
 
   fastify.get(`${prefix}/by-toc/:tocDocId`, { onRequest: auth }, async (request, reply) => {
