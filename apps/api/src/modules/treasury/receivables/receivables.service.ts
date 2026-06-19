@@ -540,7 +540,15 @@ export class TreasuryReceivablesService {
           })
         : null
       if (!existing && !tocDoc) throw httpError(404, 'Receivable not found')
-      if (existing) return { ...existing, _tocOverlay: tocDoc ?? null }
+      const localReturn = existing ? { ...existing, _tocOverlay: tocDoc ?? null } : null
+      if (localReturn) return localReturn
+      // Leitura de um doc TOConline puro (sem registo local ainda): devolvemos o
+      // documento TOC mapeado em vez de 404 para o painel poder abrir. Apenas as
+      // rotas de leitura chegam aqui; as de escrita resolvem o id local antes.
+      if (tocDoc) {
+        const mapped = mapTocSalesToReceivable(tocDoc)
+        if (mapped) return { ...mapped, _tocOverlay: tocDoc } as unknown as NonNullable<typeof localReturn>
+      }
       throw httpError(404, 'Receivable não tem registo de ligação ainda — chame primeiro resolveLocalReceivableId')
     }
     const item = await this.prisma.treasuryReceivable.findFirst({

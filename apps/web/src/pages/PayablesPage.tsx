@@ -1994,7 +1994,7 @@ export default function PayablesPage() {
             onClose={() => setDetailPayment(null)}
             payment={detailPayment}
             clientId={selectedClientId ?? ''}
-            entityName=""
+            entityName={panelDoc?.entityName ?? ''}
             linesEndpoint={(c, id) => `/toconline/${c}/purchase-payments/${id}/lines`}
             onInvoiceClick={(payableId) => {
               const match = (data?.items ?? []).find((p) => p._tocRaw && String(p._tocRaw.id) === String(payableId))

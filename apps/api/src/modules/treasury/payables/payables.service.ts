@@ -480,7 +480,15 @@ export class TreasuryPayablesService {
         : null
       if (!existing && !tocDoc) throw httpError(404, 'Payable not found')
       // Para resolveLocalPayableId já termos um existing, devolvemos esse com overlay
-      if (existing) return { ...existing, _tocOverlay: tocDoc ?? null }
+      const localReturn = existing ? { ...existing, _tocOverlay: tocDoc ?? null } : null
+      if (localReturn) return localReturn
+      // Leitura de um doc TOConline puro (sem registo local ainda): devolvemos o
+      // documento TOC mapeado em vez de 404 para o painel poder abrir. Apenas as
+      // rotas de leitura chegam aqui; as de escrita resolvem o id local antes.
+      if (tocDoc) {
+        const mapped = mapTocPurchaseToPayable(tocDoc)
+        if (mapped) return { ...mapped, _tocOverlay: tocDoc } as unknown as NonNullable<typeof localReturn>
+      }
       throw httpError(404, 'Payable não tem registo de ligação ainda — chame primeiro resolveLocalPayableId')
     }
     const item = await this.prisma.treasuryPayable.findFirst({
