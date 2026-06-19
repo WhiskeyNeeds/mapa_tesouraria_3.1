@@ -680,6 +680,9 @@ export class TreasuryReceivablesService {
       const trimmedRef = data.reference?.trim() || null
       const reference = data.recurrence ? null : (data.tocSalesDocId ? (data.reference ?? null) : trimmedRef)
       const scheduled = !!data.recurrence || (origin === 'LOCAL' && !data.tocSalesDocId && !trimmedRef)
+      // Dedup por referência: uma local em aberto com a mesma referência de um doc
+      // TOConline liga-se automaticamente a esse doc (evita duplicados).
+      const autoTocId = (!scheduled && !data.tocSalesDocId) ? await this.matchTocSalesDocId(clientId, reference) : null
       return tx.treasuryReceivable.create({
         data: {
           clientId,
@@ -698,7 +701,7 @@ export class TreasuryReceivablesService {
           entityName: data.entityName ?? null,
           entityNif: data.entityNif,
           tocCustomerId: data.tocCustomerId,
-          tocSalesDocId: data.tocSalesDocId,
+          tocSalesDocId: data.tocSalesDocId ?? autoTocId,
           reference,
           description: data.description,
           recurrenceId,
@@ -733,6 +736,25 @@ export class TreasuryReceivablesService {
     return created
   }
 
+  /** Dedup por referência: devolve o tocSalesDocId de um documento TOConline com o
+   *  MESMO número (igual, com trim) que ainda não esteja ligado a outro local — para
+   *  ligar automaticamente ao passar a fatura a Em aberto. null se não houver. */
+  private async matchTocSalesDocId(clientId: string, reference: string | null | undefined): Promise<string | null> {
+    const ref = reference?.trim()
+    if (!ref) return null
+    const toc = await this.prisma.tocSalesDocument.findFirst({
+      where: { clientId, documentNo: ref, status: { in: [1, 2, 3, 5] } },
+      select: { tocId: true },
+    })
+    if (!toc) return null
+    const tocId = String(toc.tocId)
+    const already = await this.prisma.treasuryReceivable.findFirst({
+      where: { clientId, tocSalesDocId: tocId, deletedAt: null },
+      select: { id: true },
+    })
+    return already ? null : tocId
+  }
+
   async update(clientId: string, userId: string, id: string, data: Partial<{
     entityName: string
     description: string
@@ -763,7 +785,14 @@ export class TreasuryReceivablesService {
       // via edição, a "Marcar como Comprometido".
       if (data.reference !== undefined) {
         const ref = data.reference?.trim() || null
-        if (ref) { updateData.reference = ref; updateData.status = 'OPEN' }
+        if (ref) {
+          updateData.reference = ref; updateData.status = 'OPEN'
+          // Dedup: se já existe um documento TOConline com esta referência, liga.
+          if (!item.tocSalesDocId) {
+            const tocId = await this.matchTocSalesDocId(clientId, ref)
+            if (tocId) updateData.tocSalesDocId = tocId
+          }
+        }
       }
       // Numa avulsa local (sem recorrência) os restantes campos são editáveis; numa
       // ocorrência de recorrência a data vem da cadência (não se aplica aqui).
@@ -977,6 +1006,8 @@ export class TreasuryReceivablesService {
     if (!reference) throw httpError(400, 'A referência é obrigatória')
     if (!opts.date) throw httpError(400, 'A data é obrigatória')
     if (!(opts.amount > 0)) throw httpError(400, 'O valor é obrigatório')
+    // Dedup: se já existe um documento TOConline com esta referência, liga.
+    const autoTocId = item.tocSalesDocId ? null : await this.matchTocSalesDocId(clientId, reference)
     const result = await this.prisma.treasuryReceivable.update({
       where: { id },
       data: {
@@ -986,6 +1017,7 @@ export class TreasuryReceivablesService {
         pendingAmount: opts.amount,
         receivedAmount: 0,
         dueDate: new Date(opts.date),
+        ...(autoTocId ? { tocSalesDocId: autoTocId } : {}),
       },
     })
     await audit(this.prisma, { clientId, userId, action: 'receivable.commit', entityType: 'Receivable', entityId: id, payload: { reference, amount: opts.amount, date: opts.date } })

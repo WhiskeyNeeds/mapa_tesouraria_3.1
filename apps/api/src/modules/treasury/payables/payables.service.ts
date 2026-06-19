@@ -621,6 +621,8 @@ export class TreasuryPayablesService {
       const trimmedRef = data.reference?.trim() || null
       const reference = data.recurrence ? null : (data.tocPurchasesDocId ? (data.reference ?? null) : trimmedRef)
       const scheduled = !!data.recurrence || (origin === 'LOCAL' && !data.tocPurchasesDocId && !trimmedRef)
+      // Dedup por referência: liga a um doc TOConline de compra com a mesma referência.
+      const autoTocId = (!scheduled && !data.tocPurchasesDocId) ? await this.matchTocPurchasesDocId(clientId, reference) : null
       return tx.treasuryPayable.create({
         data: {
           clientId,
@@ -639,7 +641,7 @@ export class TreasuryPayablesService {
           entityName: data.entityName ?? null,
           entityNif: data.entityNif,
           tocSupplierId: data.tocSupplierId,
-          tocPurchasesDocId: data.tocPurchasesDocId,
+          tocPurchasesDocId: data.tocPurchasesDocId ?? autoTocId,
           reference,
           description: data.description,
           recurrenceId,
@@ -674,6 +676,25 @@ export class TreasuryPayablesService {
     return created
   }
 
+  /** Dedup por referência: devolve o tocPurchasesDocId de um documento TOConline de
+   *  compra com o MESMO número (igual, com trim) que ainda não esteja ligado a outro
+   *  local. O nº vive no raw.document_no (não há coluna), por isso usa-se filtro JSON. */
+  private async matchTocPurchasesDocId(clientId: string, reference: string | null | undefined): Promise<string | null> {
+    const ref = reference?.trim()
+    if (!ref) return null
+    const toc = await this.prisma.tocPurchaseDocument.findFirst({
+      where: { clientId, status: { in: [1, 2, 3, 5] }, raw: { path: ['document_no'], equals: ref } },
+      select: { tocId: true },
+    })
+    if (!toc) return null
+    const tocId = String(toc.tocId)
+    const already = await this.prisma.treasuryPayable.findFirst({
+      where: { clientId, tocPurchasesDocId: tocId, deletedAt: null },
+      select: { id: true },
+    })
+    return already ? null : tocId
+  }
+
   async update(clientId: string, userId: string, id: string, data: Partial<{
     entityName: string
     entityNif: string | null
@@ -705,7 +726,13 @@ export class TreasuryPayablesService {
       // via edição, a "Marcar como Comprometido".
       if (data.reference !== undefined) {
         const ref = data.reference?.trim() || null
-        if (ref) { updateData.reference = ref; updateData.status = 'OPEN' }
+        if (ref) {
+          updateData.reference = ref; updateData.status = 'OPEN'
+          if (!item.tocPurchasesDocId) {
+            const tocId = await this.matchTocPurchasesDocId(clientId, ref)
+            if (tocId) updateData.tocPurchasesDocId = tocId
+          }
+        }
       }
       // Numa avulsa local (sem recorrência) os restantes campos são editáveis; numa
       // ocorrência de recorrência a data vem da cadência (não se aplica aqui).
@@ -941,6 +968,8 @@ export class TreasuryPayablesService {
     if (!reference) throw httpError(400, 'A referência é obrigatória')
     if (!opts.date) throw httpError(400, 'A data é obrigatória')
     if (!(opts.amount > 0)) throw httpError(400, 'O valor é obrigatório')
+    // Dedup: se já existe um documento TOConline com esta referência, liga.
+    const autoTocId = item.tocPurchasesDocId ? null : await this.matchTocPurchasesDocId(clientId, reference)
     const result = await this.prisma.treasuryPayable.update({
       where: { id },
       data: {
@@ -950,6 +979,7 @@ export class TreasuryPayablesService {
         pendingAmount: opts.amount,
         paidAmount: 0,
         dueDate: new Date(opts.date),
+        ...(autoTocId ? { tocPurchasesDocId: autoTocId } : {}),
       },
     })
     await audit(this.prisma, { clientId, userId, action: 'payable.commit', entityType: 'Payable', entityId: id, payload: { reference, amount: opts.amount, date: opts.date } })

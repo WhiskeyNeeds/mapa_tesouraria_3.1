@@ -207,6 +207,24 @@ export async function syncSalesDocuments(prisma: PrismaClient, svc: ToconlineSer
       data: { receiptReference: null, receiptAmount: null },
     })
   }
+  // Dedup por referência (TOC → local): liga faturas locais sem ligação TOC cuja
+  // referência coincide (igual, com trim) com o nº do documento TOC sincronizado —
+  // evita duplicados. Aplica-se a locais em aberto OU fechadas (não anuladas).
+  const unlinkedRec = await prisma.treasuryReceivable.findMany({
+    where: { clientId, tocSalesDocId: null, deletedAt: null, reference: { not: null }, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] } },
+    select: { id: true, reference: true },
+  })
+  if (unlinkedRec.length) {
+    const byRef = new Map(unlinkedRec.map(r => [r.reference!.trim(), r.id]))
+    for (const i of items) {
+      const ref = i.documentNo?.trim()
+      if (!ref) continue
+      const localId = byRef.get(ref)
+      if (!localId) continue
+      byRef.delete(ref)
+      await prisma.treasuryReceivable.update({ where: { id: localId }, data: { tocSalesDocId: String(i.tocId) } })
+    }
+  }
   return result
 }
 
@@ -232,6 +250,24 @@ export async function syncPurchaseDocuments(prisma: PrismaClient, svc: Toconline
       where: { clientId, tocPurchasesDocId: { in: coveredTocIds }, paymentReference: { not: null } },
       data: { paymentReference: null, paymentAmount: null },
     })
+  }
+  // Dedup por referência (TOC → local), igual aos receivables. O nº do documento
+  // de compra vive no `raw.document_no` (não há coluna), por isso lê-se do raw.
+  const unlinkedPay = await prisma.treasuryPayable.findMany({
+    where: { clientId, tocPurchasesDocId: null, deletedAt: null, reference: { not: null }, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] } },
+    select: { id: true, reference: true },
+  })
+  if (unlinkedPay.length) {
+    const byRef = new Map(unlinkedPay.map(r => [r.reference!.trim(), r.id]))
+    for (const i of items) {
+      const docNo = (i.raw as Record<string, unknown>).document_no
+      const ref = typeof docNo === 'string' ? docNo.trim() : ''
+      if (!ref) continue
+      const localId = byRef.get(ref)
+      if (!localId) continue
+      byRef.delete(ref)
+      await prisma.treasuryPayable.update({ where: { id: localId }, data: { tocPurchasesDocId: String(i.tocId) } })
+    }
   }
   return result
 }
