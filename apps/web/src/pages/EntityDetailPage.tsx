@@ -187,20 +187,14 @@ export default function EntityDetailPage({ entityType }: Props) {
   const isSupplier = entityType === 'supplier'
   const typeParam = isSupplier ? 'supplier' : 'customer'
   const docType = isSupplier ? 'payable' : 'receivable'
-  const seg = isSupplier ? 'payables' : 'receivables'
 
-  async function openDocPanel(doc: TocDoc) {
+  function openDocPanel(doc: TocDoc) {
     if (doc.status === 0 || doc.status === 4) return            // rascunho/anulado: sem painel
-    if (doc._local) {                                            // doc local: id directo
-      setPanelDocId(String(doc.id).replace(/^local-/, ''))
-      return
-    }
-    try {
-      const r = await api.get<{ id: string }>(`/treasury/${clientId}/${seg}/by-toc/${doc.id}`)
-      setPanelDocId(r.id)
-    } catch {
-      toggleExpand(String(doc.id))                               // fallback: comportamento atual (expandir)
-    }
+    // Doc local: id directo (sem prefixo `local-`). Doc TOConline: id `toc-<tocId>`,
+    // que o getDetail resolve para o stub local (se existir) ou devolve o documento
+    // TOConline mapeado — por isso o painel abre sempre, em "Atuais" e em "Histórico".
+    // A expansão inline de recibos/pagamentos fica no botão de chevron (stopPropagation).
+    setPanelDocId(doc._local ? String(doc.id).replace(/^local-/, '') : `toc-${doc.id}`)
   }
 
   const entityQuery = useQuery<Record<string, unknown>>({
