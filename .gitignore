@@ -5,9 +5,14 @@ node_modules
 # Compiled output — reproducível com npm run build
 apps/api/dist
 
+# Envios locais — não versionar
+/_envios/
+/rel/
+
 # Playwright
 /test-results/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+

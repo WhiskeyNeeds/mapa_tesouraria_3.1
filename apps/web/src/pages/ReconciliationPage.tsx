@@ -10,7 +10,7 @@ import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import {
   CheckSquare, Square, AlertCircle, Search,
   ChevronDown, ChevronRight, Undo2, SlidersHorizontal, X,
-  Link2, Zap,
+  Link2, Zap, ArrowUp, ArrowDown, Calendar, Target,
 } from 'lucide-react'
 
 interface Movement {
@@ -30,6 +30,7 @@ interface TocRawDoc {
 interface Document {
   id: string; reference: string; entityName: string; dueDate: string
   documentDate?: string | null
+  promisedPaymentDate?: string | null
   pendingAmount: number; totalAmount: number; status: string
   category?: { name: string; color: string } | null
   type: 'receivable' | 'payable'
@@ -51,6 +52,13 @@ interface RecHistoryItem {
   movements: Array<{ amount: number; movement: { id: string; date: string; amount: number; description: string; bankAccount?: { id: string; name: string } | null } }>
   receivables: Array<{ amountAllocated: number; receivable: { id: string; reference: string; entityName: string; documentDate?: string | null; dueDate?: string | null } }>
   payables: Array<{ amountAllocated: number; payable: { id: string; reference: string; entityName: string; documentDate?: string | null; dueDate?: string | null } }>
+}
+
+// Data efetiva de pagamento de um documento: usa a data prometida de pagamento
+// e, na sua ausência, cai para o vencimento e depois para a emissão. É esta a
+// data usada para ordenar e para o "match" com a data do movimento bancário.
+function docPaymentDate(d: Pick<Document, 'promisedPaymentDate' | 'dueDate' | 'documentDate'>): string {
+  return (d.promisedPaymentDate ?? d.dueDate ?? d.documentDate ?? '').slice(0, 10)
 }
 
 // ── Filter helpers ─────────────────────────────────────────────────────────────
@@ -105,6 +113,8 @@ export default function ReconciliationPage() {
   const [docFiltersOpen, setDocFiltersOpen] = useState(false)
   const [docType, setDocType] = useState<'all' | 'receivable' | 'payable'>('all')
   const [docTab, setDocTab] = useState<'receivable' | 'payable'>('receivable')
+  const [docSortMode, setDocSortMode] = useState<'date' | 'match'>('date')
+  const [docSortDir, setDocSortDir] = useState<'asc' | 'desc'>('asc')
   const [docDateFrom, setDocDateFrom] = useState('')
   const [docDateTo, setDocDateTo] = useState('')
   const [docAmountMin, setDocAmountMin] = useState('')
@@ -280,6 +290,36 @@ export default function ReconciliationPage() {
     + (docType !== 'all' ? 1 : 0)
 
   // ── Filtered movements ────────────────────────────────────────────────────
+  // ── Match dos movimentos ao CONJUNTO de documentos selecionados ───────────
+  // Referência = soma dos pendentes dos documentos escolhidos + as suas datas de
+  // pagamento. Permite ordenar e destacar o movimento mais semelhante ao
+  // conjunto (1 doc, 2 docs, …) — espelho do match no lado dos documentos.
+  const selectedDocsRef = useMemo(() => {
+    if (selectedDocs.length === 0) return null
+    const total = selectedDocs.reduce((s, d) => s + Number(d.pendingAmount), 0)
+    const dates = selectedDocs.map(docPaymentDate).filter(Boolean)
+    return { total, dates, type: selectedDocs[0].type }
+  }, [selectedDocs])
+
+  const movMatchScore = useMemo(() => {
+    const ref = selectedDocsRef
+    return (m: Movement): number => {
+      if (!ref) return -Infinity
+      const isCredit = Number(m.amount) >= 0
+      // direção tem de bater com o tipo dos documentos (receber→entrada, pagar→saída)
+      if ((ref.type === 'receivable') !== isCredit) return -Infinity
+      const remaining = Math.abs(Number(m.amount)) - Math.max(0, Number(m.reconciledAmount ?? 0))
+      if (remaining <= 0) return -Infinity
+      const valueScore = 1 - Math.min(1, Math.abs(ref.total - remaining) / Math.max(ref.total, remaining, 1))
+      const mDate = m.date?.slice(0, 10)
+      const days = mDate && ref.dates.length
+        ? Math.min(...ref.dates.map((d) => Math.abs((new Date(mDate).getTime() - new Date(d).getTime()) / 86_400_000)))
+        : 60
+      const dateScore = 1 - Math.min(1, days / 30)
+      return valueScore * 0.7 + dateScore * 0.3
+    }
+  }, [selectedDocsRef])
+
   const pendingMovements = useMemo(() => {
     let list = allMovements
     if (movSearch) list = list.filter((m) => (m.description ?? '').toLowerCase().includes(movSearch.toLowerCase()))
@@ -290,8 +330,14 @@ export default function ReconciliationPage() {
     if (movDateTo)   list = list.filter((m) => m.date <= movDateTo)
     if (movAmountMin) list = list.filter((m) => Math.abs(Number(m.amount)) >= parseFloat(movAmountMin))
     if (movAmountMax) list = list.filter((m) => Math.abs(Number(m.amount)) <= parseFloat(movAmountMax))
+    // Fluxo "documentos primeiro": com documentos selecionados e ainda sem
+    // movimentos escolhidos, mostra primeiro o movimento mais semelhante ao
+    // conjunto. Caso contrário mantém a ordem por data (mais recentes).
+    if (selectedDocsRef && selectedMovements.length === 0) {
+      list = [...list].sort((a, b) => movMatchScore(b) - movMatchScore(a))
+    }
     return list
-  }, [allMovements, movSearch, movBankId, movSign, movDateFrom, movDateTo, movAmountMin, movAmountMax])
+  }, [allMovements, movSearch, movBankId, movSign, movDateFrom, movDateTo, movAmountMin, movAmountMax, selectedDocsRef, movMatchScore, selectedMovements.length])
 
   // ── Filtered documents ────────────────────────────────────────────────────
   const pendingDocs = useMemo(() => {
@@ -311,8 +357,56 @@ export default function ReconciliationPage() {
     return list
   }, [allDocs, docType, docSearch, docDateFrom, docDateTo, docAmountMin, docAmountMax])
 
-  const pendingReceivables  = useMemo(() => pendingDocs.filter((d) => d.type === 'receivable'),     [pendingDocs])
-  const pendingPayables     = useMemo(() => pendingDocs.filter((d) => d.type === 'payable'),        [pendingDocs])
+  // ── Ordenação dos documentos (Data asc/desc ou Match) ─────────────────────
+  // No modo "Match", cada documento é pontuado pela semelhança com os
+  // movimentos de referência (os selecionados, ou todos os pendentes da mesma
+  // direção quando nada está selecionado) combinando proximidade de valor (peso
+  // maior) e de data. Os mais parecidos ficam no topo.
+  const matchScore = useMemo(() => {
+    const refByType = (type: 'receivable' | 'payable') => {
+      const base = selectedMovements.length > 0 ? selectedMovements : allMovements
+      return base
+        .filter((m) => (type === 'receivable' ? Number(m.amount) >= 0 : Number(m.amount) < 0))
+        .map((m) => ({
+          remaining: Math.abs(Number(m.amount)) - Math.max(0, Number(m.reconciledAmount ?? 0)),
+          date: m.date?.slice(0, 10),
+        }))
+        .filter((m) => m.remaining > 0)
+    }
+    const recRef = refByType('receivable')
+    const payRef = refByType('payable')
+    return (d: Document): number => {
+      const movs = d.type === 'receivable' ? recRef : payRef
+      if (movs.length === 0) return -Infinity
+      const a = Number(d.pendingAmount)
+      const dDate = docPaymentDate(d)
+      let best = -Infinity
+      for (const m of movs) {
+        const valueScore = 1 - Math.min(1, Math.abs(a - m.remaining) / Math.max(a, m.remaining, 1))
+        const days = dDate && m.date
+          ? Math.abs((new Date(m.date).getTime() - new Date(dDate).getTime()) / 86_400_000)
+          : 60
+        const dateScore = 1 - Math.min(1, days / 30)
+        const score = valueScore * 0.7 + dateScore * 0.3
+        if (score > best) best = score
+      }
+      return best
+    }
+  }, [selectedMovements, allMovements])
+
+  const sortDocs = useMemo(() => (list: Document[]): Document[] => {
+    if (docSortMode === 'match') {
+      return [...list].sort((x, y) => matchScore(y) - matchScore(x))
+    }
+    const dir = docSortDir === 'asc' ? 1 : -1
+    return [...list].sort((x, y) => {
+      const dx = docPaymentDate(x), dy = docPaymentDate(y)
+      return (dx < dy ? -1 : dx > dy ? 1 : 0) * dir
+    })
+  }, [docSortMode, docSortDir, matchScore])
+
+  const pendingReceivables  = useMemo(() => sortDocs(pendingDocs.filter((d) => d.type === 'receivable')), [pendingDocs, sortDocs])
+  const pendingPayables     = useMemo(() => sortDocs(pendingDocs.filter((d) => d.type === 'payable')),    [pendingDocs, sortDocs])
 
   // ── Totals ────────────────────────────────────────────────────────────────
   const totalMovements = selectedMovements.reduce((s, m) => {
@@ -515,21 +609,31 @@ export default function ReconciliationPage() {
     const fullAmt = Math.abs(Number(m.amount))
     const reconciledAmt = Math.max(0, Number(m.reconciledAmount ?? 0))
     const remainingAmt = fullAmt - reconciledAmt
+    // Sugerido: com documentos selecionados, este movimento cobre exatamente o
+    // valor do conjunto (e a direção é compatível).
+    const isSuggested = !selected && !isBlocked && !!selectedDocsRef &&
+      (selectedDocsRef.type === 'receivable') === isCredit &&
+      Math.abs(remainingAmt - selectedDocsRef.total) < 0.01
     return (
       <button
         key={m.id}
         onClick={() => toggleMovement(m)}
         disabled={isBlocked}
         className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-100
-          ${selected ? 'bg-primary-50 border-l-2 border-primary-500' : isBlocked ? 'opacity-40 cursor-not-allowed bg-gray-50' : 'hover:bg-slate-50 border-l-2 border-transparent'}`}
+          ${selected ? 'bg-primary-50 border-l-2 border-primary-500' : isBlocked ? 'opacity-40 cursor-not-allowed bg-gray-50' : isSuggested ? 'bg-amber-50/60 hover:bg-amber-50 border-l-2 border-amber-300' : 'hover:bg-slate-50 border-l-2 border-transparent'}`}
       >
         {selected
           ? <CheckSquare className="w-4 h-4 text-primary-600 flex-shrink-0" />
-          : <Square className={`w-4 h-4 flex-shrink-0 ${isBlocked ? 'text-gray-200' : 'text-gray-300'}`} />}
+          : <Square className={`w-4 h-4 flex-shrink-0 ${isBlocked ? 'text-gray-200' : isSuggested ? 'text-amber-400' : 'text-gray-300'}`} />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm text-gray-900 truncate">{m.description}</span>
             {isPartial && <Badge variant="yellow">parc. reconciliado</Badge>}
+            {isSuggested && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
+                <Zap className="w-2.5 h-2.5" /> sugerido
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className="text-xs text-gray-400">{formatDate(m.date)}</span>
@@ -602,7 +706,9 @@ export default function ReconciliationPage() {
           {d.status === 'PARTIAL' && (
             <div className="text-[11px] text-amber-600 font-medium">de {formatCurrency(Number(d.totalAmount))}</div>
           )}
-          <div className="text-xs text-gray-400">{formatDate(d.dueDate)}</div>
+          <div className="text-xs text-gray-400" title={d.promisedPaymentDate ? 'Data prevista de pagamento' : 'Vencimento'}>
+            {formatDate(docPaymentDate(d) || d.dueDate)}
+          </div>
         </div>
       </button>
     )
@@ -633,7 +739,14 @@ export default function ReconciliationPage() {
           {/* Card header */}
           <div className="px-4 py-3.5 border-b border-gray-100 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="font-semibold text-gray-900 text-sm">Movimentos Bancários</h2>
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="font-semibold text-gray-900 text-sm">Movimentos Bancários</h2>
+                {selectedDocsRef && selectedMovements.length === 0 && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                    <Target className="w-2.5 h-2.5" /> por semelhança
+                  </span>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-400">{pendingMovements.length} de {allMovements.length}</span>
                 <button
@@ -768,6 +881,39 @@ export default function ReconciliationPage() {
                 <button onClick={() => setDocSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
                   <X className="w-3 h-3" />
                 </button>
+              )}
+            </div>
+
+            {/* Ordenação — Data (asc/desc) ou Match */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-gray-400 flex-shrink-0">Ordenar</span>
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                <button
+                  onClick={() => setDocSortMode('date')}
+                  className={`flex items-center gap-1 px-2 py-1 text-[11px] font-medium transition-colors ${docSortMode === 'date' ? 'bg-primary-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                >
+                  <Calendar className="w-3 h-3" /> Data
+                </button>
+                <button
+                  onClick={() => setDocSortMode('match')}
+                  className={`flex items-center gap-1 px-2 py-1 text-[11px] font-medium border-l border-gray-200 transition-colors ${docSortMode === 'match' ? 'bg-primary-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
+                >
+                  <Target className="w-3 h-3" /> Match
+                </button>
+              </div>
+              {docSortMode === 'date' ? (
+                <button
+                  onClick={() => setDocSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors"
+                  title={docSortDir === 'asc' ? 'Mais antigos primeiro' : 'Mais recentes primeiro'}
+                >
+                  {docSortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
+                  {docSortDir === 'asc' ? 'Ascendente' : 'Descendente'}
+                </button>
+              ) : (
+                <span className="text-[11px] text-gray-400">
+                  por semelhança {selectedMovements.length > 0 ? 'aos movimentos selecionados' : 'aos movimentos'} (valor e data de pagamento)
+                </span>
               )}
             </div>
 

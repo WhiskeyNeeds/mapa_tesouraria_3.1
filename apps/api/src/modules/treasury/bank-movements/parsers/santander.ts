@@ -1,18 +1,17 @@
-import XLSX from 'xlsx'
 import type { ParsedMovement } from './utils.js'
-import { cellToDate, cellToAmount, cellToString } from './utils.js'
+import { readSheetRows, findHeaderRow, cellToDate, cellToAmount, cellToString } from './utils.js'
 
-// Santander has no metadata header — row 1 is the data header, data starts row 2
-const DATA_START = 1
+// Santander Excel export — header usually on the first row, data right after.
+const FALLBACK_DATA_START = 1
 
 export function parseSantander(buffer: Buffer): ParsedMovement[] {
-  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: true })
-  const ws = wb.Sheets[wb.SheetNames[0]]
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '', blankrows: false, raw: true })
+  const rows = readSheetRows(buffer)
+  const header = findHeaderRow(rows, ['data da operacao'])
+  const start = header >= 0 ? header + 1 : FALLBACK_DATA_START
 
   const results: ParsedMovement[] = []
 
-  for (let i = DATA_START; i < rows.length; i++) {
+  for (let i = start; i < rows.length; i++) {
     const row = rows[i] as unknown[]
     if (!row || row.length < 5) continue
 

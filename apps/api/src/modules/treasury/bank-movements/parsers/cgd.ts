@@ -9,7 +9,12 @@ export function parseCGD(buffer: Buffer): ParsedMovement[] {
 
   const results: ParsedMovement[] = []
 
-  for (let i = 15; i < lines.length; i++) {
+  // Locate the data header dynamically — the metadata block length can vary.
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const headerIdx = lines.findIndex((l) => norm(l).includes('data mov'))
+  const dataStart = headerIdx >= 0 ? headerIdx + 1 : 15
+
+  for (let i = dataStart; i < lines.length; i++) {
     const line = lines[i].trim()
     if (!line) continue
 

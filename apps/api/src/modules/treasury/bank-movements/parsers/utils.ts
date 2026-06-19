@@ -1,6 +1,32 @@
+import XLSX from 'xlsx'
 import type { CsvMovement } from '../bank-movements.service.js'
 
 export type ParsedMovement = CsvMovement
+
+/** Read the first worksheet as an array-of-arrays, dropping blank rows. */
+export function readSheetRows(buffer: Buffer): unknown[][] {
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: true })
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  return XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '', blankrows: false, raw: true }) as unknown[][]
+}
+
+const normalizeCell = (v: unknown) =>
+  String(v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+
+/**
+ * Find the data-header row index by locating the first row that contains ALL the
+ * given keywords. Returns -1 if none match. This makes parsers resilient to the
+ * variable number of metadata/blank rows banks place above the table (dropping
+ * blank rows shifts a hardcoded index and silently loses movements).
+ */
+export function findHeaderRow(rows: unknown[][], keywords: string[], limit = 50): number {
+  const kws = keywords.map(normalizeCell)
+  for (let i = 0; i < Math.min(rows.length, limit); i++) {
+    const cells = (rows[i] ?? []).map(normalizeCell)
+    if (kws.every((k) => cells.some((c) => c.includes(k)))) return i
+  }
+  return -1
+}
 
 export function parsePortugueseAmount(s: string): number {
   return parseFloat(s.trim().replace(/\./g, '').replace(',', '.'))
