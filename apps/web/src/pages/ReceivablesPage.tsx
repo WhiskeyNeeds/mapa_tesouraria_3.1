@@ -6,7 +6,6 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel } from '@/lib/utils'
-import { distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue } from '@/lib/installmentMath'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import TocSyncStatus from '@/components/ui/TocSyncStatus'
@@ -15,12 +14,11 @@ import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
+import DocDetailPanel from '@/components/treasury/DocDetailPanel'
 import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
 import PaymentDetailModal, { type TocPayment } from '@/components/treasury/PaymentDetailModal'
 import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
-import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, ArrowUpRight, Pencil, Repeat2, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, Clock, Scissors, CreditCard, Eye, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
-import FollowupsPanel from '@/components/followups/FollowupsPanel'
-import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
+import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, Repeat2, ChevronRight, ChevronDown, AlertTriangle, Tags, Wallet, FileClock, CalendarClock, TimerOff } from 'lucide-react'
 
 /** Separa o montante formatado do símbolo de moeda para os estilizar à parte. */
 function splitMoney(value: number): { amount: string; symbol: string } {
@@ -257,19 +255,7 @@ export default function ReceivablesPage() {
   const [selectedTocCustomer, setSelectedTocCustomer] = useState<TocCustomer | null>(null)
   const customerInputRef = useRef<HTMLDivElement>(null)
   const [panelDoc, setPanelDoc] = useState<Receivable | null>(null)
-  const [panelTocDoc, setPanelTocDoc] = useState<TocSalesDoc | null>(null)
-  const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
-  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'settle' | 'commit'>(null)
-  const [panelPromisedDate, setPanelPromisedDate] = useState('')
-  const [settleRef, setSettleRef] = useState('')
-  const [settleDate, setSettleDate] = useState('')
-  const [commitRef, setCommitRef] = useState('')
-  const [commitAmount, setCommitAmount] = useState('')
-  const [commitDate, setCommitDate] = useState('')
   const [detailReceipt, setDetailReceipt] = useState<TocPayment | null>(null)
-  const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
-  const [splitCount, setSplitCount] = useState(2)
-  const [splitValueMode, setSplitValueMode] = useState<'EUR' | 'PCT'>('EUR')
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -337,21 +323,6 @@ export default function ReceivablesPage() {
 
   const [budgetSuggestion, setBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
   const [outrasBudgetSuggestion, setOutrasBudgetSuggestion] = useState<{ budgetId: string; budgetName: string; ruleDescription: string } | null>(null)
-
-  const { data: panelDocDetail } = useQuery<Receivable>({
-    queryKey: ['receivable-detail', selectedClientId, panelDoc?.id],
-    queryFn: () => api.get(`/treasury/${selectedClientId}/receivables/${panelDoc!.id}`),
-    enabled: !!selectedClientId && !!panelDoc?.id && panelDoc.origin !== 'TOC',
-  })
-
-  // ID do documento TOC para carregar recibos no painel (origem TOC ou local importado)
-  const panelTocDocId = panelTocDoc?.id != null ? String(panelTocDoc.id) : panelDoc?.tocSalesDocId ?? null
-  const { data: panelReceipts = [] } = useQuery<TocPayment[]>({
-    queryKey: ['toc-sales-receipts', selectedClientId, panelTocDocId],
-    queryFn: () => api.get(`/toconline/${selectedClientId}/sales/${panelTocDocId}/receipts`),
-    enabled: !!selectedClientId && !!panelTocDocId,
-    staleTime: 5 * 60 * 1000,
-  })
 
   const { data: tocCustomers = [] } = useQuery<TocCustomer[]>({
     queryKey: ['toc-customers', selectedClientId],
@@ -494,11 +465,8 @@ export default function ReceivablesPage() {
   const classify = useMutation({
     mutationFn: ({ id, categoryId }: { id: string; categoryId: string | null }) =>
       api.patch(`/treasury/${selectedClientId}/receivables/${id}`, { categoryId }),
-    onSuccess: (_, { id, categoryId }) => {
+    onSuccess: (_, { categoryId }) => {
       qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
-      // Update panel state immediately so user sees change without refresh
-      setPanelDoc((d) => d ? { ...d, category: categories.find((c) => c.id === categoryId) ?? null } : d)
-      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? { ...old, category: categories.find((c) => c.id === categoryId) ?? null, categoryId } : old)
       toast.success(categoryId === null ? 'Categoria removida.' : 'Documento classificado.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -507,11 +475,8 @@ export default function ReceivablesPage() {
   const classifyBudget = useMutation({
     mutationFn: ({ id, budgetId }: { id: string; budgetId: string | null }) =>
       api.patch(`/treasury/${selectedClientId}/receivables/${id}`, { budgetId }),
-    onSuccess: (_, { id, budgetId }) => {
+    onSuccess: (_, { budgetId }) => {
       qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
-      // Update panel state immediately so user sees change without refresh
-      setPanelDoc((d) => d ? { ...d, budget: budgets.find((b) => b.id === budgetId) ?? null } : d)
-      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? { ...old, budget: budgets.find((b) => b.id === budgetId) ?? null, budgetId } : old)
       toast.success(budgetId === null ? 'Budget removido.' : 'Budget atribuído.')
     },
     onError: (e) => toast.error((e as Error).message),
@@ -529,127 +494,6 @@ export default function ReceivablesPage() {
   // A seleção é por página visível: limpa ao trocar de separador, sub-separador ou página.
   useEffect(() => { setSelectedIds(new Set()); setBulkCategoryId(''); setBulkBudgetId('') }, [activeTab, outrasSubTab, page])
 
-  const payReceivable = useMutation({
-    mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/pay`, {}),
-    onSuccess: (_, id) => {
-      qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
-      const payChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
-        (arr ?? []).map((c) => c.recurrenceId || c.status === 'PAID' || c.status === 'SETTLED' || c.status === 'VOID'
-          ? c
-          : { ...c, status: 'PAID', pendingAmount: 0, receivedAmount: Number(c.totalAmount) })
-      setPanelDoc((d) => d ? {
-        ...d,
-        status: 'PAID',
-        pendingAmount: 0,
-        receivedAmount: d.totalAmount,
-        promisedPaymentDate: null,
-        children: payChildren(d.children),
-      } : d)
-      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? {
-        ...old,
-        status: 'PAID',
-        pendingAmount: 0,
-        receivedAmount: old.totalAmount,
-        promisedPaymentDate: null,
-        children: payChildren(old.children),
-      } : old)
-      toast.success('Documento marcado como pago.')
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
-  const settleReceivable = useMutation({
-    mutationFn: (vars: { id: string; receiptReference?: string; date?: string }) =>
-      api.post<Receivable>(`/treasury/${selectedClientId}/receivables/${vars.id}/settle`, { receiptReference: vars.receiptReference, date: vars.date }),
-    onSuccess: (updated, vars) => {
-      const id = vars.id
-      qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
-      const settleChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
-        (arr ?? []).map((c) => c.recurrenceId || c.status === 'SETTLED' || c.status === 'VOID'
-          ? c
-          : { ...c, status: 'SETTLED', pendingAmount: 0, receivedAmount: Number(c.totalAmount) })
-      setPanelDoc((d) => d ? {
-        ...d,
-        status: 'SETTLED',
-        pendingAmount: 0,
-        receivedAmount: d.totalAmount,
-        promisedPaymentDate: null,
-        receiptReference: vars.receiptReference ?? d.receiptReference,
-        receiptAmount: updated?.receiptAmount ?? d.receiptAmount,
-        receivedDate: vars.date ?? d.receivedDate,
-        children: settleChildren(d.children),
-      } : d)
-      // Sync the detail cache so panelDocDetail (used as primary source for children) reflects the change synchronously.
-      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? {
-        ...old,
-        status: 'SETTLED',
-        pendingAmount: 0,
-        receivedAmount: old.totalAmount,
-        promisedPaymentDate: null,
-        receiptReference: vars.receiptReference ?? old.receiptReference,
-        children: settleChildren(old.children),
-      } : old)
-      setPanelSection(null)
-      toast.success('Documento marcado como liquidado.')
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
-  // Promove uma fatura SCHEDULED (programada/estimada) para OPEN, fixando
-  // referência, valor e data. O backend devolve a fatura atualizada.
-  const commitReceivable = useMutation({
-    mutationFn: (vars: { id: string; reference: string; amount: number; date: string }) =>
-      api.post<Receivable>(`/treasury/${selectedClientId}/receivables/${vars.id}/commit`, { reference: vars.reference, amount: vars.amount, date: vars.date }),
-    onSuccess: (updated, vars) => {
-      const id = vars.id
-      qc.invalidateQueries({ queryKey: ['receivables'] })
-      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
-      qc.invalidateQueries({ queryKey: ['activity'] })
-      // A promoção altera os valores/datas projetadas — refrescar o dashboard.
-      qc.invalidateQueries({ queryKey: ['dashboard-cashflow-statement'] })
-      qc.invalidateQueries({ queryKey: ['dashboard'] })
-      setPanelDoc((d) => d && d.id === id ? {
-        ...d,
-        status: updated?.status ?? 'OPEN',
-        reference: updated?.reference ?? vars.reference,
-        totalAmount: updated?.totalAmount ?? vars.amount,
-        pendingAmount: updated?.pendingAmount ?? vars.amount,
-        dueDate: updated?.dueDate ?? vars.date,
-      } : d)
-      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? { ...old, ...updated } : old)
-      setPanelSection(null)
-      toast.success('Fatura marcada como comprometida.')
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
-  const unsettleReceivable = useMutation({
-    mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/unsettle`, {}),
-    onSuccess: (_, id) => {
-      qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }); qc.invalidateQueries({ queryKey: ['activity'] })
-      const revertChildren = <T extends { recurrenceId?: string | null; status: string; totalAmount: number | string }>(arr: T[] | undefined) =>
-        (arr ?? []).map((c) => c.recurrenceId || (c.status !== 'SETTLED' && c.status !== 'PAID')
-          ? c
-          : { ...c, status: 'OPEN', pendingAmount: Number(c.totalAmount), receivedAmount: 0 })
-      setPanelDoc((d) => d ? {
-        ...d,
-        status: 'OPEN',
-        pendingAmount: d.totalAmount,
-        receivedAmount: 0,
-        children: revertChildren(d.children),
-      } : d)
-      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? {
-        ...old,
-        status: 'OPEN',
-        pendingAmount: old.totalAmount,
-        receivedAmount: 0,
-        children: revertChildren(old.children),
-      } : old)
-      toast.success('Liquidação anulada.')
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
   const updateReceivable = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api.patch(`/treasury/${selectedClientId}/receivables/${id}`, data),
@@ -666,49 +510,6 @@ export default function ReceivablesPage() {
     },
     onError: (e) => toast.error((e as Error).message),
   })
-
-  const setPromisedDate = useMutation({
-    mutationFn: ({ id, date }: { id: string; date: string | null }) =>
-      api.patch(`/treasury/${selectedClientId}/receivables/${id}/promised-date`, { date }),
-    onSuccess: (_, { date }) => {
-      qc.invalidateQueries({ queryKey: ['receivables'] })
-      // A data prometida alimenta os cartões "A receber esta semana" e "Passou
-      // prazo pagamento" — refrescar os KPIs para a contagem mudar de imediato.
-      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
-      qc.invalidateQueries({ queryKey: ['activity'] })
-      setPanelDoc((d) => d ? { ...d, promisedPaymentDate: date } : d)
-      setPanelSection(null)
-      toast.success(date ? 'Data prometida definida.' : 'Data prometida removida.')
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
-  const unsplitReceivable = useMutation({
-    mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/unsplit`, {}),
-    onSuccess: (_, id) => {
-      qc.invalidateQueries({ queryKey: ['receivables'] })
-      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
-      qc.invalidateQueries({ queryKey: ['receivable-detail', selectedClientId, id] })
-      setPanelDoc((prev) => prev ? { ...prev, status: 'OPEN', children: [] } : prev)
-      toast.success('Divisão desfeita com sucesso.')
-    },
-    onError: () => toast.error('Não foi possível desfazer a divisão.'),
-  })
-
-  const splitReceivable = useMutation({
-    mutationFn: ({ id, installments }: { id: string; installments: Array<{ promisedPaymentDate: string; amount: number }> }) =>
-      api.post(`/treasury/${selectedClientId}/receivables/${id}/split`, { installments }),
-    onSuccess: (children, { id }) => {
-      qc.invalidateQueries({ queryKey: ['receivables'] })
-      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
-      qc.invalidateQueries({ queryKey: ['receivable-detail', selectedClientId, id] })
-      setPanelDoc((prev) => prev ? { ...prev, children: children as Receivable['children'] } : prev)
-      setPanelSection(null)
-      toast.success('Fatura dividida com sucesso.')
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
 
   const createOutras = useMutation({
     mutationFn: () => {
@@ -1216,7 +1017,7 @@ export default function ReceivablesPage() {
                             if (row._src === 'local') {
                               const r = row.r
                               return (
-                                <tr key={`l-${r.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab((r.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                                <tr key={`l-${r.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => setPanelDoc(r)}>
                                   <td className="px-3 py-3 align-top">
                                     <input
                                       type="checkbox"
@@ -1341,12 +1142,6 @@ export default function ReceivablesPage() {
                                     // vez de construir à mão a partir do raw — assim o estado local
                                     // (SETTLED/PARTIAL/VOID/promisedPaymentDate) é respeitado.
                                     setPanelDoc(row.item)
-                                    setPanelTocDoc(d)
-                                    setPanelTab((row.item.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details')
-                                    setPanelSection(null)
-                                    setPanelPromisedDate(row.item.promisedPaymentDate?.slice(0, 10) ?? '')
-                                    setSplitCount(2)
-                                    setSplitValueMode('EUR')
                                   }}
                                 >
                                   <td className="px-3 py-3 align-top">
@@ -1659,7 +1454,7 @@ export default function ReceivablesPage() {
                               const daysOverdue = overdue ? Math.floor((now - due) / 86400000) : 0
                               const daysUntil = isActive && !overdue ? Math.floor((due - now) / 86400000) : -1
                               return (
-                                <tr key={`o-${r.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => { setPanelDoc(r); setPanelTocDoc(null); setPanelTab((r.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null); setPanelPromisedDate(r.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}>
+                                <tr key={`o-${r.id}`} className="hover:bg-primary-50 transition-colors group cursor-pointer" onClick={() => setPanelDoc(r)}>
                                   <td className="px-3 py-3 align-top">
                                     <input
                                       type="checkbox"
@@ -2296,699 +2091,29 @@ export default function ReceivablesPage() {
 
         {/* ── Painel lateral de detalhes ── */}
         {panelDoc && (
-          <div className="fixed inset-0 z-50 w-full bg-white flex flex-col overflow-hidden animate-slide-in lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:w-80 xl:w-96 lg:flex-shrink-0 lg:h-[calc(100vh-4rem)] lg:border-l lg:border-gray-200">
-            {/* Faixa de acento fintech removida */}
-            {/* Cabeçalho */}
-            <div className="p-5 border-b border-gray-100 bg-gradient-to-b from-blue-50/50 to-transparent">
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-1">
-                  {panelDoc.parentId && !panelDoc.recurrenceId && (
-                    <button
-                      onClick={async () => {
-                        const parent = await api.get<Receivable>(`/treasury/${selectedClientId}/receivables/${panelDoc.parentId}`)
-                        setPanelDoc(parent); setPanelTab((parent.children ?? []).some((c) => !c.recurrenceId) ? 'parcelas' : 'details'); setPanelSection(null)
-                        setPanelPromisedDate(parent.promisedPaymentDate?.slice(0, 10) ?? '')
-                        setSplitCount(2); setSplitValueMode('EUR')
-                      }}
-                      className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"
-                      title="Voltar à fatura mãe"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
-                  )}
-                  <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Conta a Receber</div>
-                </div>
-                <button onClick={() => { setPanelDoc(null); setPanelTocDoc(null) }} className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="text-[1.7rem] font-bold tracking-tight tabular-nums text-gray-900 leading-none">{formatCurrency(panelDoc.totalAmount)}</div>
-                {(() => {
-                  const tocRaw = panelTocDoc ?? panelDoc._tocRaw
-                  const link = tocRaw && typeof tocRaw.public_link === 'string' ? tocRaw.public_link : null
-                  return link ? (
-                    <a
-                      href={link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Pré-visualizar documento"
-                      className="text-gray-400 hover:text-primary-600 hover:bg-primary-50 p-1.5 rounded-lg transition-colors"
-                    >
-                      <Eye className="w-4 h-4 text-primary-600" />
-                    </a>
-                  ) : null
-                })()}
-                {!panelDoc.tocSalesDocId && (
-                  <div className="flex items-center gap-1 ml-auto">
-                    <button
-                      title="Editar"
-                      onClick={() => {
-                        setEditId(panelDoc.id)
-                        setEditRow(panelDoc)
-                        setEditForm({
-                          categoryId: panelDoc.category?.id ?? '',
-                          entityName: panelDoc.entityName,
-                          reference: panelDoc.reference,
-                          documentDate: panelDoc.documentDate?.slice(0, 10) ?? '',
-                          dueDate: panelDoc.dueDate.slice(0, 10),
-                          totalAmount: String(panelDoc.totalAmount),
-                          description: panelDoc.description ?? '',
-                        })
-                      }}
-                      className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    {panelDoc.status !== 'VOID' && panelDoc.status !== 'SETTLED' && (
-                      <button
-                        title="Anular"
-                        onClick={() => voidReceivable.mutate(panelDoc.id)}
-                        disabled={voidReceivable.isPending}
-                        className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <XCircle className="w-4 h-4" />
-                      </button>
-                    )}
-                    <button
-                      title="Eliminar"
-                      onClick={() => setDeleteRow(panelDoc)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="text-sm font-medium mt-0.5">
-                {panelDoc.tocCustomerId ? (
-                  <button onClick={() => navigate(`/empresa/clientes/${panelDoc.tocCustomerId}`, { state: { from: '/contas-a-receber', fromLabel: 'Contas a Receber' } })} className="text-primary-700 hover:underline text-left">
-                    {panelDoc.entityName || '—'}
-                  </button>
-                ) : (
-                  <span className="text-primary-700">{panelDoc.entityName || '—'}</span>
-                )}
-              </div>
-              <div className="mt-2">
-                <div className="text-sm font-semibold text-gray-800">{panelDoc.reference || '—'}</div>
-                <div className="text-xs text-gray-500">Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
-              </div>
-              <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <Badge variant={recvStatusVariant(panelDoc.status)}>{recvStatusLabel(panelDoc.status, panelDoc._statusToc === 'SETTLED', true)}</Badge>
-                {panelDoc._statusDiffersFromToc && (
-                  <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${panelDoc._statusToc ?? '—'}`}>(Local)</span>
-                )}
-                {panelDoc.origin === 'TOCONLINE' && panelDoc.status === 'PAID' && (
-                  <span title="Pago localmente — ainda sem recibo no TOConline" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-medium">
-                    <AlertTriangle className="w-3 h-3" />Aguarda Recibo
-                  </span>
-                )}
-                {(() => {
-                  const n = (panelDoc.children ?? []).filter((c) => !c.recurrenceId).length
-                  return n > 0 ? (
-                    <span title={`Dividida em ${n} parcelas`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[11px] font-medium">
-                      <Scissors className="w-3 h-3" />Dividida em {n} {n === 1 ? 'parcela' : 'parcelas'}
-                    </span>
-                  ) : null
-                })()}
-                <InlineCategoryPicker
-                  category={panelDoc.category}
-                  categories={categories}
-                  typeLabel="Receita"
-                  onSelect={(categoryId) => classify.mutate({ id: panelDoc.id, categoryId })}
-                />
-                <span className="inline-flex items-center gap-1">
-                  <InlineBudgetPicker
-                    budget={panelDoc.budget}
-                    budgets={budgets}
-                    onSelect={(budgetId) => classifyBudget.mutate({ id: panelDoc.id, budgetId })}
-                  />
-                  {panelDoc.budget && (
-                    <button
-                      onClick={() => navigate(`/budgets?budget=${panelDoc.budget!.id}`)}
-                      title={`Ir para o budget "${panelDoc.budget.name}"`}
-                      aria-label={`Ir para o budget ${panelDoc.budget.name}`}
-                      style={{ color: panelDoc.budget.color ?? '#3b82f6' }}
-                      className="budget-goto inline-flex items-center justify-center w-6 h-6 rounded-full flex-shrink-0"
-                    >
-                      <ArrowUpRight className="budget-goto-arrow w-3.5 h-3.5" strokeWidth={2.5} />
-                    </button>
-                  )}
-                </span>
-                {panelDoc.promisedPaymentDate && (
-                  <span className="text-xs text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3" />{formatDate(panelDoc.promisedPaymentDate)}</span>
-                )}
-              </div>
-              <div className="mt-3 flex items-center gap-2 text-xs flex-wrap">
-                <span className="inline-flex items-baseline gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 border border-gray-100">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Pendente</span>
-                  <span className="font-bold tabular-nums text-gray-800">{formatCurrency(panelDoc.pendingAmount)}</span>
-                </span>
-                {Number(panelDoc.receivedAmount) > 0 && (
-                  <span className="inline-flex items-baseline gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-100">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-500">Recebido</span>
-                    <span className="font-bold tabular-nums text-emerald-700">{formatCurrency(Number(panelDoc.receivedAmount))}</span>
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Recibos associados (TOC) */}
-            {panelReceipts.length > 0 && (
-              <div className="border-b border-gray-100 px-4 py-3 space-y-2">
-                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">{panelReceipts.length} {panelReceipts.length === 1 ? 'recibo associado' : 'recibos associados'}</div>
-                {panelReceipts.map((rc) => {
-                  const receivedForDoc = rc._received_for_doc != null ? Number(rc._received_for_doc as number) : null
-                  const showSplit = receivedForDoc != null && receivedForDoc !== Number(rc.gross_total)
-                  return (
-                    <button key={String(rc.id)}
-                      onClick={() => setDetailReceipt(rc)}
-                      className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="font-medium text-sm text-gray-900 truncate">{rc.document_no}</div>
-                          <div className="text-xs text-gray-500">{rc.date ? formatDate(rc.date) : '—'}</div>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <div className="text-sm font-semibold text-gray-800">{formatCurrency(receivedForDoc ?? rc.gross_total)}</div>
-                          {showSplit && (
-                            <div className="text-[10px] text-gray-400">de {formatCurrency(rc.gross_total)}</div>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-
-            {/* Recibo interno (stand-in até vir o recibo do TOConline) — pode coexistir
-                com os recibos do TOC: cobre a parte ainda não coberta por eles. */}
-            {panelDoc.status === 'SETTLED' && panelDoc.receiptReference && (
-              <div className="border-b border-gray-100 px-4 py-3 space-y-2">
-                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recibo interno</div>
-                <div className="rounded-lg border border-gray-200 p-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-medium text-sm text-gray-900 truncate">{panelDoc.receiptReference}</div>
-                      <div className="text-xs text-gray-500">{panelDoc.receivedDate ? formatDate(panelDoc.receivedDate) : '—'}</div>
-                    </div>
-                    <div className="text-sm font-semibold text-gray-800 flex-shrink-0">{panelDoc.receiptAmount != null ? formatCurrency(panelDoc.receiptAmount) : '—'}</div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Tabs — controlo segmentado */}
-            <div className="px-4 py-3 border-b border-gray-100">
-              <div className="flex gap-1 p-1 bg-gray-100/80 rounded-xl">
-                {(['parcelas', 'details', 'followups'] as const).map((t) => (
-                  <button key={t} onClick={() => { setPanelTab(t); setPanelSection(null) }}
-                    className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all duration-200 ${panelTab === t ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                    {t === 'details' ? 'Detalhes' : t === 'parcelas' ? 'Parcelas' : 'Follow-ups'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Conteúdo */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {panelTab === 'details' && (
-                <>
-                  {/* Nota de liquidado */}
-                  {panelDoc.status === 'SETTLED' && (
-                    <div className="flex items-center gap-3 p-3.5 bg-green-50 border border-green-200 rounded-xl">
-                      <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
-                        <CheckCircle className="w-4 h-4 text-green-700" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-green-900 text-sm">Liquidado</div>
-                        <div className="text-xs text-green-600 mt-0.5">
-                          {panelDoc._statusToc === 'SETTLED' ? 'Recibo emitido no TOConline'
-                            : panelDoc.settledVia === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
-                            : panelDoc.settledVia === 'RECONCILIATION' ? 'Liquidado por reconciliação'
-                            : 'Liquidado manualmente nesta plataforma'}
-                        </div>
-                      </div>
-                      {panelDoc._statusToc === 'SETTLED' ? (
-                        <span className="text-xs text-green-700/70 flex-shrink-0">Gerido no TOConline</span>
-                      ) : panelDoc.settledVia === 'RECONCILIATION' ? (
-                        <span className="text-xs text-green-700/70 flex-shrink-0 whitespace-nowrap">Reverter na reconciliação</span>
-                      ) : (
-                        <button
-                          onClick={() => panelDoc.settledVia === 'INSTALLMENTS' ? undefined : unsettleReceivable.mutate(panelDoc.id)}
-                          disabled={unsettleReceivable.isPending || panelDoc.settledVia === 'INSTALLMENTS'}
-                          title={panelDoc.settledVia === 'INSTALLMENTS' ? 'Reverta parcela a parcela' : undefined}
-                          className="text-xs text-green-700 hover:text-red-700 border border-green-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-green-700 disabled:hover:border-green-200 disabled:hover:bg-transparent"
-                        >
-                          {unsettleReceivable.isPending ? '...' : 'Anular'}
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Nota de pago — aguarda liquidação */}
-                  {panelDoc.status === 'PAID' && (
-                    <div className="flex items-center gap-3 p-3.5 bg-teal-50 border border-teal-200 rounded-xl">
-                      <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0">
-                        <CreditCard className="w-4 h-4 text-teal-700" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-teal-900 text-sm">Pago</div>
-                        <div className="text-xs text-teal-600 mt-0.5">
-                          {panelDoc.settledVia === 'INSTALLMENTS' ? 'Liquidado pelas parcelas'
-                            : panelDoc.settledVia === 'RECONCILIATION' ? 'Liquidado por reconciliação'
-                            : panelDoc.tocSalesDocId ? 'Recebimento registado — liquida quando houver recibo no TOConline'
-                            : 'Recebimento registado — aguarda liquidação'}
-                        </div>
-                      </div>
-                      {panelDoc.settledVia === 'RECONCILIATION' ? (
-                        <span className="text-xs text-teal-700/70 flex-shrink-0 whitespace-nowrap">Reverter na reconciliação</span>
-                      ) : (
-                        <button
-                          onClick={() => panelDoc.settledVia === 'INSTALLMENTS' ? undefined : unsettleReceivable.mutate(panelDoc.id)}
-                          disabled={unsettleReceivable.isPending || panelDoc.settledVia === 'INSTALLMENTS'}
-                          title={panelDoc.settledVia === 'INSTALLMENTS' ? 'Reverta parcela a parcela' : undefined}
-                          className="text-xs text-teal-700 hover:text-red-700 border border-teal-200 hover:border-red-200 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-teal-700 disabled:hover:border-teal-200 disabled:hover:bg-transparent"
-                        >
-                          {unsettleReceivable.isPending ? '...' : 'Anular'}
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Marcar como Comprometido — só para faturas programadas (SCHEDULED) */}
-                  {panelDoc.status === 'SCHEDULED' && (
-                    <div className="rounded-xl border border-gray-200 overflow-hidden">
-                      <button
-                        onClick={() => {
-                          if (panelSection !== 'commit') {
-                            setCommitRef('')
-                            setCommitAmount(String(panelDoc.totalAmount ?? ''))
-                            setCommitDate(panelDoc.dueDate ? String(panelDoc.dueDate).slice(0, 10) : '')
-                          }
-                          setPanelSection(panelSection === 'commit' ? null : 'commit')
-                        }}
-                        className="w-full flex items-center gap-3 p-3.5 hover:bg-green-50 text-left transition-colors group"
-                      >
-                        <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
-                          <CheckCircle className="w-4 h-4 text-green-700" />
-                        </div>
-                        <div>
-                          <div className="font-medium text-gray-900 text-sm">Marcar como Comprometido</div>
-                          <div className="text-xs text-gray-500">Fixar referência, valor e data</div>
-                        </div>
-                      </button>
-                      {panelSection === 'commit' && (
-                        <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
-                          <div>
-                            <label className="text-xs text-gray-500 font-medium">Referência</label>
-                            <input className="input mt-1" value={commitRef} onChange={(e) => setCommitRef(e.target.value)} placeholder="FT2024/001" />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500 font-medium">Valor (€)</label>
-                            <input type="number" className="input mt-1" value={commitAmount} onChange={(e) => setCommitAmount(e.target.value)} />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500 font-medium">Data de vencimento</label>
-                            <input type="date" className="input mt-1" value={commitDate} onChange={(e) => setCommitDate(pickWorkday(e.target.value, commitDate))} />
-                          </div>
-                          <button
-                            onClick={() => commitReceivable.mutate({ id: panelDoc.id, reference: commitRef.trim(), amount: parseFloat(commitAmount) || 0, date: commitDate })}
-                            disabled={commitReceivable.isPending || !commitRef.trim() || !(parseFloat(commitAmount) > 0) || !commitDate}
-                            className="btn-primary w-full text-sm py-1.5"
-                          >
-                            {commitReceivable.isPending ? 'A guardar...' : 'Marcar como Comprometido'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Marcar como Pago — indisponível em programadas (SCHEDULED) */}
-                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (
-                      <button
-                        onClick={() => payReceivable.mutate(panelDoc.id)}
-                        disabled={payReceivable.isPending}
-                        className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-teal-50 hover:border-teal-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0 group-hover:bg-teal-200 transition-colors">
-                          <CreditCard className="w-4 h-4 text-teal-700" />
-                        </div>
-                        <div>
-                          <div className="font-medium text-gray-900 text-sm">Marcar como Pago</div>
-                          <div className="text-xs text-gray-500">Registar recebimento total (sem liquidar)</div>
-                        </div>
-                      </button>
-                  )}
-
-                  {/* Marcar como Liquidada — só a partir de Pago; exige registar recibo (referência + data). */}
-                  {panelDoc.status === 'PAID' && panelDoc.settledVia !== 'INSTALLMENTS' && panelDoc.settledVia !== 'RECONCILIATION' && (
-                    <div className="rounded-xl border border-gray-200 overflow-hidden">
-                      <button
-                        onClick={() => { if (panelSection !== 'settle') { setSettleRef(''); setSettleDate('') } setPanelSection(panelSection === 'settle' ? null : 'settle') }}
-                        className="w-full flex items-center gap-3 p-3.5 hover:bg-green-50 text-left transition-colors group"
-                      >
-                        <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
-                          <CheckCircle className="w-4 h-4 text-green-700" />
-                        </div>
-                        <div>
-                          <div className="font-medium text-gray-900 text-sm">Marcar como Liquidada</div>
-                          <div className="text-xs text-gray-500">Registar recibo (referência + data)</div>
-                        </div>
-                      </button>
-                      {panelSection === 'settle' && (
-                        <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
-                          <div>
-                            <label className="text-xs text-gray-500 font-medium">Referência do recibo</label>
-                            <input className="input mt-1" value={settleRef} onChange={(e) => setSettleRef(e.target.value)} placeholder="ex.: FR 2025/12" />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500 font-medium">Data do recibo</label>
-                            <input type="date" className="input mt-1" value={settleDate} onChange={(e) => setSettleDate(e.target.value)} />
-                          </div>
-                          <button
-                            onClick={() => settleReceivable.mutate({ id: panelDoc.id, receiptReference: settleRef.trim(), date: settleDate })}
-                            disabled={settleReceivable.isPending || !settleRef.trim() || !settleDate}
-                            className="btn-primary w-full text-sm py-1.5"
-                          >
-                            {settleReceivable.isPending ? 'A liquidar...' : 'Confirmar liquidação'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Data prometida — bloqueada em faturas pagas/liquidadas; oculta em programadas (SCHEDULED) */}
-                  {panelDoc.status !== 'SCHEDULED' && (
-                  <div className="rounded-xl border border-gray-200 overflow-hidden">
-                    <button
-                      onClick={() => { if (panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID') setPanelSection(panelSection === 'promised' ? null : 'promised') }}
-                      disabled={panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID'}
-                      title={(panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID') ? 'Fatura paga/liquidada — não é possível definir data de pagamento' : undefined}
-                      className={`w-full flex items-center gap-3 p-3.5 text-left transition-colors group ${(panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID') ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50'}`}
-                    >
-                      <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-200 transition-colors">
-                        <Clock className="w-4 h-4 text-blue-700" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="font-medium text-gray-900 text-sm">Definir Data Pagamento</div>
-                        {panelDoc.promisedPaymentDate
-                          ? <div className="text-xs text-blue-600">{formatDate(panelDoc.promisedPaymentDate)}</div>
-                          : <div className="text-xs text-gray-500">{formatDate(panelDoc.dueDate)} <span className="text-gray-400">(vencimento)</span></div>
-                        }
-                      </div>
-                    </button>
-                    {panelSection === 'promised' && panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID' && (
-                      <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
-                        <input type="date" className="input" value={panelPromisedDate || (panelDoc.dueDate ? String(panelDoc.dueDate).slice(0, 10) : '')} onChange={(e) => setPanelPromisedDate(pickWorkday(e.target.value, panelPromisedDate))} />
-                        <div className="flex gap-2">
-                          <button onClick={() => setPromisedDate.mutate({ id: panelDoc.id, date: (panelPromisedDate || (panelDoc.dueDate ? String(panelDoc.dueDate).slice(0, 10) : '')) || null })}
-                            disabled={setPromisedDate.isPending} className="btn-primary flex-1 text-sm py-1.5">
-                            {setPromisedDate.isPending ? 'A guardar...' : 'Guardar'}
-                          </button>
-                          {panelDoc.promisedPaymentDate && (
-                            <button onClick={() => setPromisedDate.mutate({ id: panelDoc.id, date: null })}
-                              disabled={setPromisedDate.isPending} className="btn-secondary text-sm py-1.5 px-3">
-                              Remover
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  )}
-
-                  {/* Dividir Fatura — bloqueada em faturas pagas/liquidadas */}
-                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PAID' || panelDoc.status === 'SETTLED') && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
-                    <div className="rounded-xl border border-gray-200 overflow-hidden">
-                      <button
-                        onClick={() => {
-                          const buildInitialInstallments = (doc: { totalAmount: number | string; dueDate: string }, n: number) => {
-                            const amounts = distributeAmount(Number(doc.totalAmount), n)
-                            return amounts.map((amount, i) => {
-                              const d = new Date(doc.dueDate); d.setMonth(d.getMonth() + i)
-                              return { amount: formatInstallmentValue(amount, 'EUR'), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
-                            })
-                          }
-                          if (panelSection !== 'split') {
-                            setSplitInstallments(buildInitialInstallments(panelDoc, splitCount))
-                            setSplitValueMode('EUR')
-                          }
-                          setPanelSection(panelSection === 'split' ? null : 'split')
-                        }}
-                        disabled={panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID'}
-                        title={(panelDoc.status === 'SETTLED' || panelDoc.status === 'PAID') ? 'Fatura paga/liquidada — não é possível dividir' : undefined}
-                        className="w-full flex items-center gap-3 p-3.5 hover:bg-purple-50 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0 group-hover:bg-purple-200 transition-colors">
-                          <Scissors className="w-4 h-4 text-purple-700" />
-                        </div>
-                        <div>
-                          <div className="font-medium text-gray-900 text-sm">Dividir Fatura</div>
-                          <div className="text-xs text-gray-500">Criar parcelas a partir desta fatura</div>
-                        </div>
-                      </button>
-                      {panelSection === 'split' && panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID' && (
-                        <div className="px-4 pb-4 pt-3 border-t border-gray-100 space-y-3">
-                          {/* Controlo do nº de parcelas */}
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-500 font-medium">Nº de parcelas</span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => {
-                                  const n = Math.max(2, splitCount - 1)
-                                  const total = Number(panelDoc.totalAmount)
-                                  const values = splitValueMode === 'PCT' ? distributePct(n) : distributeAmount(total, n)
-                                  setSplitCount(n)
-                                  setSplitInstallments(Array.from({ length: n }, (_, i) => {
-                                    const d = new Date(splitInstallments[i]?.paymentDate || panelDoc.dueDate)
-                                    if (!splitInstallments[i]?.paymentDate) d.setMonth(d.getMonth() + i)
-                                    return { amount: formatInstallmentValue(values[i], splitValueMode), paymentDate: shiftToWorkday(d.toISOString().slice(0, 10)) }
-                                  }))
-                                }}
-                                className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
-                              >−</button>
-                              <span className="w-8 text-center text-sm font-semibold text-gray-800">{splitCount}</span>
-                              <button
-                                onClick={() => {
-                                  const n = splitCount + 1
-                                  const total = Number(panelDoc.totalAmount)
-                                  const values = splitValueMode === 'PCT' ? distributePct(n) : distributeAmount(total, n)
-                                  setSplitCount(n)
-                                  setSplitInstallments(Array.from({ length: n }, (_, i) => {
-                                    const prevDate = splitInstallments[i - 1]?.paymentDate
-                                    const d = prevDate
-                                      ? (() => { const dd = new Date(prevDate); dd.setMonth(dd.getMonth() + 1); return dd })()
-                                      : (() => { const dd = new Date(panelDoc.dueDate); dd.setMonth(dd.getMonth() + i); return dd })()
-                                    const existingDate = splitInstallments[i]?.paymentDate || shiftToWorkday(d.toISOString().slice(0, 10))
-                                    return { amount: formatInstallmentValue(values[i], splitValueMode), paymentDate: existingDate }
-                                  }))
-                                }}
-                                className="w-6 h-6 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 flex items-center justify-center text-sm font-bold"
-                              >+</button>
-                            </div>
-                          </div>
-
-                          {/* Toggle €/% */}
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-500 font-medium">Tipo de valor</span>
-                            <div className="flex border border-gray-200 rounded-lg overflow-hidden text-xs">
-                              <button
-                                onClick={() => {
-                                  if (splitValueMode === 'PCT') {
-                                    const total = Number(panelDoc.totalAmount)
-                                    const pcts = splitInstallments.map((x) => parseFloat(x.amount) || 0)
-                                    const eurs = convertPctToEur(pcts, total)
-                                    setSplitInstallments(splitInstallments.map((x, i) => ({ ...x, amount: formatInstallmentValue(eurs[i], 'EUR') })))
-                                    setSplitValueMode('EUR')
-                                  }
-                                }}
-                                className={`px-3 py-1 transition-colors ${splitValueMode === 'EUR' ? 'bg-primary-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
-                              >€</button>
-                              <button
-                                onClick={() => {
-                                  if (splitValueMode === 'EUR') {
-                                    const total = Number(panelDoc.totalAmount)
-                                    const eurs = splitInstallments.map((x) => parseFloat(x.amount) || 0)
-                                    const pcts = convertEurToPct(eurs, total)
-                                    setSplitInstallments(splitInstallments.map((x, i) => ({ ...x, amount: formatInstallmentValue(pcts[i], 'PCT') })))
-                                    setSplitValueMode('PCT')
-                                  }
-                                }}
-                                className={`px-3 py-1 transition-colors ${splitValueMode === 'PCT' ? 'bg-primary-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
-                              >%</button>
-                            </div>
-                          </div>
-
-                          {/* Lista de parcelas */}
-                          <div className="flex gap-1.5 items-center text-[11px] text-gray-500 font-medium px-1">
-                            <span className="w-4 flex-shrink-0" />
-                            <span className="flex-1">Valor</span>
-                            <span className="flex-1">Data de pagamento</span>
-                            {splitInstallments.length > 2 && <span className="w-6" />}
-                          </div>
-                          {splitInstallments.map((inst, i) => (
-                            <div key={i} className="flex gap-1.5 items-center">
-                              <span className="text-xs text-gray-400 w-4 flex-shrink-0 text-right">{i + 1}.</span>
-                              <div className="relative flex-1">
-                                <input type="number" step="0.01" min="0"
-                                  max={splitValueMode === 'PCT' ? '100' : undefined}
-                                  placeholder="0.00"
-                                  className="input text-sm py-1.5 pr-6 w-full"
-                                  value={inst.amount}
-                                  onChange={(e) => setSplitInstallments(splitInstallments.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} />
-                                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">{splitValueMode === 'EUR' ? '€' : '%'}</span>
-                              </div>
-                              <input type="date" className="input text-sm py-1.5 flex-1"
-                                value={inst.paymentDate}
-                                onChange={(e) => setSplitInstallments(splitInstallments.map((x, j) => j === i ? { ...x, paymentDate: pickWorkday(e.target.value, x.paymentDate) } : x))} />
-                              {splitInstallments.length > 2 && (
-                                <button onClick={() => { setSplitInstallments(splitInstallments.filter((_, j) => j !== i)); setSplitCount(splitCount - 1) }} className="p-1 text-gray-300 hover:text-red-500"><X className="w-3.5 h-3.5" /></button>
-                              )}
-                            </div>
-                          ))}
-
-                          {/* Validação */}
-                          {(() => {
-                            const total = Number(panelDoc.totalAmount)
-                            const sum = splitInstallments.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0)
-                            if (splitValueMode === 'EUR') {
-                              const diff = sum - total
-                              if (diff > 0.001) {
-                                const pct = total > 0 ? (diff / total * 100).toFixed(3) : '0.000'
-                                return <p className="text-xs text-red-600 font-medium">Acima por {formatCurrency(diff)} ({pct}%) — soma: {formatCurrency(sum)}</p>
-                              }
-                              if (diff < -0.001) {
-                                const pct = total > 0 ? (Math.abs(diff) / total * 100).toFixed(3) : '0.000'
-                                return <p className="text-xs text-red-600 font-medium">Abaixo por {formatCurrency(Math.abs(diff))} ({pct}%) — soma: {formatCurrency(sum)}</p>
-                              }
-                              return <p className="text-xs text-green-600 font-medium">✓ Soma correcta: {formatCurrency(sum)}</p>
-                            } else {
-                              const diff = sum - 100
-                              if (diff > 0.001) {
-                                const eur = (diff / 100 * total)
-                                return <p className="text-xs text-red-600 font-medium">Acima por {diff.toFixed(3)}% ({formatCurrency(eur)}) — total: {sum.toFixed(3)}%</p>
-                              }
-                              if (diff < -0.001) {
-                                const eur = (Math.abs(diff) / 100 * total)
-                                return <p className="text-xs text-red-600 font-medium">Abaixo por {Math.abs(diff).toFixed(3)}% ({formatCurrency(eur)}) — total: {sum.toFixed(3)}%</p>
-                              }
-                              return <p className="text-xs text-green-600 font-medium">✓ Total: 100%</p>
-                            }
-                          })()}
-
-                          <button
-                            onClick={() => {
-                              const total = Number(panelDoc.totalAmount)
-                              const rawValues = splitInstallments.map((x) => parseFloat(x.amount) || 0)
-                              const finalEurs = splitValueMode === 'PCT'
-                                ? convertPctToEur(rawValues, total)
-                                : (() => {
-                                  const cents = rawValues.reduce((s, v) => s + Math.round(v * 100), 0)
-                                  const target = Math.round(total * 100)
-                                  if (cents === target) return rawValues
-                                  return rawValues.map((v, i) =>
-                                    i === rawValues.length - 1 ? (Math.round(v * 100) + (target - cents)) / 100 : v,
-                                  )
-                                })()
-                              const installments = splitInstallments.map((x, i) => ({
-                                amount: finalEurs[i],
-                                promisedPaymentDate: x.paymentDate,
-                              }))
-                              splitReceivable.mutate({ id: panelDoc.id, installments })
-                            }}
-                            disabled={(() => {
-                              if (splitReceivable.isPending || splitInstallments.some((x) => !x.amount || !x.paymentDate)) return true
-                              const total = Number(panelDoc.totalAmount)
-                              const sum = splitInstallments.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0)
-                              if (splitValueMode === 'EUR') return Math.abs(sum - total) > 0.001
-                              return Math.abs(sum - 100) > 0.001
-                            })()}
-                            className="btn-primary w-full text-sm py-1.5"
-                          >
-                            {splitReceivable.isPending ? 'A dividir...' : `Confirmar divisão em ${splitInstallments.length} parcelas`}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Anexar documento — abaixo das restantes ações */}
-                  {selectedClientId && (
-                    <InvoiceAttachmentsButton
-                      clientId={selectedClientId}
-                      direction="RECEIVABLE"
-                      docId={panelDoc.id}
-                      origin={panelDoc.origin}
-                    />
-                  )}
-
-                  {/* Info adicional */}
-                  {(panelDoc.description || panelDoc.category) && (
-                    <div className="mt-4 pt-4 border-t border-gray-100 space-y-2 text-xs text-gray-500">
-                      {panelDoc.description && <div><span className="font-medium text-gray-700">Descrição:</span> {panelDoc.description}</div>}
-                      {panelDoc.category && <div><span className="font-medium text-gray-700">Categoria:</span> {panelDoc.category.name}</div>}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {panelTab === 'parcelas' && (() => {
-                const kids = panelDocDetail?.children ?? panelDoc.children ?? []
-                if (kids.length === 0) {
-                  return (
-                    <div className="flex flex-col items-center justify-center h-40 text-gray-400 text-sm text-center px-4">
-                      <Scissors className="w-8 h-8 mb-2 opacity-30" />
-                      Esta fatura não está dividida em parcelas
-                    </div>
-                  )
-                }
-                const allOpen = kids.every((c) => c.status === 'OPEN')
-                return (
-                  <div className="space-y-2">
-                    <div className="text-xs font-medium text-gray-400 uppercase tracking-wide">{kids.length} parcelas</div>
-                    {kids.map((child, i) => (
-                      <button key={child.id}
-                        onClick={() => { setPanelDoc(child as Receivable); setPanelTab('details'); setPanelSection(null); setPanelPromisedDate(child.promisedPaymentDate?.slice(0, 10) ?? ''); setSplitCount(2); setSplitValueMode('EUR') }}
-                        className="w-full text-left rounded-lg border border-gray-200 p-2.5 hover:bg-primary-50 hover:border-primary-200 transition-colors">
-                        <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-xs text-gray-400">Parcela {i + 1}</span>
-                          <Badge variant={statusVariant(child.status)}>{statusLabel(child.status, false)}</Badge>
-                        </div>
-                        <div className="font-semibold text-sm text-gray-900">{formatCurrency(child.totalAmount)}</div>
-                        <div className="text-xs text-gray-500">{child.reference} · Pag. {formatDate(child.promisedPaymentDate ?? child.dueDate)}</div>
-                      </button>
-                    ))}
-                    {!panelDoc.recurrenceId && (
-                      <button
-                        onClick={() => unsplitReceivable.mutate(panelDoc.id)}
-                        disabled={unsplitReceivable.isPending || !allOpen}
-                        title={!allOpen ? 'Não é possível desfazer: algumas parcelas já foram pagas' : undefined}
-                        className={`w-full text-xs px-3 py-1.5 rounded-lg transition-colors ${allOpen ? 'text-orange-700 hover:text-red-700 border border-orange-200 hover:border-red-300 hover:bg-red-50' : 'text-gray-400 border border-gray-200 cursor-not-allowed'}`}
-                      >
-                        {unsplitReceivable.isPending ? 'A desfazer...' : 'Desfazer divisão'}
-                      </button>
-                    )}
-                  </div>
-                )
-              })()}
-
-              {panelTab === 'followups' && selectedClientId && (
-                <FollowupsPanel
-                  clientId={selectedClientId}
-                  direction="RECEIVABLE"
-                  doc={{
-                    id: panelDoc.id,
-                    reference: panelDoc.reference,
-                    entityName: panelDoc.entityName,
-                    totalAmount: panelDoc.totalAmount,
-                    dueDate: panelDoc.dueDate,
-                    origin: panelDoc.origin as 'TOC' | 'LOCAL',
-                    tocSalesDocId: panelDoc.tocSalesDocId ?? (panelTocDoc ? String(panelTocDoc.id) : null),
-                  }}
-                />
-              )}
-            </div>
-          </div>
+          <DocDetailPanel
+            docId={panelDoc.id}
+            docType="receivable"
+            variant="drawer"
+            entityNav={{ from: '/contas-a-receber', fromLabel: 'Contas a Receber' }}
+            onClose={() => setPanelDoc(null)}
+            onMutated={() => { qc.invalidateQueries({ queryKey: ['receivables'] }); qc.invalidateQueries({ queryKey: ['receivables-kpis'] }) }}
+            onEdit={() => {
+              if (!panelDoc) return
+              setEditId(panelDoc.id)
+              setEditRow(panelDoc)
+              setEditForm({
+                categoryId: panelDoc.category?.id ?? '',
+                entityName: panelDoc.entityName,
+                reference: panelDoc.reference,
+                documentDate: panelDoc.documentDate?.slice(0, 10) ?? '',
+                dueDate: panelDoc.dueDate.slice(0, 10),
+                totalAmount: String(panelDoc.totalAmount),
+                description: panelDoc.description ?? '',
+              })
+            }}
+            onDelete={() => { if (panelDoc) setDeleteRow(panelDoc) }}
+          />
         )}
 
         {createPortal(
@@ -3004,9 +2129,6 @@ export default function ReceivablesPage() {
               const match = (data?.items ?? []).find((r) => r._tocRaw && String(r._tocRaw.id) === String(receivableId))
               if (!match || !match._tocRaw) return
               setPanelDoc(match)
-              setPanelTocDoc(match._tocRaw)
-              setPanelTab('details')
-              setPanelSection(null)
               setDetailReceipt(null)
             }}
           />,
