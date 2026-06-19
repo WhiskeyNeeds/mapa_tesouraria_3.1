@@ -18,11 +18,12 @@ import {
 import {
   distributeAmount, distributePct, convertEurToPct, convertPctToEur, formatInstallmentValue,
 } from '@/lib/installmentMath'
-import { CreditCard, Clock, Scissors, CheckCircle, ChevronLeft, X, Wallet, Eye, Pencil, XCircle, Trash2 } from 'lucide-react'
+import { CreditCard, Clock, Scissors, CheckCircle, ChevronLeft, X, Wallet, Eye, Pencil, XCircle, Trash2, ArrowUpRight } from 'lucide-react'
 import Badge from '@/components/ui/Badge'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import RemoveFromFuturePaymentsDialog from '@/components/treasury/RemoveFromFuturePaymentsDialog'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
+import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
 import PaymentDetailModal, { type TocPayment } from '@/components/treasury/PaymentDetailModal'
 
@@ -54,6 +55,7 @@ interface Doc {
   tocSupplierId?: string | null
   tocCustomerId?: string | null
   category?: DocCategory | null
+  budget?: { id: string; name: string; color?: string | null } | null
   children?: DocChild[]
   settledVia?: 'LOCAL' | 'INSTALLMENTS' | 'RECONCILIATION' | null
   paymentReference?: string | null
@@ -127,6 +129,17 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
     enabled: !!selectedClientId,
   })
 
+  const { data: budgets = [] } = useQuery<{ id: string; name: string; color?: string | null }[]>({
+    queryKey: [isExpense ? 'budgets-expense-active' : 'budgets-revenue-active', selectedClientId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/budgets?type=${isExpense ? 'EXPENSE' : 'REVENUE'}&status=ACTIVE`),
+    enabled: !!selectedClientId,
+  })
+
+  // Estado SCHEDULED ("Programada"/amarelo) — paridade com o painel inline.
+  // Delegam o resto aos helpers partilhados sem os alterar globalmente.
+  const docStatusLabel = (s: string) => s === 'SCHEDULED' ? 'Programada' : statusLabel(s)
+  const docStatusVariant = (s: string) => s === 'SCHEDULED' ? 'yellow' : statusVariant(s)
+
   const tocDocId = isExpense ? doc?.tocPurchasesDocId : doc?.tocSalesDocId
   const { data: tocPayments = [] } = useQuery<TocPayment[]>({
     queryKey: ['toc-doc-payments', selectedClientId, seg, tocDocId],
@@ -183,6 +196,13 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
     mutationFn: (categoryId: string | null) =>
       api.patch(`/treasury/${selectedClientId}/${seg}/${currentId}`, { categoryId }),
     onSuccess: () => { invalidate(); toast.success('Categoria atualizada') },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const classifyBudget = useMutation({
+    mutationFn: (budgetId: string | null) =>
+      api.patch(`/treasury/${selectedClientId}/${seg}/${currentId}`, { budgetId }),
+    onSuccess: (_, budgetId) => { invalidate(); toast.success(budgetId === null ? 'Budget removido' : 'Budget atribuído') },
     onError: (e: Error) => toast.error(e.message),
   })
 
@@ -361,7 +381,7 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
           {doc.reference || '—'} · Venc. {formatDate(doc.dueDate)} · Pag. {formatDate(doc.promisedPaymentDate ?? doc.dueDate)}
         </div>
         <div className="mt-2 flex items-center gap-2 flex-wrap">
-          <Badge variant={statusVariant(doc.status)}>{statusLabel(doc.status)}</Badge>
+          <Badge variant={docStatusVariant(doc.status)}>{docStatusLabel(doc.status)}</Badge>
           {(() => {
             const n = (doc.children ?? []).filter((c) => !c.recurrenceId).length
             return n > 0 ? (
@@ -376,6 +396,24 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
             typeLabel={isExpense ? 'Despesa' : 'Receita'}
             onSelect={(categoryId) => classifyDoc.mutate(categoryId)}
           />
+          <span className="inline-flex items-center gap-1">
+            <InlineBudgetPicker
+              budget={doc.budget}
+              budgets={budgets}
+              onSelect={(budgetId) => classifyBudget.mutate(budgetId)}
+            />
+            {doc.budget && (
+              <button
+                onClick={() => navigate(`/budgets?budget=${doc.budget!.id}`)}
+                title={`Ir para o budget "${doc.budget.name}"`}
+                aria-label={`Ir para o budget ${doc.budget.name}`}
+                style={{ color: doc.budget.color ?? '#3b82f6' }}
+                className="budget-goto inline-flex items-center justify-center w-6 h-6 rounded-full flex-shrink-0"
+              >
+                <ArrowUpRight className="budget-goto-arrow w-3.5 h-3.5" strokeWidth={2.5} />
+              </button>
+            )}
+          </span>
           {doc.promisedPaymentDate && (
             <span className="text-xs text-blue-600 flex items-center gap-1">
               <Clock className="w-3 h-3" />{formatDate(doc.promisedPaymentDate)}
@@ -956,7 +994,7 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
                   >
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="text-xs text-gray-400">Parcela {i + 1}</span>
-                      <Badge variant={statusVariant(child.status)}>{statusLabel(child.status)}</Badge>
+                      <Badge variant={docStatusVariant(child.status)}>{docStatusLabel(child.status)}</Badge>
                     </div>
                     <div className="font-semibold text-sm text-gray-900">{formatCurrency(child.totalAmount)}</div>
                     <div className="text-xs text-gray-500">{child.reference} · Pag. {formatDate(child.promisedPaymentDate ?? child.dueDate)}</div>
