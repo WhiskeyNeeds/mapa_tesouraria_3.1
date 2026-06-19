@@ -117,7 +117,7 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
     return next
   }
 
-  const { data: doc, isLoading } = useQuery<Doc>({
+  const { data: doc, isLoading, isError } = useQuery<Doc>({
     queryKey: ['doc-detail', selectedClientId, seg, currentId],
     queryFn: () => api.get(`/treasury/${selectedClientId}/${seg}/${currentId}`),
     enabled: !!selectedClientId && !!currentId,
@@ -267,6 +267,17 @@ export default function DocDetailPanel({ docId, docType, variant = 'modal', onCl
   const shellClass = variant === 'drawer'
     ? 'fixed inset-0 z-50 w-full bg-white flex flex-col overflow-hidden lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:w-80 xl:w-96 lg:flex-shrink-0 lg:h-[calc(100vh-4rem)] lg:border-l lg:border-gray-200'
     : 'flex flex-col h-full'
+
+  if (isError && !isLoading) {
+    return (
+      <div className={variant === 'drawer' ? shellClass + ' items-center justify-center gap-3' : 'flex flex-col items-center justify-center h-48 gap-3'}>
+        <span className="text-sm text-gray-500">Não foi possível carregar este documento.</span>
+        <button onClick={onClose} className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition-colors">
+          Fechar
+        </button>
+      </div>
+    )
+  }
 
   if (isLoading || !doc) {
     return (
