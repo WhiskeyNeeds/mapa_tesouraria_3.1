@@ -575,6 +575,34 @@ export class TreasuryReceivablesService {
     return { ...item, _tocOverlay: null as Awaited<ReturnType<PrismaClient['tocSalesDocument']['findUnique']>> }
   }
 
+  /** Como `getById`, mas enriquece os campos de exibição (entidade, referência,
+   *  datas, total, pendente, recebido, estado) com o overlay do TOConline — igual
+   *  ao que a listagem faz. Usado pelas rotas de LEITURA do detalhe (painel). As
+   *  escritas continuam a usar `getById` (valores locais crus) para o gating. */
+  async getDetail(clientId: string, id: string) {
+    const item = await this.getById(clientId, id)
+    const rec = item as Record<string, unknown>
+    const tocDoc = rec._tocOverlay as TocSalesDocument | null | undefined
+    if (!('_src' in rec) && tocDoc && rec.tocSalesDocId) {
+      const enriched = overlayLocalWithToc(item as unknown as LocalReceivableRow, tocDoc)
+      if (enriched) {
+        return {
+          ...item,
+          entityName: enriched.entityName,
+          reference: enriched.reference,
+          documentDate: enriched.documentDate,
+          dueDate: enriched.dueDate,
+          totalAmount: enriched.totalAmount,
+          pendingAmount: enriched.pendingAmount,
+          receivedAmount: enriched.receivedAmount,
+          status: enriched.status,
+          _tocRaw: enriched._tocRaw,
+        }
+      }
+    }
+    return item
+  }
+
   async create(clientId: string, userId: string, data: {
     categoryId?: string
     entityName?: string

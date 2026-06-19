@@ -515,6 +515,36 @@ export class TreasuryPayablesService {
     return { ...item, _tocOverlay: null as Awaited<ReturnType<PrismaClient['tocPurchaseDocument']['findUnique']>> }
   }
 
+  /** Como `getById`, mas enriquece os campos de exibição (entidade, referência,
+   *  datas, total, pendente, pago, estado) com o overlay do TOConline — igual ao
+   *  que a listagem faz. Usado pelas rotas de LEITURA do detalhe (painel). As
+   *  escritas continuam a usar `getById` (valores locais crus) para o gating, por
+   *  isso não são afetadas. */
+  async getDetail(clientId: string, id: string) {
+    const item = await this.getById(clientId, id)
+    const rec = item as Record<string, unknown>
+    const tocDoc = rec._tocOverlay as TocPurchaseDocument | null | undefined
+    // Só enriquece registos LOCAIS com espelho TOC (os de TOC puro já vêm mapeados, com `_src`).
+    if (!('_src' in rec) && tocDoc && rec.tocPurchasesDocId) {
+      const enriched = overlayLocalPayableWithToc(item as unknown as LocalPayableRow, tocDoc)
+      if (enriched) {
+        return {
+          ...item,
+          entityName: enriched.entityName,
+          reference: enriched.reference,
+          documentDate: enriched.documentDate,
+          dueDate: enriched.dueDate,
+          totalAmount: enriched.totalAmount,
+          pendingAmount: enriched.pendingAmount,
+          paidAmount: enriched.paidAmount,
+          status: enriched.status,
+          _tocRaw: enriched._tocRaw,
+        }
+      }
+    }
+    return item
+  }
+
   async create(clientId: string, userId: string, data: {
     categoryId?: string
     entityName?: string
