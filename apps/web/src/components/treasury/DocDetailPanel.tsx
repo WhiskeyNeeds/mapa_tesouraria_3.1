@@ -54,13 +54,17 @@ type Section = 'promised' | 'split' | null
 interface Props {
   docId: string
   docType: DocType
+  variant?: 'drawer' | 'modal'
   /** chamado quando a acção elimina ou fecha o painel */
   onClose: () => void
   /** chamado após qualquer mutação com sucesso para actualizar listas externas */
   onMutated?: () => void
+  onEdit?: (doc: Doc) => void
+  onDelete?: (doc: Doc) => void
+  entityNav?: { from: string; fromLabel: string }
 }
 
-export default function DocDetailPanel({ docId, docType, onClose, onMutated }: Props) {
+export default function DocDetailPanel({ docId, docType, variant = 'modal', onClose, onMutated, onEdit: _onEdit, onDelete: _onDelete, entityNav: _entityNav }: Props) {
   const { selectedClientId } = useAuth()
   const toast = useToast()
   const qc = useQueryClient()
@@ -186,9 +190,13 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
     setSplitValueMode('EUR')
   }
 
+  const shellClass = variant === 'drawer'
+    ? 'fixed inset-0 z-50 w-full bg-white flex flex-col overflow-hidden lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:w-80 xl:w-96 lg:flex-shrink-0 lg:h-[calc(100vh-4rem)] lg:border-l lg:border-gray-200'
+    : 'flex flex-col h-full'
+
   if (isLoading || !doc) {
     return (
-      <div className="flex items-center justify-center h-48">
+      <div className={variant === 'drawer' ? shellClass + ' items-center justify-center' : 'flex items-center justify-center h-48'}>
         <span className="text-sm text-gray-400">A carregar...</span>
       </div>
     )
@@ -212,7 +220,7 @@ export default function DocDetailPanel({ docId, docType, onClose, onMutated }: P
   ]
 
   return (
-    <div className="flex flex-col h-full">
+    <div className={shellClass}>
       {/* Cabeçalho */}
       <div className="p-5 border-b border-gray-100 flex-shrink-0">
         <div className="flex items-start justify-between mb-3">
