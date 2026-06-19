@@ -529,6 +529,7 @@ export class TreasuryReceivablesService {
         where: { clientId, tocSalesDocId, deletedAt: null },
         include: {
           category: true,
+          budget: { select: { id: true, name: true, color: true } },
           recurrence: true,
           reconciliationLinks: { include: { reconciliation: true } },
           children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
@@ -555,6 +556,7 @@ export class TreasuryReceivablesService {
       where: { id, clientId, deletedAt: null },
       include: {
         category: true,
+        budget: { select: { id: true, name: true, color: true } },
         recurrence: true,
         reconciliationLinks: { include: { reconciliation: true } },
         children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
