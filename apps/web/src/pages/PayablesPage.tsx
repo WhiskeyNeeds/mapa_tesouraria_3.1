@@ -1,11 +1,10 @@
-import { Fragment, useState, useMemo, useEffect } from 'react'
-import { createPortal } from 'react-dom'
+import { Fragment, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
-import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel } from '@/lib/utils'
+import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant } from '@/lib/utils'
 import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
 import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle'
 import Badge from '@/components/ui/Badge'
@@ -17,8 +16,7 @@ import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import DocDetailPanel from '@/components/treasury/DocDetailPanel'
-import PaymentDetailModal, { type TocPayment } from '@/components/treasury/PaymentDetailModal'
-import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, Repeat2, ChevronRight, ChevronDown, Wallet, Tags, FileClock, AlertTriangle, CalendarClock, TimerOff } from 'lucide-react'
+import { Plus, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, Repeat2, Wallet, Tags, FileClock, AlertTriangle, CalendarClock, TimerOff } from 'lucide-react'
 
 /** Separa o montante formatado do símbolo de moeda para os estilizar à parte. */
 function splitMoney(value: number): { amount: string; symbol: string } {
@@ -113,68 +111,6 @@ const emptyOutrasForm = {
 
 type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc; item: Payable }
 
-function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { clientId: string; tocDocId: string; entityName: string; onPaymentClick: (pm: TocPayment) => void }) {
-  const { data: payments = [], isLoading } = useQuery<TocPayment[]>({
-    queryKey: ['toc-purchase-payments', clientId, tocDocId],
-    queryFn: () => api.get(`/toconline/${clientId}/purchases/${tocDocId}/payments`),
-  })
-
-  if (isLoading) {
-    return (
-      <tr>
-        <td colSpan={12} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-          <RefreshCw className="inline w-3 h-3 animate-spin mr-1.5" />A carregar pagamentos...
-        </td>
-      </tr>
-    )
-  }
-
-  if (!payments.length) {
-    return (
-      <tr>
-        <td colSpan={12} className="pl-14 py-2 text-xs text-gray-400 bg-gray-50/60 border-b border-gray-100">
-          Sem pagamentos associados
-        </td>
-      </tr>
-    )
-  }
-
-  return (
-    <>
-      {payments.map((pm) => (
-        <tr
-          key={String(pm.id)}
-          className="bg-gray-50/60 border-b border-gray-100/80 cursor-pointer hover:bg-red-50/40"
-          onClick={() => onPaymentClick(pm)}
-        >
-          <td className="px-3 py-2" />
-          <td className="px-2 py-2" />
-          <td className="pl-2 pr-3 py-2">
-            <div className="flex items-center gap-2 text-xs">
-              <ChevronRight className="w-3 h-3 text-teal-400 flex-shrink-0" />
-              <span className="text-gray-700 font-medium">{pm.document_no}</span>
-            </div>
-          </td>
-          <td className="px-3 py-2 text-xs text-gray-500">{entityName}</td>
-          <td className="px-3 py-2" />
-          <td className="px-3 py-2 text-xs text-gray-500">{pm.date ? formatDate(pm.date) : '—'}</td>
-          <td className="px-3 py-2" />
-          <td className="px-3 py-2 text-right text-xs text-gray-600 font-medium">
-            {(() => {
-              const forDoc = pm._paid_for_doc != null ? Number(pm._paid_for_doc) : null
-              const showSplit = forDoc != null && forDoc !== Number(pm.gross_total)
-              return <>−{formatCurrency(forDoc ?? pm.gross_total)}{showSplit && <span className="block text-[10px] text-gray-400 font-normal">de {formatCurrency(pm.gross_total)}</span>}</>
-            })()}
-          </td>
-          <td className="px-3 py-2" />
-          <td className="px-3 py-2" />
-          <td className="px-3 py-2" />
-        </tr>
-      ))}
-    </>
-  )
-}
-
 export default function PayablesPage() {
   const { selectedClientId, isTocEnabled } = useAuth()
   const navigate = useNavigate()
@@ -217,7 +153,6 @@ export default function PayablesPage() {
   const [deleteRow, setDeleteRow] = useState<Payable | null>(null)
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
 
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   // Seleção para atribuição de categoria em massa (âmbito: página visível).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkCategoryId, setBulkCategoryId] = useState('')
@@ -256,16 +191,6 @@ export default function PayablesPage() {
   const [showOutrasContactDropdown, setShowOutrasContactDropdown] = useState(false)
   const [panelDoc, setPanelDoc] = useState<Payable | null>(null)
   // Detalhe de um pagamento TOC aberto a partir das sub-linhas da tabela (expandir).
-  const [detailPayment, setDetailPayment] = useState<TocPayment | null>(null)
-
-  function toggleExpand(id: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
 
   const { data: kpis } = useQuery({
     queryKey: ['payables-kpis', selectedClientId],
@@ -571,7 +496,6 @@ export default function PayablesPage() {
 
   // NCFs (notas de crédito de compra) podem ser reactivadas quando o backend
   // as incluir no payload de payables; por agora o map fica vazio.
-  const tocNcMap = useMemo(() => new Map<string, TocPurchaseDoc[]>(), [])
 
   // A lista vem unificada do backend: cada item traz `_src: 'local' | 'toc'`
   // e `_tocRaw` quando origem TOC. Ordenação, paginação e bucket
@@ -1080,11 +1004,6 @@ export default function PayablesPage() {
                           const total = row.item.totalAmount
                           const pending = row.item.pendingAmount
                           const key = `t-${docId}`
-                          const isExpanded = expandedIds.has(key)
-                          const paymentCount = Array.isArray(d.payments_ids) ? (d.payments_ids as unknown[]).length : 0
-                          const ncs = tocNcMap.get(docId) ?? []
-                          const hasInternalPayment = !!row.item.paymentReference
-                          const expandCount = paymentCount + ncs.length + (hasInternalPayment ? 1 : 0)
                           return (
                             <Fragment key={key}>
                               <tr
@@ -1104,25 +1023,9 @@ export default function PayablesPage() {
                                   <DocLabels splitCount={(row.item.children ?? []).filter((c) => !c.recurrenceId).length} readyToPay={row.item.readyToPay} needsContact={row.item.needsContact} pendingActionDueAt={row.item._pendingActionDueAt} />
                                 </td>
                                 <td className="pl-1 pr-3 py-3">
-                                  <div className="flex items-start gap-1.5">
-                                    {expandCount > 0 ? (
-                                      <button
-                                        onClick={(e) => { e.stopPropagation(); toggleExpand(key) }}
-                                        className="mt-0.5 flex-shrink-0 flex items-center gap-0.5 text-gray-400 hover:text-gray-700 transition-colors"
-                                        title={isExpanded ? 'Ocultar detalhe' : 'Ver pagamentos e notas de crédito'}
-                                      >
-                                        {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                                        <span className="text-xs font-semibold leading-none">{expandCount}</span>
-                                      </button>
-                                    ) : (
-                                      <span className="w-4 flex-shrink-0" />
-                                    )}
-                                    <div>
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="font-medium text-gray-900">{ref}</span>
-                                      </div>
-                                      <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
-                                    </div>
+                                  <div>
+                                    <span className="font-medium text-gray-900">{ref}</span>
+                                    <div className="text-xs text-gray-400">{date ? formatDate(date) : '—'}</div>
                                   </div>
                                 </td>
                                 <td className="px-3 py-3 text-gray-700 truncate">
@@ -1182,61 +1085,6 @@ export default function PayablesPage() {
                                   />
                                 </td>
                               </tr>
-                              {isExpanded && (
-                                <>
-                                  {ncs.map((nc) => (
-                                    <tr key={`nc-${nc.id}`} className="bg-amber-50/40 border-b border-amber-100/80">
-                                      <td className="px-3 py-2" />
-                                      <td className="px-2 py-2" />
-                                      <td className="pl-2 pr-3 py-2">
-                                        <div className="flex items-center gap-2 text-xs">
-                                          <span className="text-[10px] font-bold uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-700 flex-shrink-0">NC</span>
-                                          <div>
-                                            <div className="text-gray-700 font-medium">{nc.document_no}</div>
-                                            <div className="text-gray-400">{nc.date ? formatDate(nc.date) : '—'}</div>
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="px-3 py-2 text-xs text-gray-500">{supplier}</td>
-                                      <td className="px-3 py-2" />
-                                      <td className="px-3 py-2 text-xs text-gray-400">{(nc.due_date as string | undefined) ? formatDate(nc.due_date as string) : '—'}</td>
-                                      <td className="px-3 py-2 text-right text-xs text-amber-700 font-medium">−{formatCurrency(nc.gross_total)}</td>
-                                      <td className="px-3 py-2" />
-                                      <td className="px-3 py-2"><Badge variant="yellow">{tocStatusLabel(nc.status)}</Badge></td>
-                                      <td className="px-3 py-2" />
-                                      <td className="px-3 py-2" />
-                                    </tr>
-                                  ))}
-                                  {paymentCount > 0 && (
-                                    <PaymentSubRows
-                                      clientId={selectedClientId!}
-                                      tocDocId={docId}
-                                      entityName={supplier}
-                                      onPaymentClick={setDetailPayment}
-                                    />
-                                  )}
-                                  {hasInternalPayment && (
-                                    <tr className="bg-gray-50/60 border-b border-gray-100/80">
-                                      <td className="px-3 py-2" />
-                                      <td className="px-2 py-2" />
-                                      <td className="pl-2 pr-3 py-2">
-                                        <div className="flex items-center gap-2 text-xs">
-                                          <span className="text-[10px] font-bold uppercase px-1 py-0.5 rounded bg-slate-100 text-slate-600 flex-shrink-0">Interno</span>
-                                          <span className="text-gray-700 font-medium">{row.item.paymentReference}</span>
-                                        </div>
-                                      </td>
-                                      <td className="px-3 py-2 text-xs text-gray-500">{supplier}</td>
-                                      <td className="px-3 py-2" />
-                                      <td className="px-3 py-2 text-xs text-gray-500">{row.item.paymentDate ? formatDate(row.item.paymentDate) : '—'}</td>
-                                      <td className="px-3 py-2" />
-                                      <td className="px-3 py-2 text-right text-xs text-gray-600 font-medium">−{formatCurrency(row.item.paymentAmount ?? 0)}</td>
-                                      <td className="px-3 py-2" />
-                                      <td className="px-3 py-2" />
-                                      <td className="px-3 py-2" />
-                                    </tr>
-                                  )}
-                                </>
-                              )}
                             </Fragment>
                           )
                         })}
@@ -1987,24 +1835,6 @@ export default function PayablesPage() {
           />
         )}
 
-        {/* Detalhe de pagamento TOC aberto a partir das sub-linhas da tabela. */}
-        {createPortal(
-          <PaymentDetailModal
-            open={!!detailPayment}
-            onClose={() => setDetailPayment(null)}
-            payment={detailPayment}
-            clientId={selectedClientId ?? ''}
-            entityName={panelDoc?.entityName ?? ''}
-            linesEndpoint={(c, id) => `/toconline/${c}/purchase-payments/${id}/lines`}
-            onInvoiceClick={(payableId) => {
-              const match = (data?.items ?? []).find((p) => p._tocRaw && String(p._tocRaw.id) === String(payableId))
-              if (!match) return
-              setPanelDoc(match)
-              setDetailPayment(null)
-            }}
-          />,
-          document.body
-        )}
       </div>
     </>
   )
