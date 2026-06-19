@@ -18,6 +18,7 @@ import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
 import RemoveFromFuturePaymentsDialog from '@/components/treasury/RemoveFromFuturePaymentsDialog'
+import PaymentDetailModal, { type TocPayment } from '@/components/treasury/PaymentDetailModal'
 import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye, Wallet, Tags, FileClock, AlertTriangle, CalendarClock, TimerOff } from 'lucide-react'
 import FollowupsPanel from '@/components/followups/FollowupsPanel'
 import InvoiceAttachmentsButton from '@/components/followups/InvoiceAttachmentsButton'
@@ -59,33 +60,6 @@ interface TocPurchaseDoc {
   currency_iso_code: string
   external_reference?: string
   notes?: string
-  [key: string]: unknown
-}
-
-interface TocPayment {
-  id: number | string
-  document_no: string
-  date: string
-  gross_total: number
-  net_total?: number
-  _paid_for_doc?: number | null
-  [key: string]: unknown
-}
-
-interface PaymentLine {
-  payable_id: number | string
-  paid_value: number
-  gross_total: number
-  net_total?: number
-  settlement_percentage?: number
-  settlement_amount?: number
-  retention_total?: number
-  document_no?: string
-  _doc_date?: string
-  _doc_due_date?: string
-  _doc_gross_total?: number
-  _doc_pending_total?: number
-  _doc_external_reference?: string
   [key: string]: unknown
 }
 
@@ -141,125 +115,6 @@ const emptyOutrasForm = {
 
 
 type Row = { _src: 'local'; p: Payable } | { _src: 'toc'; d: TocPurchaseDoc; item: Payable }
-
-function PaymentDetailModal({
-  open, onClose, payment, clientId, entityName, onInvoiceClick,
-}: {
-  open: boolean
-  onClose: () => void
-  payment: TocPayment | null
-  clientId: string
-  entityName: string
-  onInvoiceClick?: (payableId: string | number) => void
-}) {
-  const { data: lines = [], isLoading } = useQuery<PaymentLine[]>({
-    queryKey: ['toc-payment-lines', clientId, String(payment?.id ?? '')],
-    queryFn: () => api.get(`/toconline/${clientId}/purchase-payments/${payment!.id}/lines`),
-    enabled: open && !!payment,
-  })
-
-  if (!open || !payment) return null
-
-  const series = payment.document_no?.match(/[A-Z]+\s+(\d+)\//)?.[1] ?? ''
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl animate-scale-in overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-100">
-          <h2 className="text-sm font-semibold text-gray-900 truncate pr-4">
-            {payment.document_no} - {entityName}
-          </h2>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="flex items-start gap-6 px-6 py-4 border-b border-gray-100">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-gray-400 mb-0.5">Data de pagamento</div>
-            <div className="text-sm font-medium text-gray-700">{formatDate(payment.date)}</div>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-gray-400 mb-0.5">Série de Pagamento</div>
-            <div className="text-sm font-medium text-gray-700">{series || '—'}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-xs text-gray-400 mb-0.5">Total pago</div>
-            <div className="text-xl font-bold text-gray-800">{formatCurrency(payment.gross_total)}</div>
-          </div>
-        </div>
-
-        <div className="px-6 py-4 max-h-[calc(100vh-20rem)] overflow-y-auto">
-          <h3 className="text-sm font-semibold text-slate-900 mb-3">
-            Documento(s) liquidados ({isLoading ? '…' : lines.length})
-          </h3>
-          {isLoading ? (
-            <div className="flex items-center gap-2 py-8 text-sm text-gray-400 justify-center">
-              <RefreshCw className="w-4 h-4 animate-spin" />A carregar documentos...
-            </div>
-          ) : lines.length === 0 ? (
-            <div className="py-8 text-sm text-gray-400 text-center">Sem documentos associados</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="bg-gray-50 text-gray-600">
-                    <th className="px-3 py-2 text-left font-medium text-xs">Documento</th>
-                    <th className="px-3 py-2 text-left font-medium">Vossa referência</th>
-                    <th className="px-3 py-2 text-right font-medium">Valor total</th>
-                    <th className="px-3 py-2 text-right font-medium">Valor pendente</th>
-                    <th className="px-3 py-2 text-right font-medium">Valor retido</th>
-                    <th className="px-3 py-2 text-right font-medium">% desc. financ.</th>
-                    <th className="px-3 py-2 text-right font-medium">Valor desconto</th>
-                    <th className="px-3 py-2 text-right font-medium">Valor pago</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((line, i) => {
-                    const retentionValue = Number(line.retention_total ?? 0)
-                    const discountPct = Number(line.settlement_percentage ?? 0)
-                    const discountValue = Number(line.settlement_amount ?? 0)
-                    const canNavigate = !!onInvoiceClick && line.payable_id != null
-                    return (
-                      <tr
-                        key={i}
-                        className={`${i % 2 === 0 ? 'bg-slate-50/60' : 'bg-white'} ${canNavigate ? 'cursor-pointer hover:bg-primary-50' : ''}`}
-                        onClick={canNavigate ? () => onInvoiceClick!(line.payable_id as string | number) : undefined}
-                      >
-                        <td className="px-3 py-2 border-b border-gray-100">
-                          <div className="font-medium text-gray-700">{line.document_no ?? String(line.payable_id)}</div>
-                          {line._doc_date && <div className="text-gray-400">{formatDate(line._doc_date)}</div>}
-                        </td>
-                        <td className="px-3 py-2 border-b border-gray-100 text-gray-500">
-                          {line._doc_external_reference || '—'}
-                        </td>
-                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">
-                          {line._doc_gross_total != null ? formatCurrency(line._doc_gross_total) : '—'}
-                        </td>
-                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">
-                          {line._doc_pending_total != null ? formatCurrency(line._doc_pending_total) : '—'}
-                        </td>
-                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{formatCurrency(retentionValue)}</td>
-                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{discountPct} %</td>
-                        <td className="px-3 py-2 text-right border-b border-gray-100 text-gray-600">{formatCurrency(discountValue)}</td>
-                        <td className="px-3 py-2 text-right border-b border-gray-100 font-semibold text-gray-700">{formatCurrency(line.paid_value)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-      </div>
-    </div>
-  )
-}
 
 function PaymentSubRows({ clientId, tocDocId, entityName, onPaymentClick }: { clientId: string; tocDocId: string; entityName: string; onPaymentClick: (pm: TocPayment) => void }) {
   const { data: payments = [], isLoading } = useQuery<TocPayment[]>({
@@ -3022,6 +2877,7 @@ export default function PayablesPage() {
             payment={detailPayment}
             clientId={selectedClientId ?? ''}
             entityName={panelDoc?.entityName ?? ''}
+            linesEndpoint={(c, id) => `/toconline/${c}/purchase-payments/${id}/lines`}
             onInvoiceClick={(payableId) => {
               const match = (data?.items ?? []).find((p) => p._tocRaw && String(p._tocRaw.id) === String(payableId))
               if (!match || !match._tocRaw) return
