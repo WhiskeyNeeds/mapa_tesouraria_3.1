@@ -137,6 +137,24 @@ export class TreasuryDashboardService {
       this.payablesSvc.getKpis(clientId),
     ])
 
+    // Faturação dos últimos 12 meses — base para DSO/DPO (prazos médios). Inclui
+    // locais puros + espelho TOC; exclui SCHEDULED (estimativas), VOID e as
+    // parcelas-filhas de split (a mãe já tem o total). Usa a data do documento.
+    const yearAgo = new Date(Date.now() - 365 * 86400000)
+    const yearAgoStr = yearAgo.toISOString().slice(0, 10)
+    const SALES_INV = new Set(['ft', 'fs', 'fr'])
+    const PURCH_INV = new Set(['fc', 'dsp'])
+    const [salesLocalAgg, purchLocalAgg, salesTocDocs, purchTocDocs] = await Promise.all([
+      this.prisma.treasuryReceivable.aggregate({ where: { clientId, deletedAt: null, tocSalesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] }, NOT: { parentId: { not: null }, recurrenceId: null }, documentDate: { gte: yearAgo } }, _sum: { totalAmount: true } }),
+      this.prisma.treasuryPayable.aggregate({ where: { clientId, deletedAt: null, tocPurchasesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] }, NOT: { parentId: { not: null }, recurrenceId: null }, documentDate: { gte: yearAgo } }, _sum: { totalAmount: true } }),
+      this.prisma.tocSalesDocument.findMany({ where: { clientId, status: { in: [1, 2, 5] }, date: { gte: yearAgoStr } }, select: { grossTotal: true, documentType: true } }),
+      this.prisma.tocPurchaseDocument.findMany({ where: { clientId, status: { in: [1, 2, 5] }, date: { gte: yearAgoStr } }, select: { grossTotal: true, raw: true } }),
+    ])
+    const billedSales12m = Number(salesLocalAgg._sum.totalAmount ?? 0)
+      + salesTocDocs.filter((d) => SALES_INV.has((d.documentType ?? '').toLowerCase())).reduce((s, d) => s + Number(d.grossTotal ?? 0), 0)
+    const billedPurchases12m = Number(purchLocalAgg._sum.totalAmount ?? 0)
+      + purchTocDocs.filter((d) => PURCH_INV.has(String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase())).reduce((s, d) => s + Number(d.grossTotal ?? 0), 0)
+
     const totalBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
     // "A Receber"/"A Pagar" usam os mesmos critérios do "Total Pendente" das páginas
     // de Contas a Receber/Pagar (single source of truth: dedup de splits, exclui
@@ -252,6 +270,7 @@ export class TreasuryDashboardService {
         countReceivablesProgrammed: receivablesPageKpis.countProgrammed,
         countPayablesProgrammed: payablesPageKpis.countProgrammed,
         overdueReceivables, overduePayables,
+        billedSales12m, billedPurchases12m,
       },
       bankAccounts: bankAccounts.map((a) => {
         const currentBalance = balances.get(a.id) ?? 0

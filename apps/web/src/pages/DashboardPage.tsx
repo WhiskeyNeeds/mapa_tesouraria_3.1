@@ -21,6 +21,8 @@ interface DashboardData {
     toReceiveProgrammed?: number; toPayProgrammed?: number
     countReceivablesProgrammed?: number; countPayablesProgrammed?: number
     countReceivablesOpen: number; countPayablesOpen: number; overdueReceivables: number; overduePayables: number
+    // Faturação dos últimos 12 meses — base para DSO/DPO.
+    billedSales12m?: number; billedPurchases12m?: number
   }
   bankAccounts: Array<{ id: string; name: string; bankName: string; currentBalance: number; ibanLast4: string; lowBalanceWarning?: boolean; minBalance?: number | null; currency?: string }>
   chartData: Array<{ date: string; income: number; expense: number; balance: number }>
@@ -1373,9 +1375,13 @@ export default function DashboardPage() {
     const cashAvailable = data.kpis.totalBalance - toPay
     const cashRunway = avgDailyExpense > 0 ? Math.floor(cashAvailable / avgDailyExpense) : null
     const coverageRatio = toPay > 0 ? toReceive / toPay : null
-    // Financial ratios
-    const dso = avgDailyIncome > 0 ? Math.round(toReceive / avgDailyIncome) : null
-    const dpo = avgDailyExpense > 0 ? Math.round(toPay / avgDailyExpense) : null
+    // DSO/DPO sobre a faturação dos últimos 12 meses (não sobre a janela curta):
+    // DSO = A Receber ÷ (vendas faturadas 12m ÷ 365); DPO análogo com compras.
+    const billedSales12m = data.kpis.billedSales12m ?? 0
+    const billedPurch12m = data.kpis.billedPurchases12m ?? 0
+    // Numerador = A Receber/A Pagar em aberto (faturado), sem as programadas (estimativas).
+    const dso = billedSales12m > 0 ? Math.round(data.kpis.toReceive / (billedSales12m / 365)) : null
+    const dpo = billedPurch12m > 0 ? Math.round(data.kpis.toPay / (billedPurch12m / 365)) : null
     const liquidezImediata = toPay > 0 ? data.kpis.totalBalance / toPay : null
     const workingCapital = data.kpis.totalBalance + toReceive - toPay
     return { totalIncome, totalExpense, netCashFlow, avgDailyExpense, avgDailyIncome, cashRunway, coverageRatio, dso, dpo, liquidezImediata, workingCapital }
@@ -1714,15 +1720,15 @@ export default function DashboardPage() {
           <div className="rounded-xl border border-gray-100 p-4">
             <div className="flex items-center gap-2 mb-3">
               <CalendarDays className="w-4 h-4 text-indigo-500 flex-shrink-0" />
-              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Prazos Médios<InfoHint text={`Prazos médios de recebimento e pagamento, estimados sobre a janela de ${days} dias (selecionável no cartão Indicadores Financeiros).`} /></span>
+              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1">Prazos Médios<InfoHint text="Prazos médios de recebimento e pagamento, com base na faturação dos últimos 12 meses (vendas e compras emitidas)." /></span>
             </div>
             <div className="space-y-2.5 pt-1">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />DSO — receber<InfoHint text="Days Sales Outstanding: dias médios estimados até receberes uma fatura. = A receber ÷ média diária de entrada. Menor é melhor." /></span>
+                <span className="text-gray-500 flex items-center gap-1"><ArrowDownToLine className="w-3 h-3" />DSO — receber<InfoHint text="Days Sales Outstanding: dias médios para receber. = A receber ÷ (vendas faturadas nos últimos 12 meses ÷ 365). Menor é melhor." /></span>
                 <span className={`font-semibold ${stats?.dso == null ? 'text-gray-400' : stats.dso <= 30 ? 'text-emerald-700' : stats.dso <= 60 ? 'text-amber-600' : 'text-red-600'}`}>{stats?.dso != null ? `${stats.dso} dias` : '—'}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />DPO — pagar<InfoHint text="Days Payable Outstanding: dias médios estimados até pagares uma fatura. = A pagar ÷ média diária de saída." /></span>
+                <span className="text-gray-500 flex items-center gap-1"><ArrowUpFromLine className="w-3 h-3" />DPO — pagar<InfoHint text="Days Payable Outstanding: dias médios para pagar. = A pagar ÷ (compras faturadas nos últimos 12 meses ÷ 365)." /></span>
                 <span className={`font-semibold ${stats?.dpo == null ? 'text-gray-400' : 'text-gray-700'}`}>{stats?.dpo != null ? `${stats.dpo} dias` : '—'}</span>
               </div>
               <div className="flex items-center justify-between text-xs border-t border-gray-100 pt-2 mt-2">
