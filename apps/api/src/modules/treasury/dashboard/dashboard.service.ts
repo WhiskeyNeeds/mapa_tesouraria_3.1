@@ -439,8 +439,8 @@ export class TreasuryDashboardService {
       // Só locais PUROS (sem tocLink): as faturas TOC contam pelo espelho.
       this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
       this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
-      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: { not: null } }, select: { tocSalesDocId: true, status: true } }),
-      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } }, select: { tocPurchasesDocId: true, status: true } }),
+      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: { not: null } }, select: { tocSalesDocId: true, status: true, _count: { select: { children: true } } } }),
+      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } }, select: { tocPurchasesDocId: true, status: true, _count: { select: { children: true } } } }),
       this.prisma.tocSalesDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
       this.prisma.tocPurchaseDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
     ])
@@ -448,21 +448,27 @@ export class TreasuryDashboardService {
     let open = 0, programmed = 0
     for (const r of rec) { const amt = Number(r.pendingAmount ?? 0); if (r.status === 'SCHEDULED') programmed += amt; else open += amt }
     for (const p of pay) { const amt = Number(p.pendingAmount ?? 0); if (p.status === 'SCHEDULED') programmed -= amt; else open -= amt }
-    // Docs TOC liquidados localmente (PAID/SETTLED/VOID) saem do total; os restantes
-    // contam pelo espelho (igual ao getKpis).
+    // Suprime do espelho TOC os docs cujo local: (a) está liquidado (PAID/SETTLED/VOID)
+    // — não é pendente; ou (b) é a mãe de um split — o valor já conta pelas parcelas
+    // locais (senão contava em duplicado: parcelas + espelho TOC). Os restantes
+    // (ex.: stubs vazios em aberto) contam pelo espelho. pending<=0 (notas de
+    // crédito) é ignorado, como no getKpis.
     const RESOLVED = new Set(['PAID', 'SETTLED', 'VOID'])
-    const overSales = new Set(tocAnnotatedRec.filter((r) => RESOLVED.has(r.status)).map((r) => String(r.tocSalesDocId)))
-    const overPurch = new Set(tocAnnotatedPay.filter((p) => RESOLVED.has(p.status)).map((p) => String(p.tocPurchasesDocId)))
+    const suppressed = (r: { status: string; _count: { children: number } }) => RESOLVED.has(r.status) || r._count.children > 0
+    const overSales = new Set(tocAnnotatedRec.filter(suppressed).map((r) => String(r.tocSalesDocId)))
+    const overPurch = new Set(tocAnnotatedPay.filter(suppressed).map((p) => String(p.tocPurchasesDocId)))
     const SALES = new Set(['ft', 'fs', 'fr']), PURCH = new Set(['fc', 'dsp'])
     for (const d of tocSales) {
       if (overSales.has(String(d.tocId))) continue
       const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
-      if (SALES.has(dt)) open += Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      const pend = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (SALES.has(dt) && pend > 0) open += pend
     }
     for (const d of tocPurch) {
       if (overPurch.has(String(d.tocId))) continue
       const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
-      if (PURCH.has(dt)) open -= Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      const pend = Number(d.pendingTotal ?? d.grossTotal ?? 0)
+      if (PURCH.has(dt) && pend > 0) open -= pend
     }
     return { settled, open, programmed }
   }
@@ -582,11 +588,11 @@ export class TreasuryDashboardService {
       // espelho; os restantes só fornecem o override de categoria ao ramo TOC.
       this.prisma.treasuryReceivable.findMany({
         where: { clientId, deletedAt: null, tocSalesDocId: { not: null } },
-        select: { tocSalesDocId: true, status: true, categoryId: true },
+        select: { tocSalesDocId: true, status: true, categoryId: true, _count: { select: { children: true } } },
       }),
       this.prisma.treasuryPayable.findMany({
         where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } },
-        select: { tocPurchasesDocId: true, status: true, categoryId: true },
+        select: { tocPurchasesDocId: true, status: true, categoryId: true, _count: { select: { children: true } } },
       }),
     ])
 
@@ -597,14 +603,17 @@ export class TreasuryDashboardService {
     const overriddenPurchTocIds = new Set<string>()
     const salesAnnotationCat = new Map<string, string | null>()
     const purchAnnotationCat = new Map<string, string | null>()
+    // Suprime o espelho TOC quando o local está liquidado (PAID/SETTLED/VOID) OU é
+    // a mãe de um split — nesse caso o valor já conta pelas parcelas locais (senão
+    // contava em duplicado). Os restantes (ex.: stubs em aberto) contam pelo espelho.
     for (const r of tocAnnotatedRec) {
       const id = String(r.tocSalesDocId)
-      if (RESOLVED.has(r.status)) overriddenSalesTocIds.add(id)
+      if (RESOLVED.has(r.status) || r._count.children > 0) overriddenSalesTocIds.add(id)
       else salesAnnotationCat.set(id, r.categoryId)
     }
     for (const p of tocAnnotatedPay) {
       const id = String(p.tocPurchasesDocId)
-      if (RESOLVED.has(p.status)) overriddenPurchTocIds.add(id)
+      if (RESOLVED.has(p.status) || p._count.children > 0) overriddenPurchTocIds.add(id)
       else purchAnnotationCat.set(id, p.categoryId)
     }
 
