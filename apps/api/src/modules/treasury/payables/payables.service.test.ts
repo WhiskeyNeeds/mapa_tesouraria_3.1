@@ -177,3 +177,23 @@ describe('setReadyToPay', () => {
     expect(followupCreate).not.toHaveBeenCalled()
   })
 })
+
+describe('findLocalIdByTocDoc', () => {
+  function makeService() { return new TreasuryPayablesService({} as never, {} as never, {} as never) }
+
+  it('devolve o id local quando existe ligação ao doc TOC', async () => {
+    const svc = makeService()
+    ;(svc as unknown as { prisma: { treasuryPayable: { findFirst: (a: unknown) => Promise<unknown> } } }).prisma = {
+      treasuryPayable: { findFirst: vi.fn().mockResolvedValue({ id: 'p1' }) },
+    } as never
+    await expect(svc.findLocalIdByTocDoc('c1', '123')).resolves.toEqual({ id: 'p1' })
+  })
+
+  it('devolve null quando não há registo local para o doc TOC', async () => {
+    const svc = makeService()
+    ;(svc as unknown as { prisma: { treasuryPayable: { findFirst: (a: unknown) => Promise<unknown> } } }).prisma = {
+      treasuryPayable: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as never
+    await expect(svc.findLocalIdByTocDoc('c1', '999')).resolves.toBeNull()
+  })
+})

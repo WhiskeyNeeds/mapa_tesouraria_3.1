@@ -433,6 +433,19 @@ export class TreasuryPayablesService {
     return created.id
   }
 
+  /**
+   * Lookup puro (sem criar): id do payable local ligado a um doc de compras TOConline.
+   * Devolve null quando ainda não existe ligação local — usado para decidir se a UI
+   * abre o painel rico ou mantém o comportamento inline.
+   */
+  async findLocalIdByTocDoc(clientId: string, tocDocId: string): Promise<{ id: string } | null> {
+    const existing = await this.prisma.treasuryPayable.findFirst({
+      where: { clientId, tocPurchasesDocId: tocDocId, deletedAt: null },
+      select: { id: true },
+    })
+    return existing ? { id: existing.id } : null
+  }
+
   /** Bloqueia mutações que alteram dados da fatura em docs com tocPurchasesDocId. */
   private assertEditableInvoiceFields(item: { tocPurchasesDocId: string | null }, action: string) {
     if (item.tocPurchasesDocId) {

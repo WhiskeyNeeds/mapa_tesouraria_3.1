@@ -154,3 +154,23 @@ describe('split (parcelas locais — Abordagem A)', () => {
     expect(created[1].data.tocSalesDocId).toBeUndefined()
   })
 })
+
+describe('findLocalIdByTocDoc', () => {
+  function makeService() { return new TreasuryReceivablesService({} as never, {} as never, {} as never) }
+
+  it('devolve o id local quando existe ligação ao doc TOC', async () => {
+    const svc = makeService()
+    ;(svc as unknown as { prisma: { treasuryReceivable: { findFirst: (a: unknown) => Promise<unknown> } } }).prisma = {
+      treasuryReceivable: { findFirst: vi.fn().mockResolvedValue({ id: 'r1' }) },
+    } as never
+    await expect(svc.findLocalIdByTocDoc('c1', '123')).resolves.toEqual({ id: 'r1' })
+  })
+
+  it('devolve null quando não há registo local para o doc TOC', async () => {
+    const svc = makeService()
+    ;(svc as unknown as { prisma: { treasuryReceivable: { findFirst: (a: unknown) => Promise<unknown> } } }).prisma = {
+      treasuryReceivable: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as never
+    await expect(svc.findLocalIdByTocDoc('c1', '999')).resolves.toBeNull()
+  })
+})

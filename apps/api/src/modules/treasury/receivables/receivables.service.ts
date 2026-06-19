@@ -497,6 +497,19 @@ export class TreasuryReceivablesService {
     return created.id
   }
 
+  /**
+   * Lookup puro (sem criar): id do receivable local ligado a um doc de vendas TOConline.
+   * Devolve null quando ainda não existe ligação local — usado para decidir se a UI
+   * abre o painel rico ou mantém o comportamento inline.
+   */
+  async findLocalIdByTocDoc(clientId: string, tocDocId: string): Promise<{ id: string } | null> {
+    const existing = await this.prisma.treasuryReceivable.findFirst({
+      where: { clientId, tocSalesDocId: tocDocId, deletedAt: null },
+      select: { id: true },
+    })
+    return existing ? { id: existing.id } : null
+  }
+
   /** Bloqueia mutações que alteram dados da fatura em docs com tocSalesDocId.
    *  Status/pendingAmount/totalAmount/dueDate vêm do TOC — alterá-los seria
    *  divergir do espelho. Categoria/budget/promisedPaymentDate/splits são

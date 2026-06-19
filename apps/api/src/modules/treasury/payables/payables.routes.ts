@@ -95,6 +95,13 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     return reply.send(await svc.getById(clientId, id))
   })
 
+  fastify.get(`${prefix}/by-toc/:tocDocId`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, tocDocId } = request.params as { clientId: string; tocDocId: string }
+    const found = await svc.findLocalIdByTocDoc(clientId, tocDocId)
+    if (!found) return reply.status(404).send({ error: 'Sem registo local para este documento' })
+    return reply.send(found)
+  })
+
   fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const body = request.body as Parameters<TreasuryPayablesService['create']>[2] & {
