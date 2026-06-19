@@ -415,10 +415,13 @@ export default function ReceivablesPage() {
   const [panelDoc, setPanelDoc] = useState<Receivable | null>(null)
   const [panelTocDoc, setPanelTocDoc] = useState<TocSalesDoc | null>(null)
   const [panelTab, setPanelTab] = useState<'details' | 'parcelas' | 'followups'>('details')
-  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'settle'>(null)
+  const [panelSection, setPanelSection] = useState<null | 'promised' | 'split' | 'settle' | 'commit'>(null)
   const [panelPromisedDate, setPanelPromisedDate] = useState('')
   const [settleRef, setSettleRef] = useState('')
   const [settleDate, setSettleDate] = useState('')
+  const [commitRef, setCommitRef] = useState('')
+  const [commitAmount, setCommitAmount] = useState('')
+  const [commitDate, setCommitDate] = useState('')
   const [detailReceipt, setDetailReceipt] = useState<TocReceipt | null>(null)
   const [splitInstallments, setSplitInstallments] = useState([{ amount: '', paymentDate: '' }, { amount: '', paymentDate: '' }])
   const [splitCount, setSplitCount] = useState(2)
@@ -545,6 +548,9 @@ export default function ReceivablesPage() {
         entityNif: form.entityNif || undefined,
         budgetId: form.budgetId || undefined,
       }
+      // Recorrências são estimadas e sem referência: o backend ignora-a, mas
+      // evitamos enviá-la para manter o payload coerente.
+      if (recForm.isRecurrent) delete body.reference
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
@@ -744,6 +750,34 @@ export default function ReceivablesPage() {
     onError: (e) => toast.error((e as Error).message),
   })
 
+  // Promove uma fatura SCHEDULED (programada/estimada) para OPEN, fixando
+  // referência, valor e data. O backend devolve a fatura atualizada.
+  const commitReceivable = useMutation({
+    mutationFn: (vars: { id: string; reference: string; amount: number; date: string }) =>
+      api.post<Receivable>(`/treasury/${selectedClientId}/receivables/${vars.id}/commit`, { reference: vars.reference, amount: vars.amount, date: vars.date }),
+    onSuccess: (updated, vars) => {
+      const id = vars.id
+      qc.invalidateQueries({ queryKey: ['receivables'] })
+      qc.invalidateQueries({ queryKey: ['receivables-kpis'] })
+      qc.invalidateQueries({ queryKey: ['activity'] })
+      // A promoção altera os valores/datas projetadas — refrescar o dashboard.
+      qc.invalidateQueries({ queryKey: ['dashboard-cashflow-statement'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+      setPanelDoc((d) => d && d.id === id ? {
+        ...d,
+        status: updated?.status ?? 'OPEN',
+        reference: updated?.reference ?? vars.reference,
+        totalAmount: updated?.totalAmount ?? vars.amount,
+        pendingAmount: updated?.pendingAmount ?? vars.amount,
+        dueDate: updated?.dueDate ?? vars.date,
+      } : d)
+      qc.setQueryData<Receivable>(['receivable-detail', selectedClientId, id], (old) => old ? { ...old, ...updated } : old)
+      setPanelSection(null)
+      toast.success('Fatura marcada como comprometida.')
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
   const unsettleReceivable = useMutation({
     mutationFn: (id: string) => api.post(`/treasury/${selectedClientId}/receivables/${id}/unsettle`, {}),
     onSuccess: (_, id) => {
@@ -838,7 +872,7 @@ export default function ReceivablesPage() {
         ...(outrasForm.categoryId ? { categoryId: outrasForm.categoryId } : {}),
         entityName: outrasForm.entityName || undefined,
         entityNif: outrasForm.entityNif || undefined,
-        reference: outrasForm.reference || undefined,
+        ...(recForm.isRecurrent ? {} : { reference: outrasForm.reference || undefined }),
         description: outrasForm.description || undefined,
         dueDate: outrasForm.dueDate,
         ...(computedDocDate ? { documentDate: computedDocDate } : {}),
@@ -868,6 +902,12 @@ export default function ReceivablesPage() {
   })
 
   const isClosed = (status: string) => status === 'PAID' || status === 'SETTLED' || status === 'VOID'
+  // Estado SCHEDULED (programada/estimada): etiqueta dedicada local. Mantemos a
+  // alteração contida neste ficheiro (utils é partilhado com Pagamentos).
+  const recvStatusLabel = (status: string, settledInToc = true, full = false) =>
+    status === 'SCHEDULED' ? 'Programada' : statusLabel(status, settledInToc, full)
+  const recvStatusVariant = (status: string): ReturnType<typeof statusVariant> =>
+    status === 'SCHEDULED' ? 'yellow' : statusVariant(status)
   const outrasAll = (data?.items ?? []).filter((r) => !r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
   const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (r: Receivable) => {
@@ -1404,7 +1444,7 @@ export default function ReceivablesPage() {
                                     )}
                                   </td>
                                   <td className="px-3 py-3">
-                                    <Badge variant={statusVariant(r.status)}>{statusLabel(r.status, r._statusToc === 'SETTLED')}</Badge>
+                                    <Badge variant={recvStatusVariant(r.status)}>{recvStatusLabel(r.status, r._statusToc === 'SETTLED')}</Badge>
                                     {r._statusDiffersFromToc && (
                                       <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${r._statusToc ?? '—'}`}>(Local)</span>
                                     )}
@@ -1532,7 +1572,7 @@ export default function ReceivablesPage() {
                                   <td className="pl-1 pr-3 py-3 text-right tabular-nums whitespace-nowrap text-gray-700">{formatCurrency(total)}</td>
                                   <td className="px-3 py-3 text-right tabular-nums font-semibold text-green-700">{formatCurrency(pending)}</td>
                                   <td className="px-3 py-3">
-                                    <Badge variant={statusVariant(row.item.status)}>{statusLabel(row.item.status, row.item._statusToc === 'SETTLED')}</Badge>
+                                    <Badge variant={recvStatusVariant(row.item.status)}>{recvStatusLabel(row.item.status, row.item._statusToc === 'SETTLED')}</Badge>
                                     {row.item._statusDiffersFromToc && (
                                       <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${row.item._statusToc ?? '—'}`}>(Local)</span>
                                     )}
@@ -1829,7 +1869,7 @@ export default function ReceivablesPage() {
                                       <div className="text-xs text-gray-400 tabular-nums">recebido: {formatCurrency(Number(r.receivedAmount))}</div>
                                     )}
                                   </td>
-                                  <td className="px-3 py-3"><Badge variant={statusVariant(r.status)}>{statusLabel(r.status, r._statusToc === 'SETTLED')}</Badge></td>
+                                  <td className="px-3 py-3"><Badge variant={recvStatusVariant(r.status)}>{recvStatusLabel(r.status, r._statusToc === 'SETTLED')}</Badge></td>
                                   <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                                     <InlineCategoryPicker
                                       category={r.category}
@@ -2122,12 +2162,14 @@ export default function ReceivablesPage() {
                   <label className="label">NIF Cliente <span className="text-gray-400 font-normal">(opcional)</span></label>
                   <input className="input" value={form.entityNif} onChange={(e) => setForm({ ...form, entityNif: e.target.value })} placeholder="123456789" />
                 </div>
+                {!recForm.isRecurrent && (
+                  <div>
+                    <label className="label">Nº Documento</label>
+                    <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FT2024/001" />
+                  </div>
+                )}
                 <div>
-                  <label className="label">Nº Documento</label>
-                  <input className="input" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} placeholder="FT2024/001" />
-                </div>
-                <div>
-                  <label className="label">Valor (€)</label>
+                  <label className="label">{recForm.isRecurrent ? 'Valor estimado (€)' : 'Valor (€)'} <span className="text-red-500">*</span></label>
                   <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} />
                 </div>
                 <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><WorkdayDatePicker value={form.dueDate} onChange={(v) => setForm({ ...form, dueDate: v })} /></div>
@@ -2220,7 +2262,7 @@ export default function ReceivablesPage() {
                   onClick={() => create.mutate()}
                   className="btn-primary flex-1"
                   disabled={(() => {
-                    if (create.isPending || !form.totalAmount || !form.dueDate) return true
+                    if (create.isPending || !form.dueDate || !(parseFloat(form.totalAmount) > 0)) return true
                     const isMonthlyRec = recForm.isRecurrent && ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency)
                     if (isMonthlyRec && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
                     if (recForm.isRecurrent && recForm.endType === 'date') {
@@ -2327,12 +2369,14 @@ export default function ReceivablesPage() {
                     readOnly={!!outrasContact}
                   />
                 </div>
+                {!recForm.isRecurrent && (
+                  <div>
+                    <label className="label">Referência</label>
+                    <input className="input" value={outrasForm.reference} onChange={(e) => setOutrasForm({ ...outrasForm, reference: e.target.value })} placeholder="REF001" />
+                  </div>
+                )}
                 <div>
-                  <label className="label">Referência</label>
-                  <input className="input" value={outrasForm.reference} onChange={(e) => setOutrasForm({ ...outrasForm, reference: e.target.value })} placeholder="REF001" />
-                </div>
-                <div>
-                  <label className="label">Valor (€) <span className="text-red-500">*</span></label>
+                  <label className="label">{recForm.isRecurrent ? 'Valor estimado (€)' : 'Valor (€)'} <span className="text-red-500">*</span></label>
                   <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
                 </div>
                 <div>
@@ -2524,7 +2568,7 @@ export default function ReceivablesPage() {
                 <div className="text-xs text-gray-500">Venc. {formatDate(panelDoc.dueDate)} · Pag. {formatDate(panelDoc.promisedPaymentDate ?? panelDoc.dueDate)}</div>
               </div>
               <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <Badge variant={statusVariant(panelDoc.status)}>{statusLabel(panelDoc.status, panelDoc._statusToc === 'SETTLED', true)}</Badge>
+                <Badge variant={recvStatusVariant(panelDoc.status)}>{recvStatusLabel(panelDoc.status, panelDoc._statusToc === 'SETTLED', true)}</Badge>
                 {panelDoc._statusDiffersFromToc && (
                   <span className="ml-1.5 text-[10px] text-amber-600 font-medium" title={`No TOConline: ${panelDoc._statusToc ?? '—'}`}>(Local)</span>
                 )}
@@ -2707,17 +2751,59 @@ export default function ReceivablesPage() {
                     </div>
                   )}
 
-                  {/* Marcar como Pago — bloqueado em recorrências futuras (dueDate > hoje) */}
-                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (() => {
-                    const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
-                    return (
+                  {/* Marcar como Comprometido — só para faturas programadas (SCHEDULED) */}
+                  {panelDoc.status === 'SCHEDULED' && (
+                    <div className="rounded-xl border border-gray-200 overflow-hidden">
                       <button
                         onClick={() => {
-                          if (isFutureRec) return
-                          payReceivable.mutate(panelDoc.id)
+                          if (panelSection !== 'commit') {
+                            setCommitRef('')
+                            setCommitAmount(String(panelDoc.totalAmount ?? ''))
+                            setCommitDate(panelDoc.dueDate ? String(panelDoc.dueDate).slice(0, 10) : '')
+                          }
+                          setPanelSection(panelSection === 'commit' ? null : 'commit')
                         }}
-                        disabled={payReceivable.isPending || isFutureRec}
-                        title={isFutureRec ? 'Recorrência futura — só pode ser paga a partir da data de vencimento' : undefined}
+                        className="w-full flex items-center gap-3 p-3.5 hover:bg-green-50 text-left transition-colors group"
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0 group-hover:bg-green-200 transition-colors">
+                          <CheckCircle className="w-4 h-4 text-green-700" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900 text-sm">Marcar como Comprometido</div>
+                          <div className="text-xs text-gray-500">Fixar referência, valor e data</div>
+                        </div>
+                      </button>
+                      {panelSection === 'commit' && (
+                        <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Referência</label>
+                            <input className="input mt-1" value={commitRef} onChange={(e) => setCommitRef(e.target.value)} placeholder="FT2024/001" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Valor (€)</label>
+                            <input type="number" className="input mt-1" value={commitAmount} onChange={(e) => setCommitAmount(e.target.value)} />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 font-medium">Data de vencimento</label>
+                            <input type="date" className="input mt-1" value={commitDate} onChange={(e) => setCommitDate(pickWorkday(e.target.value, commitDate))} />
+                          </div>
+                          <button
+                            onClick={() => commitReceivable.mutate({ id: panelDoc.id, reference: commitRef.trim(), amount: parseFloat(commitAmount) || 0, date: commitDate })}
+                            disabled={commitReceivable.isPending || !commitRef.trim() || !(parseFloat(commitAmount) > 0) || !commitDate}
+                            className="btn-primary w-full text-sm py-1.5"
+                          >
+                            {commitReceivable.isPending ? 'A guardar...' : 'Marcar como Comprometido'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Marcar como Pago — indisponível em programadas (SCHEDULED) */}
+                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (
+                      <button
+                        onClick={() => payReceivable.mutate(panelDoc.id)}
+                        disabled={payReceivable.isPending}
                         className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-teal-50 hover:border-teal-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0 group-hover:bg-teal-200 transition-colors">
@@ -2725,11 +2811,10 @@ export default function ReceivablesPage() {
                         </div>
                         <div>
                           <div className="font-medium text-gray-900 text-sm">Marcar como Pago</div>
-                          <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar recebimento total (sem liquidar)'}</div>
+                          <div className="text-xs text-gray-500">Registar recebimento total (sem liquidar)</div>
                         </div>
                       </button>
-                    )
-                  })()}
+                  )}
 
                   {/* Marcar como Liquidada — só a partir de Pago; exige registar recibo (referência + data). */}
                   {panelDoc.status === 'PAID' && panelDoc.settledVia !== 'INSTALLMENTS' && panelDoc.settledVia !== 'RECONCILIATION' && (
@@ -2768,7 +2853,8 @@ export default function ReceivablesPage() {
                     </div>
                   )}
 
-                  {/* Data prometida — bloqueada em faturas pagas/liquidadas */}
+                  {/* Data prometida — bloqueada em faturas pagas/liquidadas; oculta em programadas (SCHEDULED) */}
+                  {panelDoc.status !== 'SCHEDULED' && (
                   <div className="rounded-xl border border-gray-200 overflow-hidden">
                     <button
                       onClick={() => { if (panelDoc.status !== 'SETTLED' && panelDoc.status !== 'PAID') setPanelSection(panelSection === 'promised' ? null : 'promised') }}
@@ -2805,6 +2891,7 @@ export default function ReceivablesPage() {
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/* Dividir Fatura — bloqueada em faturas pagas/liquidadas */}
                   {(panelDoc.status === 'OPEN' || panelDoc.status === 'PAID' || panelDoc.status === 'SETTLED') && !panelDoc.parentId && (panelDocDetail?.children ?? panelDoc.children ?? []).length === 0 && (
