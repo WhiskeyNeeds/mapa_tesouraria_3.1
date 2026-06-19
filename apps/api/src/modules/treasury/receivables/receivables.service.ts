@@ -759,8 +759,17 @@ export class TreasuryReceivablesService {
     const item = await this.getById(clientId, id)
     const isTocLinked = !!item.tocSalesDocId
 
+    // Fatura programada (previsão futura de recorrência): só o valor estimado e
+    // a categoria são editáveis. A data vem da cadência da recorrência e a
+    // referência define-se ao comprometer — qualquer dueDate/reference enviado é
+    // ignorado (sem erro). totalAmount e categoryId são tratados mais abaixo.
+    const isScheduled = item.status === 'SCHEDULED'
+
     const updateData: Prisma.TreasuryReceivableUpdateInput = {}
-    if (!isTocLinked) {
+    if (isScheduled) {
+      // Em SCHEDULED não aplicamos campos de fatura (dueDate/reference/
+      // documentDate/status/entityName); só valor + categoria (abaixo).
+    } else if (!isTocLinked) {
       // Campos da fatura — só editáveis em receivables manuais.
       if (data.entityName   !== undefined) updateData.entityName   = data.entityName
       if (data.description  !== undefined) updateData.description  = data.description
@@ -806,9 +815,14 @@ export class TreasuryReceivablesService {
 
     if (data.totalAmount !== undefined) {
       if (isTocLinked) throw httpError(409, 'O valor da fatura é gerido no TOConline')
-      if (item.status !== 'OPEN') throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
+      if (item.status !== 'OPEN' && !isScheduled) throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
       updateData.totalAmount = data.totalAmount
-      updateData.pendingAmount = data.totalAmount
+      // Mantém pendingAmount sincronizado com o valor estimado. Exceção: a
+      // raiz-template de uma recorrência (recurrenceId != null && parentId == null)
+      // é um template, não uma ocorrência — fica a 0 para não duplicar com a 1.ª
+      // instância gerada.
+      const isRecurrenceTemplate = item.recurrenceId != null && item.parentId == null
+      updateData.pendingAmount = isRecurrenceTemplate ? 0 : data.totalAmount
     }
 
     const updated = await this.prisma.treasuryReceivable.update({ where: { id }, data: updateData })

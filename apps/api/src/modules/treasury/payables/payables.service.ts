@@ -701,8 +701,17 @@ export class TreasuryPayablesService {
     const item = await this.getById(clientId, id)
     const isTocLinked = !!item.tocPurchasesDocId
 
+    // Fatura programada (previsão futura de recorrência): só o valor estimado e
+    // a categoria são editáveis. A data vem da cadência da recorrência e a
+    // referência define-se ao comprometer — qualquer dueDate/reference enviado é
+    // ignorado (sem erro). totalAmount e categoryId são tratados mais abaixo.
+    const isScheduled = item.status === 'SCHEDULED'
+
     const updateData: Prisma.TreasuryPayableUpdateInput = {}
-    if (!isTocLinked) {
+    if (isScheduled) {
+      // Em SCHEDULED não aplicamos campos de fatura (dueDate/reference/
+      // documentDate/status/entityName); só valor + categoria (abaixo).
+    } else if (!isTocLinked) {
       if (data.entityName   !== undefined) updateData.entityName   = data.entityName
       if (data.entityNif    !== undefined) updateData.entityNif    = data.entityNif
       if (data.description  !== undefined) updateData.description  = data.description
@@ -715,7 +724,7 @@ export class TreasuryPayablesService {
       if (data.description !== undefined) updateData.description = data.description
     }
 
-    if (data.tocPurchasesDocId !== undefined) {
+    if (!isScheduled && data.tocPurchasesDocId !== undefined) {
       const clash = await this.prisma.treasuryPayable.findFirst({
         where: { clientId, tocPurchasesDocId: data.tocPurchasesDocId, deletedAt: null, NOT: { id } },
         select: { id: true },
@@ -772,9 +781,16 @@ export class TreasuryPayablesService {
 
     if (data.totalAmount !== undefined) {
       // Allow overriding amount when associating a TOC doc (tocPurchasesDocId also being set)
-      if (item.status !== 'OPEN' && !data.tocPurchasesDocId) throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
+      if (item.status !== 'OPEN' && !isScheduled && !data.tocPurchasesDocId) throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
       updateData.totalAmount = data.totalAmount
-      if (item.status === 'OPEN') updateData.pendingAmount = data.totalAmount
+      // Mantém pendingAmount sincronizado com o valor estimado em OPEN e SCHEDULED.
+      // Exceção: a raiz-template de uma recorrência (recurrenceId != null &&
+      // parentId == null) é um template, não uma ocorrência — fica a 0 para não
+      // duplicar com a 1.ª instância gerada.
+      if (item.status === 'OPEN' || isScheduled) {
+        const isRecurrenceTemplate = item.recurrenceId != null && item.parentId == null
+        updateData.pendingAmount = isRecurrenceTemplate ? 0 : data.totalAmount
+      }
     }
 
     const updated = await this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
