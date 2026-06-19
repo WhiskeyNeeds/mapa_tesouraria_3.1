@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
+import { audit } from '../../../lib/audit.js'
 
 export interface BudgetSuggestion {
   budgetId: string
@@ -22,7 +23,7 @@ export class TreasuryBudgetRulesService {
     return rules
   }
 
-  async create(clientId: string, data: { budgetId: string; categoryId: string; textPattern?: string }) {
+  async create(clientId: string, userId: string, data: { budgetId: string; categoryId: string; textPattern?: string }) {
     const budget = await this.prisma.treasuryBudget.findFirst({
       where: { id: data.budgetId, clientId, deletedAt: null },
     })
@@ -48,7 +49,7 @@ export class TreasuryBudgetRulesService {
     })
     if (clash) throw httpError(409, 'Já existe uma regra com esta combinação de categoria e filtro de texto')
 
-    return this.prisma.treasuryBudgetRule.create({
+    const rule = await this.prisma.treasuryBudgetRule.create({
       data: {
         clientId,
         budgetId: data.budgetId,
@@ -60,6 +61,13 @@ export class TreasuryBudgetRulesService {
         category: { select: { id: true, name: true, color: true } },
       },
     })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'budget.rule_add',
+      entityType: 'Budget', entityId: data.budgetId,
+      payload: { ruleId: rule.id, categoryName: category.name, textPattern: normalizedPattern },
+    })
+    return rule
   }
 
   async update(clientId: string, id: string, data: { textPattern?: string | null }) {
@@ -87,10 +95,19 @@ export class TreasuryBudgetRulesService {
     })
   }
 
-  async delete(clientId: string, id: string) {
-    const rule = await this.prisma.treasuryBudgetRule.findFirst({ where: { id, clientId } })
+  async delete(clientId: string, userId: string, id: string) {
+    const rule = await this.prisma.treasuryBudgetRule.findFirst({
+      where: { id, clientId },
+      include: { category: { select: { name: true } } },
+    })
     if (!rule) throw httpError(404, 'Regra não encontrada')
     await this.prisma.treasuryBudgetRule.delete({ where: { id } })
+    await audit(this.prisma, {
+      clientId, userId,
+      action: 'budget.rule_remove',
+      entityType: 'Budget', entityId: rule.budgetId,
+      payload: { ruleId: rule.id, categoryName: rule.category?.name ?? null, textPattern: rule.textPattern },
+    })
   }
 
   async suggest(
