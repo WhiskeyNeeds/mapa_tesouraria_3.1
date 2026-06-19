@@ -74,7 +74,7 @@ interface Receivable {
 }
 interface Category { id: string; name: string; type: string; color?: string | null }
 interface Budget { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; status: 'ACTIVE' | 'ARCHIVED'; totalAmount: number; startDate: string; endDate: string; color?: string | null }
-interface TocCustomer { id: string | number; business_name?: string; tax_identification_number?: string;[key: string]: unknown }
+interface TocCustomer { id: string | number; business_name?: string; tax_registration_number?: string;[key: string]: unknown }
 
 const emptyForm = {
   categoryId: '', entityName: '', entityNif: '', reference: '', description: '',
@@ -1951,8 +1951,8 @@ export default function ReceivablesPage() {
                       <div className="input flex items-center gap-2 bg-gray-50 cursor-default">
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-gray-800 truncate">{String(selectedTocCustomer.business_name ?? '')}</div>
-                          {selectedTocCustomer.tax_identification_number && (
-                            <div className="text-xs text-gray-400 leading-tight">NIF {String(selectedTocCustomer.tax_identification_number)}</div>
+                          {selectedTocCustomer.tax_registration_number && (
+                            <div className="text-xs text-gray-400 leading-tight">NIF {String(selectedTocCustomer.tax_registration_number)}</div>
                           )}
                         </div>
                         <button
@@ -1986,14 +1986,14 @@ export default function ReceivablesPage() {
                             onMouseDown={(e) => {
                               e.preventDefault()
                               setSelectedTocCustomer(c)
-                              setForm({ ...form, entityName: String(c.business_name ?? ''), entityNif: String(c.tax_identification_number ?? '') })
+                              setForm({ ...form, entityName: String(c.business_name ?? ''), entityNif: String(c.tax_registration_number ?? '') })
                               setTocCustomerSearch('')
                               setShowCustomerDropdown(false)
                             }}
                           >
                             <span className="font-medium text-gray-800 truncate">{String(c.business_name ?? '')}</span>
-                            {c.tax_identification_number && (
-                              <span className="text-xs text-gray-400">NIF {String(c.tax_identification_number)}</span>
+                            {c.tax_registration_number && (
+                              <span className="text-xs text-gray-400">NIF {String(c.tax_registration_number)}</span>
                             )}
                           </button>
                         )) : (
@@ -2154,7 +2154,7 @@ export default function ReceivablesPage() {
                       <div className="input flex items-center gap-2 bg-gray-50 cursor-default">
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-gray-800 truncate">{outrasContact.business_name as string}</div>
-                          {outrasContact.tax_identification_number && <div className="text-xs text-gray-400">NIF {outrasContact.tax_identification_number as string}</div>}
+                          {outrasContact.tax_registration_number && <div className="text-xs text-gray-400">NIF {outrasContact.tax_registration_number as string}</div>}
                         </div>
                         <button onClick={() => { setOutrasContact(null); setOutrasContactSearch(''); setOutrasForm({ ...outrasForm, entityName: '', entityNif: '' }) }} className="text-gray-400 hover:text-gray-600 flex-shrink-0"><X className="w-3.5 h-3.5" /></button>
                       </div>
@@ -2173,18 +2173,18 @@ export default function ReceivablesPage() {
                     )}
                     {showOutrasContactDropdown && !outrasContact && (
                       <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                        {tocCustomers.filter(c => !outrasContactSearch || (c.business_name ?? '').toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.tax_identification_number ?? '').includes(outrasContactSearch)).slice(0, 10).length === 0 ? (
+                        {tocCustomers.filter(c => !outrasContactSearch || (c.business_name ?? '').toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.tax_registration_number ?? '').includes(outrasContactSearch)).slice(0, 10).length === 0 ? (
                           <div className="px-4 py-3 text-sm text-gray-400">
                             {tocCustomers.length === 0 ? 'Sem clientes disponíveis' : 'Nenhum cliente encontrado'}
                           </div>
-                        ) : tocCustomers.filter(c => !outrasContactSearch || (c.business_name ?? '').toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.tax_identification_number ?? '').includes(outrasContactSearch)).slice(0, 10).map(c => (
+                        ) : tocCustomers.filter(c => !outrasContactSearch || (c.business_name ?? '').toLowerCase().includes(outrasContactSearch.toLowerCase()) || (c.tax_registration_number ?? '').includes(outrasContactSearch)).slice(0, 10).map(c => (
                           <button
                             key={c.id}
                             className="w-full text-left px-4 py-2.5 hover:bg-gray-50 flex flex-col gap-0.5"
-                            onMouseDown={(e) => { e.preventDefault(); setOutrasContact(c); setOutrasForm({ ...outrasForm, entityName: c.business_name ?? '', entityNif: c.tax_identification_number ?? '' }); setOutrasContactSearch(''); setShowOutrasContactDropdown(false) }}
+                            onMouseDown={(e) => { e.preventDefault(); setOutrasContact(c); setOutrasForm({ ...outrasForm, entityName: c.business_name ?? '', entityNif: c.tax_registration_number ?? '' }); setOutrasContactSearch(''); setShowOutrasContactDropdown(false) }}
                           >
                             <span className="font-medium text-gray-800 text-sm">{c.business_name}</span>
-                            {c.tax_identification_number && <span className="text-xs text-gray-400">NIF {c.tax_identification_number}</span>}
+                            {c.tax_registration_number && <span className="text-xs text-gray-400">NIF {c.tax_registration_number}</span>}
                           </button>
                         ))}
                       </div>
