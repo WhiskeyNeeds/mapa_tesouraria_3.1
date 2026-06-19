@@ -12,7 +12,6 @@ import { ReceivedPeriodToggle } from '@/components/treasury/ReceivedPeriodToggle
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
 import TocSyncStatus from '@/components/ui/TocSyncStatus'
-import DayOfMonthRangePicker from '@/components/ui/DayOfMonthRangePicker'
 import DateRangePopover from '@/components/ui/DateRangePopover'
 import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
@@ -518,7 +517,8 @@ export default function PayablesPage() {
   const create = useMutation({
     mutationFn: () => {
       const isMonthlyRec = recForm.isRecurrent && ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency)
-      const computedDocDate = isMonthlyRec ? shiftToWorkday(recForm.cycleStartDate) : (form as { documentDate?: string }).documentDate
+      // Recorrência: o dia em que repete vem da própria Data de Vencimento (a 1.ª data).
+      const computedDocDate = isMonthlyRec ? shiftToWorkday(form.dueDate) : (form as { documentDate?: string }).documentDate
       const body: Record<string, unknown> = {
         ...form,
         dueDate: form.dueDate,
@@ -535,7 +535,7 @@ export default function PayablesPage() {
         body.recurrence = {
           frequency: recForm.frequency,
           ...(recForm.frequency === 'WEEKLY' ? { daysOfWeek: recForm.daysOfWeek.length ? recForm.daysOfWeek : [1] } : {}),
-          ...(isMonthlyRec && recForm.cycleStartDate ? { dayOfMonth: parseInt(recForm.cycleStartDate.slice(8, 10)) } : {}),
+          ...(isMonthlyRec && form.dueDate ? { dayOfMonth: parseInt(form.dueDate.slice(8, 10)) } : {}),
           ...(recForm.endType === 'date' && recForm.endDate ? { endDate: recForm.endDate } : {}),
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
@@ -844,7 +844,7 @@ export default function PayablesPage() {
 
   const createOutras = useMutation({
     mutationFn: () => {
-      const computedDocDate = recForm.isRecurrent ? shiftToWorkday(recForm.cycleStartDate) : undefined
+      const computedDocDate = recForm.isRecurrent ? shiftToWorkday(outrasForm.dueDate) : undefined
       const body: Record<string, unknown> = {
         categoryId: outrasForm.categoryId || undefined,
         entityName: outrasForm.entityName || undefined,
@@ -860,7 +860,7 @@ export default function PayablesPage() {
       if (recForm.isRecurrent) {
         body.recurrence = {
           frequency: recForm.frequency,
-          ...(recForm.cycleStartDate ? { dayOfMonth: parseInt(recForm.cycleStartDate.slice(8, 10)) } : {}),
+          ...(outrasForm.dueDate ? { dayOfMonth: parseInt(outrasForm.dueDate.slice(8, 10)) } : {}),
           ...(recForm.endType === 'date' && recForm.endDate ? { endDate: recForm.endDate } : {}),
           ...(recForm.endType === 'occurrences' && recForm.occurrences ? { occurrences: parseInt(recForm.occurrences) } : {}),
         }
@@ -2048,7 +2048,7 @@ export default function PayablesPage() {
                   <label className="label">{recForm.isRecurrent ? 'Valor estimado (€)' : 'Valor (€)'}</label>
                   <input type="number" className="input" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} />
                 </div>
-                <div><label className="label">Data Vencimento <span className="text-red-500">*</span></label><WorkdayDatePicker value={form.dueDate} onChange={(v) => setForm({ ...form, dueDate: v })} /></div>
+                <div><label className="label">{recForm.isRecurrent ? 'Vencimento (dia que se repete)' : 'Data Vencimento'} <span className="text-red-500">*</span></label><WorkdayDatePicker value={form.dueDate} onChange={(v) => setForm({ ...form, dueDate: v })} /></div>
                 <div className="col-span-2"><label className="label">Descrição / Notas</label><input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
               </div>
 
@@ -2094,17 +2094,6 @@ export default function PayablesPage() {
                         </div>
                       </div>
                     )}
-                    {['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency) && (
-                      <div className="col-span-2">
-                        <label className="label">Período de facturação</label>
-                        <DayOfMonthRangePicker
-                          startDate={recForm.cycleStartDate}
-                          endDate={recForm.cycleEndDate}
-                          onStartChange={(d) => setRecForm({ ...recForm, cycleStartDate: d, cycleEndDate: recForm.cycleEndDate && recForm.cycleEndDate >= d ? recForm.cycleEndDate : d })}
-                          onEndChange={(d) => setRecForm({ ...recForm, cycleEndDate: d })}
-                        />
-                      </div>
-                    )}
                     <div className="col-span-2">
                       <label className="label">Terminar</label>
                       <select className="input" value={recForm.endType} onChange={(e) => setRecForm({ ...recForm, endType: e.target.value as typeof recForm.endType, endDate: '', occurrences: '' })}>
@@ -2139,8 +2128,6 @@ export default function PayablesPage() {
                   className="btn-primary flex-1"
                   disabled={(() => {
                     if (create.isPending || !form.totalAmount || !form.dueDate) return true
-                    const isMonthlyRec = recForm.isRecurrent && ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL'].includes(recForm.frequency)
-                    if (isMonthlyRec && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
                     if (recForm.isRecurrent && recForm.endType === 'date') {
                       if (!recForm.endDate) return true
                       if (recForm.endDate <= form.dueDate) return true
@@ -2243,7 +2230,7 @@ export default function PayablesPage() {
                   <input type="number" className="input" value={outrasForm.totalAmount} onChange={(e) => setOutrasForm({ ...outrasForm, totalAmount: e.target.value })} placeholder="0.00" />
                 </div>
                 <div>
-                  <label className="label">Data Vencimento <span className="text-red-500">*</span></label>
+                  <label className="label">{recForm.isRecurrent ? 'Vencimento (dia que se repete)' : 'Data Vencimento'} <span className="text-red-500">*</span></label>
                   <WorkdayDatePicker value={outrasForm.dueDate} onChange={(v) => setOutrasForm({ ...outrasForm, dueDate: v })} />
                 </div>
                 <div className="col-span-2">
@@ -2274,15 +2261,6 @@ export default function PayablesPage() {
                         <option value="SEMIANNUAL">Semestral</option>
                         <option value="ANNUAL">Anual</option>
                       </select>
-                    </div>
-                    <div className="col-span-2">
-                      <label className="label">Período de facturação</label>
-                      <DayOfMonthRangePicker
-                        startDate={recForm.cycleStartDate}
-                        endDate={recForm.cycleEndDate}
-                        onStartChange={(d) => setRecForm({ ...recForm, cycleStartDate: d, cycleEndDate: recForm.cycleEndDate && recForm.cycleEndDate >= d ? recForm.cycleEndDate : d })}
-                        onEndChange={(d) => setRecForm({ ...recForm, cycleEndDate: d })}
-                      />
                     </div>
                     <div className="col-span-2">
                       <label className="label">Terminar</label>
@@ -2318,7 +2296,6 @@ export default function PayablesPage() {
                   className="btn-primary flex-1"
                   disabled={(() => {
                     if (createOutras.isPending || !outrasForm.totalAmount || !outrasForm.dueDate) return true
-                    if (recForm.isRecurrent && (!recForm.cycleStartDate || !recForm.cycleEndDate || recForm.cycleEndDate < recForm.cycleStartDate)) return true
                     if (recForm.isRecurrent && recForm.endType === 'date') {
                       if (!recForm.endDate) return true
                       if (recForm.endDate <= outrasForm.dueDate) return true
