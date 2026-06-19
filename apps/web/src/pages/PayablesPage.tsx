@@ -17,6 +17,7 @@ import WorkdayDatePicker from '@/components/ui/WorkdayDatePicker'
 import InlineCategoryPicker from '@/components/ui/InlineCategoryPicker'
 import InlineBudgetPicker from '@/components/ui/InlineBudgetPicker'
 import { DocLabels } from '@/components/treasury/DocLabels'
+import DocDetailPanel from '@/components/treasury/DocDetailPanel'
 import RemoveFromFuturePaymentsDialog from '@/components/treasury/RemoveFromFuturePaymentsDialog'
 import PaymentDetailModal, { type TocPayment } from '@/components/treasury/PaymentDetailModal'
 import { Plus, RefreshCw, Trash2, XCircle, Search, X, CheckCircle, Download, ArrowUpDown, ArrowUp, ArrowDown, Pencil, Repeat2, ChevronRight, ChevronDown, ChevronLeft, Clock, Scissors, CreditCard, Eye, Wallet, Tags, FileClock, AlertTriangle, CalendarClock, TimerOff } from 'lucide-react'
@@ -2167,7 +2168,36 @@ export default function PayablesPage() {
         </div>
 
         {/* ── Painel lateral de detalhes ── */}
-        {panelDoc && (
+        {/* Painel partilhado (drawer) para documentos com registo local. Faturas de
+            origem TOC pura (id `toc-…`, sem registo local) NÃO podem usar este painel
+            porque GET /payables/toc-<id> devolve 404 — mantêm o painel inline abaixo. */}
+        {panelDoc && !panelDoc.id.startsWith('toc-') && (
+          <DocDetailPanel
+            docId={panelDoc.id}
+            docType="payable"
+            variant="drawer"
+            entityNav={{ from: '/contas-a-pagar', fromLabel: 'Contas a Pagar' }}
+            onClose={() => { setPanelDoc(null); setPanelTocDoc(null) }}
+            onMutated={() => { qc.invalidateQueries({ queryKey: ['payables'] }); qc.invalidateQueries({ queryKey: ['payables-kpis'] }) }}
+            onEdit={() => {
+              if (!panelDoc) return
+              setEditId(panelDoc.id)
+              setEditRow(panelDoc)
+              setEditForm({
+                categoryId: panelDoc.category?.id ?? '',
+                entityName: panelDoc.entityName,
+                reference: panelDoc.reference,
+                documentDate: panelDoc.documentDate?.slice(0, 10) ?? '',
+                dueDate: panelDoc.dueDate.slice(0, 10),
+                totalAmount: String(panelDoc.totalAmount),
+                description: panelDoc.description ?? '',
+              })
+            }}
+            onDelete={() => { if (panelDoc) setDeleteRow(panelDoc) }}
+          />
+        )}
+
+        {panelDoc && panelDoc.id.startsWith('toc-') && (
           <div className="fixed inset-0 z-50 w-full bg-white flex flex-col overflow-hidden lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:w-80 xl:w-96 lg:flex-shrink-0 lg:h-[calc(100vh-4rem)] lg:border-l lg:border-gray-200">
             {/* Cabeçalho */}
             <div className="p-5 border-b border-gray-100">
