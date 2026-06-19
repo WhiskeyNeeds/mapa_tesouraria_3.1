@@ -938,6 +938,7 @@ export class TreasuryPayablesService {
   async settle(clientId: string, userId: string, id: string, opts: { paymentReference?: string; date?: string } = {}) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
     const ref = opts.paymentReference?.trim()
     const manual = !!ref
     // Via manual (registo do comprovativo de pagamento): exige documento Pago +
@@ -1002,6 +1003,7 @@ export class TreasuryPayablesService {
   async pay(clientId: string, userId: string, id: string) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
     if (item.status === 'PAID') throw httpError(409, 'Already paid')
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
@@ -1097,6 +1099,7 @@ export class TreasuryPayablesService {
   async partialPayment(clientId: string, userId: string, id: string, amount: number) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
     if (item.status === 'PAID') throw httpError(409, 'Already paid')
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
@@ -1200,6 +1203,7 @@ export class TreasuryPayablesService {
   async setPromisedDate(clientId: string, userId: string, id: string, date: string | null) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
     if (item.status === 'SETTLED') throw httpError(409, 'Não é possível definir data de pagamento numa fatura já paga/liquidada')
     const newDate = date ? new Date(date) : null
     const result = await this.prisma.treasuryPayable.update({
@@ -1236,6 +1240,7 @@ export class TreasuryPayablesService {
   ) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
     // Só faturas em aberto podem entrar em Futuros Pagamentos. Parcialmente pagas,
     // pagas, liquidadas ou anuladas ficam de fora. Desmarcar (ready=false) é sempre
     // permitido (rede de limpeza para docs que mudaram de estado).
@@ -1317,6 +1322,7 @@ export class TreasuryPayablesService {
   async split(clientId: string, userId: string, id: string, installments: Array<{ promisedPaymentDate: string; amount: number; description?: string }>) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
     if (item.status !== 'OPEN') throw httpError(409, 'Só é possível dividir documentos em aberto')
     if (item.parentId) throw httpError(409, 'Não é possível dividir uma parcela')
     const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
