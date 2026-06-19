@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { formatCurrency } from '@/lib/utils'
 import KpiCard from '@/components/ui/KpiCard'
-import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight } from 'lucide-react'
+import { Wallet, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, CalendarDays, Gauge, ReceiptText, ChevronDown, ChevronRight, Eye, EyeOff } from 'lucide-react'
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Bar, ComposedChart, Line, PieChart, Pie, Cell,
@@ -17,6 +17,9 @@ interface CatItem { name: string; color: string; amount: number }
 interface DashboardData {
   kpis: {
     totalBalance: number; cashAvailable: number; toReceive: number; toPay: number
+    // Programadas (SCHEDULED) em separado — o toggle "Incluir programadas" soma-as ou não.
+    toReceiveProgrammed?: number; toPayProgrammed?: number
+    countReceivablesProgrammed?: number; countPayablesProgrammed?: number
     countReceivablesOpen: number; countPayablesOpen: number; overdueReceivables: number; overduePayables: number
   }
   bankAccounts: Array<{ id: string; name: string; bankName: string; currentBalance: number; ibanLast4: string; lowBalanceWarning?: boolean; minBalance?: number | null; currency?: string }>
@@ -37,12 +40,17 @@ interface AccountMonthlyData {
 
 interface CashflowStatCategory {
   id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null; monthly: number[]
+  // Subdivisão por estado (cf. backend) — usada para reagir aos toggles na tabela.
+  monthlySettled?: number[]; monthlyOpen?: number[]; monthlyProgrammed?: number[]
   children?: CashflowStatCategory[]
 }
 interface CashflowStatementData {
   year: number
   months: Array<{ month: number; label: string }>
   startingBalances: number[]; endingBalances: number[]
+  // Contribuição (com sinal) de em aberto/programadas na âncora startingBalances[0],
+  // para reconciliar o saldo só-fechadas com o saldo real ao esconder os toggles.
+  anchorOpenContribution?: number; anchorProgrammedContribution?: number
   incomeTotal: number[]; expenseTotal: number[]
   // Subdivisão por status (cf. backend):
   //   settled    → atual (sólido)
@@ -51,6 +59,8 @@ interface CashflowStatementData {
   incomeSettled?: number[]; incomeOpen?: number[]; incomeProgrammed?: number[]
   expenseSettled?: number[]; expenseOpen?: number[]; expenseProgrammed?: number[]
   uncategorizedIncome: number[]; uncategorizedExpense: number[]
+  uncategorizedIncomeSettled?: number[]; uncategorizedIncomeOpen?: number[]; uncategorizedIncomeProgrammed?: number[]
+  uncategorizedExpenseSettled?: number[]; uncategorizedExpenseOpen?: number[]; uncategorizedExpenseProgrammed?: number[]
   categories: CashflowStatCategory[]
 }
 interface CashPositioningWeek {
@@ -161,6 +171,10 @@ function CashflowStatementTable() {
   const [hoveredColKey, setHoveredColKey] = useState<string | null>(null)
   const [viewType, setViewType] = useState<'cashflow' | 'balances'>('cashflow')
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly'>('monthly')
+  // Toggles do gráfico Cash Flow: dados fechados (históricos reais) são SEMPRE
+  // mostrados; em aberto e programados podem ser ocultados (default = visível).
+  const [showOpen, setShowOpen] = useState(true)
+  const [showProgrammed, setShowProgrammed] = useState(true)
 
   const [year, setYear] = useState(() => new Date().getFullYear())
   const [monthOffset, setMonthOffset] = useState(0)
@@ -240,8 +254,6 @@ function CashflowStatementTable() {
     }
   }
 
-  const colIncome = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.incomeTotal[i] ?? 0), 0) : 0 }
-  const colExpense = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.expenseTotal[i] ?? 0), 0) : 0 }
   // Subdivisão por status para o chart Cash Flow. Fallback para 0 se o backend
   // ainda não devolver a subdivisão.
   const colIncomeSettled    = (col: ColDef) => { const d = getYearData(col.colYear); return d?.incomeSettled    ? col.monthIndices.reduce((s, i) => s + (d.incomeSettled![i]    ?? 0), 0) : 0 }
@@ -250,33 +262,69 @@ function CashflowStatementTable() {
   const colExpenseSettled    = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseSettled    ? col.monthIndices.reduce((s, i) => s + (d.expenseSettled![i]    ?? 0), 0) : 0 }
   const colExpenseOpen       = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseOpen       ? col.monthIndices.reduce((s, i) => s + (d.expenseOpen![i]       ?? 0), 0) : 0 }
   const colExpenseProgrammed = (col: ColDef) => { const d = getYearData(col.colYear); return d?.expenseProgrammed ? col.monthIndices.reduce((s, i) => s + (d.expenseProgrammed![i] ?? 0), 0) : 0 }
+  // Totais "visíveis" no gráfico = fechadas (sempre) + em aberto/programadas
+  // conforme os toggles. Quando ambos ON equivale a colIncome/colExpense.
+  const colIncomeVisible  = (col: ColDef) => colIncomeSettled(col)  + (showOpen ? colIncomeOpen(col) : 0)  + (showProgrammed ? colIncomeProgrammed(col) : 0)
+  const colExpenseVisible = (col: ColDef) => colExpenseSettled(col) + (showOpen ? colExpenseOpen(col) : 0) + (showProgrammed ? colExpenseProgrammed(col) : 0)
   const colStartBal = (col: ColDef) => { const d = getYearData(col.colYear); return d ? (d.startingBalances[col.monthIndices[0]] ?? 0) : 0 }
+  // Âncora do saldo (saldo inicial da 1ª coluna) consistente com os toggles: parte
+  // da âncora do ano e devolve as parcelas em aberto/programadas escondidas (que o
+  // backend tinha descontado), depois encadeia os meses anteriores à janela com os
+  // deltas visíveis. Assim, com só fechadas, o saldo reconcilia com o saldo real (KPI).
+  const colStartBalVisible = (col: ColDef) => {
+    const d = getYearData(col.colYear)
+    if (!d) return colStartBal(col)
+    const firstMonth = col.monthIndices[0]
+    const hasSub = !!(d.incomeSettled || d.incomeOpen || d.incomeProgrammed)
+    let bal = (d.startingBalances[0] ?? 0)
+      - (showOpen ? 0 : (d.anchorOpenContribution ?? 0))
+      - (showProgrammed ? 0 : (d.anchorProgrammedContribution ?? 0))
+    for (let m = 0; m < firstMonth; m++) {
+      if (hasSub) {
+        const inc = (d.incomeSettled?.[m] ?? 0) + (showOpen ? (d.incomeOpen?.[m] ?? 0) : 0) + (showProgrammed ? (d.incomeProgrammed?.[m] ?? 0) : 0)
+        const exp = (d.expenseSettled?.[m] ?? 0) + (showOpen ? (d.expenseOpen?.[m] ?? 0) : 0) + (showProgrammed ? (d.expenseProgrammed?.[m] ?? 0) : 0)
+        bal += inc - exp
+      } else {
+        bal += (d.incomeTotal[m] ?? 0) - (d.expenseTotal[m] ?? 0)
+      }
+    }
+    return bal
+  }
+  // Soma "visível" de uma série mensal subdividida: settled (sempre) + open/programmed
+  // conforme os toggles. Fallback ao total quando o backend não envia subdivisão.
+  const visibleSum = (idx: number[], total: number[], settled?: number[], open?: number[], programmed?: number[]) => {
+    if (!settled && !open && !programmed) return idx.reduce((s, i) => s + (total[i] ?? 0), 0)
+    return idx.reduce((s, i) =>
+      s + ((settled?.[i] ?? 0) + (showOpen ? (open?.[i] ?? 0) : 0) + (showProgrammed ? (programmed?.[i] ?? 0) : 0)), 0)
+  }
   const colCatAmt = (col: ColDef, cat: CashflowStatCategory) => {
     const d = getYearData(col.colYear)
     if (!d) return 0
     const yearCat = findCatInTree(d.categories, cat.id)
-    return yearCat ? col.monthIndices.reduce((s, i) => s + (yearCat.monthly[i] ?? 0), 0) : 0
+    return yearCat ? visibleSum(col.monthIndices, yearCat.monthly, yearCat.monthlySettled, yearCat.monthlyOpen, yearCat.monthlyProgrammed) : 0
   }
-  const colUncatInc = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.uncategorizedIncome[i] ?? 0), 0) : 0 }
-  const colUncatExp = (col: ColDef) => { const d = getYearData(col.colYear); return d ? col.monthIndices.reduce((s, i) => s + (d.uncategorizedExpense[i] ?? 0), 0) : 0 }
+  const colUncatInc = (col: ColDef) => { const d = getYearData(col.colYear); return d ? visibleSum(col.monthIndices, d.uncategorizedIncome, d.uncategorizedIncomeSettled, d.uncategorizedIncomeOpen, d.uncategorizedIncomeProgrammed) : 0 }
+  const colUncatExp = (col: ColDef) => { const d = getYearData(col.colYear); return d ? visibleSum(col.monthIndices, d.uncategorizedExpense, d.uncategorizedExpenseSettled, d.uncategorizedExpenseOpen, d.uncategorizedExpenseProgrammed) : 0 }
 
   // Saldo corrido CONTÍNUO ao longo da janela visível. Cada ano vem do backend
   // ancorado ao saldo atual do banco (startingBalances[0] = saldo de hoje), por
   // isso ao cruzar a viragem de ano o saldo "saltava" de volta ao saldo atual.
   // Aqui encadeia-se: o saldo inicial de cada coluna = saldo final da anterior,
   // ancorando só a 1ª coluna ao valor do backend.
+  // Saldo encadeado usando os totais VISÍVEIS (reage aos toggles em aberto/
+  // programadas) — partilhado pela tabela e pela linha do gráfico.
   const runningStartBal: number[] = []
   const runningEndBal: number[] = []
   for (let k = 0; k < cols.length; k++) {
-    const start = k === 0 ? colStartBal(cols[0]) : runningEndBal[k - 1]
+    const start = k === 0 ? colStartBalVisible(cols[0]) : runningEndBal[k - 1]
     runningStartBal[k] = start
-    runningEndBal[k] = start + colIncome(cols[k]) - colExpense(cols[k])
+    runningEndBal[k] = start + colIncomeVisible(cols[k]) - colExpenseVisible(cols[k])
   }
 
   const incomeCats = (yearData?.categories ?? []).filter((c) => c.type === 'REVENUE')
   const expenseCats = (yearData?.categories ?? []).filter((c) => c.type === 'EXPENSE')
-  const totalIncome = cols.reduce((s, col) => s + colIncome(col), 0)
-  const totalExpense = cols.reduce((s, col) => s + colExpense(col), 0)
+  const totalIncome = cols.reduce((s, col) => s + colIncomeVisible(col), 0)
+  const totalExpense = cols.reduce((s, col) => s + colExpenseVisible(col), 0)
   const netVariation = totalIncome - totalExpense
 
   const navigateMonths = (dir: -1 | 1) => {
@@ -321,33 +369,45 @@ function CashflowStatementTable() {
 
   const chartData = cols.map((col, k) => ({
     label: col.label,
-    income: colIncome(col),
-    expense: colExpense(col),
+    income: colIncomeVisible(col),
+    expense: colExpenseVisible(col),
     incomeSettled: colIncomeSettled(col),
-    incomeOpen: colIncomeOpen(col),
-    incomeProgrammed: colIncomeProgrammed(col),
+    incomeOpen: showOpen ? colIncomeOpen(col) : 0,
+    incomeProgrammed: showProgrammed ? colIncomeProgrammed(col) : 0,
     expenseSettled: colExpenseSettled(col),
-    expenseOpen: colExpenseOpen(col),
-    expenseProgrammed: colExpenseProgrammed(col),
-    // Saldo projetado e contínuo (encadeado entre anos) — a linha não salta na viragem de ano.
+    expenseOpen: showOpen ? colExpenseOpen(col) : 0,
+    expenseProgrammed: showProgrammed ? colExpenseProgrammed(col) : 0,
+    // Saldo projetado e contínuo (encadeado entre anos) — reage aos toggles.
     balance: runningEndBal[k],
   }))
 
   // Weekly chart: o cash-positioning service não devolve subdivisão por status,
   // por isso usamos uma aproximação temporal — passado=settled, atual=open,
   // futuro=programmed. (No mensal a subdivisão é real, vinda do backend.)
-  const weeklyChartData = visibleWeeks.map((wk) => ({
+  // Visibilidade semanal: passado=fechado (sempre), atual=em aberto, futuro=programado.
+  const wkVisible    = (wk: typeof visibleWeeks[number]) => wk.isFuture ? showProgrammed : wk.isCurrent ? showOpen : true
+  const wkVisIncome  = (wk: typeof visibleWeeks[number]) => wkVisible(wk) ? wk.income  : 0
+  const wkVisExpense = (wk: typeof visibleWeeks[number]) => wkVisible(wk) ? wk.expense : 0
+  // Saldo encadeado da linha do gráfico, ancorado ao saldo de abertura da 1ª semana
+  // visível e reagindo aos toggles (igual à lógica mensal).
+  const wkRunBal: number[] = []
+  for (let k = 0; k < visibleWeeks.length; k++) {
+    const wk = visibleWeeks[k]
+    const start = k === 0 ? wk.openingBalance : wkRunBal[k - 1]
+    wkRunBal[k] = start + wkVisIncome(wk) - wkVisExpense(wk)
+  }
+  const weeklyChartData = visibleWeeks.map((wk, k) => ({
     label: wk.label,
-    income: wk.income,
-    expense: wk.expense,
+    income: wkVisIncome(wk),
+    expense: wkVisExpense(wk),
     incomeSettled:    (!wk.isFuture && !wk.isCurrent) ? wk.income : 0,
-    incomeOpen:       wk.isCurrent ? wk.income : 0,
-    incomeProgrammed: wk.isFuture ? wk.income : 0,
+    incomeOpen:       (wk.isCurrent && showOpen) ? wk.income : 0,
+    incomeProgrammed: (wk.isFuture && showProgrammed) ? wk.income : 0,
     expenseSettled:    (!wk.isFuture && !wk.isCurrent) ? wk.expense : 0,
-    expenseOpen:       wk.isCurrent ? wk.expense : 0,
-    expenseProgrammed: wk.isFuture ? wk.expense : 0,
+    expenseOpen:       (wk.isCurrent && showOpen) ? wk.expense : 0,
+    expenseProgrammed: (wk.isFuture && showProgrammed) ? wk.expense : 0,
     // Saldo projetado: a linha continua pelas semanas futuras (forecast).
-    balance: wk.closingBalance,
+    balance: wkRunBal[k],
   }))
 
   const toggleGroup = (id: string) => setClosedGroups((prev) => {
@@ -362,8 +422,8 @@ function CashflowStatementTable() {
       <div className="flex items-center gap-1.5 text-xs text-gray-500"><div className="w-4 flex-shrink-0 border-b-2 border-blue-500 rounded" style={{ marginTop: 1 }} />Saldo</div>
       <div className="text-[11px] text-gray-400 mt-1 leading-snug">
         <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded-sm flex-shrink-0 bg-gray-500" />Fechadas</div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded-sm flex-shrink-0 bg-gray-500 opacity-55" />Em aberto</div>
-        <div className="flex items-center gap-1.5">
+        <div className={`flex items-center gap-1.5 ${showOpen ? '' : 'opacity-40 line-through'}`}><div className="w-3 h-2.5 rounded-sm flex-shrink-0 bg-gray-500 opacity-55" />Em aberto</div>
+        <div className={`flex items-center gap-1.5 ${showProgrammed ? '' : 'opacity-40 line-through'}`}>
           <svg width="12" height="10" className="flex-shrink-0">
             <defs>
               <pattern id="legend-stripes" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)"><rect width="2" height="4" fill="#6b7280" /></pattern>
@@ -994,7 +1054,7 @@ function CashflowStatementTable() {
               </div>
             </td>
             {cols.map((col) => {
-              const v = colIncome(col)
+              const v = colIncomeVisible(col)
               return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-emerald-100' : ''} ${v > 0 ? (col.isFuture ? 'text-emerald-600 italic' : 'text-emerald-700') : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
             })}
             <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{totalIncome > 0 ? formatCurrency(totalIncome) : '—'}</td>
@@ -1016,7 +1076,7 @@ function CashflowStatementTable() {
               </div>
             </td>
             {cols.map((col) => {
-              const v = colExpense(col)
+              const v = colExpenseVisible(col)
               return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-red-100' : ''} ${v > 0 ? (col.isFuture ? 'text-red-600 italic' : 'text-red-700') : 'text-gray-300'}`} {...hoverProps(col.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
             })}
             <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{totalExpense > 0 ? formatCurrency(totalExpense) : '—'}</td>
@@ -1033,7 +1093,7 @@ function CashflowStatementTable() {
           <tr className="bg-gray-50 border-t border-gray-200">
             <td className="px-5 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-gray-50 z-10">Variação líquida</td>
             {cols.map((col) => {
-              const net = colIncome(col) - colExpense(col)
+              const net = colIncomeVisible(col) - colExpenseVisible(col)
               return <td key={col.key} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === col.label ? 'bg-blue-50' : ''} ${net === 0 ? 'text-gray-300' : net > 0 ? (col.isFuture ? 'text-emerald-600 italic' : 'text-emerald-700') : (col.isFuture ? 'text-red-600 italic' : 'text-red-700')}`} {...hoverProps(col.label)}>{net !== 0 ? netFmt(net) : '—'}</td>
             })}
             <td className={`px-3 py-2 text-right text-xs font-semibold whitespace-nowrap ${netVariation === 0 ? 'text-gray-300' : netVariation > 0 ? 'text-emerald-700' : 'text-red-700'}`}>{netVariation !== 0 ? netFmt(netVariation) : '—'}</td>
@@ -1056,8 +1116,8 @@ function CashflowStatementTable() {
     if (!cpData) return <div className="px-5 py-8 text-center text-xs text-gray-400">Dados semanais não disponíveis</div>
     const wkIncomeCats = cpData.categories.filter((c) => c.type === 'REVENUE')
     const wkExpenseCats = cpData.categories.filter((c) => c.type === 'EXPENSE')
-    const wkTotalIncome = visibleWeeks.reduce((s, w) => s + w.income, 0)
-    const wkTotalExpense = visibleWeeks.reduce((s, w) => s + w.expense, 0)
+    const wkTotalIncome = visibleWeeks.reduce((s, w) => s + wkVisIncome(w), 0)
+    const wkTotalExpense = visibleWeeks.reduce((s, w) => s + wkVisExpense(w), 0)
     return (
       <div className="overflow-x-auto">
         <table className="w-full min-w-max border-collapse">
@@ -1078,11 +1138,11 @@ function CashflowStatementTable() {
 
             <tr className="bg-white hover:bg-gray-50/50">
               <td className="px-5 py-2.5 text-xs font-semibold text-gray-700 sticky left-0 bg-white z-10">Saldo inicial</td>
-              {visibleWeeks.map((wk) => (
-                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-medium cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${wk.openingBalance < 0 ? 'text-red-700' : wk.isCurrent ? 'text-blue-900' : wk.isFuture ? 'text-gray-500' : 'text-gray-800'}`} {...hoverProps(wk.label)}>
-                  {formatCurrency(wk.openingBalance)}
+              {visibleWeeks.map((wk, k) => { const open = k === 0 ? wk.openingBalance : wkRunBal[k - 1]; return (
+                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-medium cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${open < 0 ? 'text-red-700' : wk.isCurrent ? 'text-blue-900' : wk.isFuture ? 'text-gray-500' : 'text-gray-800'}`} {...hoverProps(wk.label)}>
+                  {formatCurrency(open)}
                 </td>
-              ))}
+              ) })}
               <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
             </tr>
 
@@ -1093,15 +1153,15 @@ function CashflowStatementTable() {
                   <span className="text-xs font-semibold text-emerald-800">Entradas</span>
                 </div>
               </td>
-              {visibleWeeks.map((wk) => (
-                <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-emerald-100' : ''} ${wk.income > 0 ? wk.isFuture ? 'text-emerald-400' : 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
-                  {wk.income > 0 ? formatCurrency(wk.income) : '—'}
+              {visibleWeeks.map((wk) => { const v = wkVisIncome(wk); return (
+                <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-emerald-100' : ''} ${v > 0 ? wk.isFuture ? 'text-emerald-400' : 'text-emerald-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
+                  {v > 0 ? formatCurrency(v) : '—'}
                 </td>
-              ))}
+              ) })}
               <td className="px-3 py-2 text-right text-xs font-semibold text-emerald-700 whitespace-nowrap">{wkTotalIncome > 0 ? formatCurrency(wkTotalIncome) : '—'}</td>
             </tr>
             {inflowOpen && wkIncomeCats.map((cat) => {
-              const catTotal = visibleWeeks.reduce((s, wk) => s + (wk.catIncome[cat.id] ?? 0), 0)
+              const catTotal = visibleWeeks.reduce((s, wk) => s + (wkVisible(wk) ? (wk.catIncome[cat.id] ?? 0) : 0), 0)
               if (catTotal === 0) return null
               return (
                 <tr key={cat.id} className="bg-white hover:bg-gray-50/50">
@@ -1112,7 +1172,7 @@ function CashflowStatementTable() {
                     </div>
                   </td>
                   {visibleWeeks.map((wk) => {
-                    const v = wk.catIncome[cat.id] ?? 0
+                    const v = wkVisible(wk) ? (wk.catIncome[cat.id] ?? 0) : 0
                     return <td key={wk.label} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${v > 0 ? 'text-gray-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
                   })}
                   <td className="px-3 py-1.5 text-right text-xs text-gray-600 whitespace-nowrap">{catTotal > 0 ? formatCurrency(catTotal) : '—'}</td>
@@ -1120,7 +1180,7 @@ function CashflowStatementTable() {
               )
             })}
             {inflowOpen && (() => {
-              const wkUncatInc = (wk: CashPositioningWeek) => Math.max(0, wk.income - wkIncomeCats.reduce((s, c) => s + (wk.catIncome[c.id] ?? 0), 0))
+              const wkUncatInc = (wk: CashPositioningWeek) => wkVisible(wk) ? Math.max(0, wk.income - wkIncomeCats.reduce((s, c) => s + (wk.catIncome[c.id] ?? 0), 0)) : 0
               const totalUncat = visibleWeeks.reduce((s, wk) => s + wkUncatInc(wk), 0)
               if (totalUncat <= 0) return null
               return (
@@ -1139,15 +1199,15 @@ function CashflowStatementTable() {
                   <span className="text-xs font-semibold text-red-800">Saídas</span>
                 </div>
               </td>
-              {visibleWeeks.map((wk) => (
-                <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-red-100' : ''} ${wk.expense > 0 ? wk.isFuture ? 'text-red-400' : 'text-red-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
-                  {wk.expense > 0 ? formatCurrency(wk.expense) : '—'}
+              {visibleWeeks.map((wk) => { const v = wkVisExpense(wk); return (
+                <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-red-100' : ''} ${v > 0 ? wk.isFuture ? 'text-red-400' : 'text-red-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>
+                  {v > 0 ? formatCurrency(v) : '—'}
                 </td>
-              ))}
+              ) })}
               <td className="px-3 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap">{wkTotalExpense > 0 ? formatCurrency(wkTotalExpense) : '—'}</td>
             </tr>
             {outflowOpen && wkExpenseCats.map((cat) => {
-              const catTotal = visibleWeeks.reduce((s, wk) => s + (wk.catExpense[cat.id] ?? 0), 0)
+              const catTotal = visibleWeeks.reduce((s, wk) => s + (wkVisible(wk) ? (wk.catExpense[cat.id] ?? 0) : 0), 0)
               if (catTotal === 0) return null
               return (
                 <tr key={cat.id} className="bg-white hover:bg-gray-50/50">
@@ -1158,7 +1218,7 @@ function CashflowStatementTable() {
                     </div>
                   </td>
                   {visibleWeeks.map((wk) => {
-                    const v = wk.catExpense[cat.id] ?? 0
+                    const v = wkVisible(wk) ? (wk.catExpense[cat.id] ?? 0) : 0
                     return <td key={wk.label} className={`px-3 py-1.5 text-right tabular-nums text-xs whitespace-nowrap cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${v > 0 ? 'text-gray-700' : 'text-gray-300'}`} {...hoverProps(wk.label)}>{v > 0 ? formatCurrency(v) : '—'}</td>
                   })}
                   <td className="px-3 py-1.5 text-right text-xs text-gray-600 whitespace-nowrap">{catTotal > 0 ? formatCurrency(catTotal) : '—'}</td>
@@ -1166,7 +1226,7 @@ function CashflowStatementTable() {
               )
             })}
             {outflowOpen && (() => {
-              const wkUncatExp = (wk: CashPositioningWeek) => Math.max(0, wk.expense - wkExpenseCats.reduce((s, c) => s + (wk.catExpense[c.id] ?? 0), 0))
+              const wkUncatExp = (wk: CashPositioningWeek) => wkVisible(wk) ? Math.max(0, wk.expense - wkExpenseCats.reduce((s, c) => s + (wk.catExpense[c.id] ?? 0), 0)) : 0
               const totalUncat = visibleWeeks.reduce((s, wk) => s + wkUncatExp(wk), 0)
               if (totalUncat <= 0) return null
               return (
@@ -1181,7 +1241,7 @@ function CashflowStatementTable() {
             <tr className="bg-gray-50 border-t border-gray-100">
               <td className="px-5 py-2 text-xs font-semibold text-gray-600 sticky left-0 bg-gray-50 z-10">Variação líquida</td>
               {visibleWeeks.map((wk) => {
-                const net = wk.income - wk.expense
+                const net = wkVisIncome(wk) - wkVisExpense(wk)
                 return (
                   <td key={wk.label} className={`px-3 py-2 text-right tabular-nums text-xs whitespace-nowrap font-semibold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50' : ''} ${net === 0 ? 'text-gray-300' : net > 0 ? wk.isFuture ? 'text-emerald-400' : 'text-emerald-700' : wk.isFuture ? 'text-red-400' : 'text-red-700'}`} {...hoverProps(wk.label)}>
                     {net !== 0 ? netFmt(net) : '—'}
@@ -1193,11 +1253,11 @@ function CashflowStatementTable() {
 
             <tr className="bg-white border-t-2 border-gray-300">
               <td className="px-5 py-2.5 text-xs font-bold text-gray-900 sticky left-0 bg-white z-10">Saldo final</td>
-              {visibleWeeks.map((wk) => (
-                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50 text-blue-900' : wk.closingBalance < 0 ? 'text-red-700' : wk.isFuture ? 'text-gray-500' : 'text-gray-900'}`} {...hoverProps(wk.label)}>
-                  {formatCurrency(wk.closingBalance)}
+              {visibleWeeks.map((wk, k) => { const v = wkRunBal[k]; return (
+                <td key={wk.label} className={`px-3 py-2.5 text-right tabular-nums text-xs whitespace-nowrap font-bold cursor-pointer select-none ${activeColKey === wk.label ? 'bg-blue-50 text-blue-900' : v < 0 ? 'text-red-700' : wk.isFuture ? 'text-gray-500' : 'text-gray-900'}`} {...hoverProps(wk.label)}>
+                  {formatCurrency(v)}
                 </td>
-              ))}
+              ) })}
               <td className="px-3 py-2.5 text-right text-xs text-gray-300">—</td>
             </tr>
           </tbody>
@@ -1231,6 +1291,20 @@ function CashflowStatementTable() {
                 </button>
               ))}
             </div>
+            {viewType === 'cashflow' && (
+              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                <button type="button" onClick={() => setShowOpen((v) => !v)} title="Mostrar/ocultar dados em aberto"
+                  className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${showOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
+                  {showOpen ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                  Em aberto
+                </button>
+                <button type="button" onClick={() => setShowProgrammed((v) => !v)} title="Mostrar/ocultar dados programados"
+                  className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${showProgrammed ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
+                  {showProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                  Programadas
+                </button>
+              </div>
+            )}
           </div>
           {periodType === 'weekly' ? (
             <div className="flex items-center gap-1">
@@ -1257,6 +1331,8 @@ function CashflowStatementTable() {
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
   const [days, setDays] = useState(30)
+  // Incluir Programadas (SCHEDULED) nos KPIs A Receber/A Pagar e indicadores derivados.
+  const [includeProgrammed, setIncludeProgrammed] = useState(true)
   // forecastDays fixo em 90: a secção "Previsão de Tesouraria" foi removida do
   // Dashboard; o forecast continua a alimentar o indicador de risco (saldo negativo).
   const [forecastDays] = useState(90)
@@ -1289,15 +1365,19 @@ export default function DashboardPage() {
     const netCashFlow = totalIncome - totalExpense
     const avgDailyExpense = chart.length > 0 ? totalExpense / days : 0
     const avgDailyIncome = chart.length > 0 ? totalIncome / days : 0
-    const cashRunway = avgDailyExpense > 0 ? Math.floor(data.kpis.cashAvailable / avgDailyExpense) : null
-    const coverageRatio = data.kpis.toPay > 0 ? data.kpis.toReceive / data.kpis.toPay : null
+    // Valores efetivos: somam as Programadas (SCHEDULED) só quando o toggle está ligado.
+    const toReceive = data.kpis.toReceive + (includeProgrammed ? (data.kpis.toReceiveProgrammed ?? 0) : 0)
+    const toPay = data.kpis.toPay + (includeProgrammed ? (data.kpis.toPayProgrammed ?? 0) : 0)
+    const cashAvailable = data.kpis.totalBalance - toPay
+    const cashRunway = avgDailyExpense > 0 ? Math.floor(cashAvailable / avgDailyExpense) : null
+    const coverageRatio = toPay > 0 ? toReceive / toPay : null
     // Financial ratios
-    const dso = avgDailyIncome > 0 ? Math.round(data.kpis.toReceive / avgDailyIncome) : null
-    const dpo = avgDailyExpense > 0 ? Math.round(data.kpis.toPay / avgDailyExpense) : null
-    const liquidezImediata = data.kpis.toPay > 0 ? data.kpis.totalBalance / data.kpis.toPay : null
-    const workingCapital = data.kpis.totalBalance + data.kpis.toReceive - data.kpis.toPay
+    const dso = avgDailyIncome > 0 ? Math.round(toReceive / avgDailyIncome) : null
+    const dpo = avgDailyExpense > 0 ? Math.round(toPay / avgDailyExpense) : null
+    const liquidezImediata = toPay > 0 ? data.kpis.totalBalance / toPay : null
+    const workingCapital = data.kpis.totalBalance + toReceive - toPay
     return { totalIncome, totalExpense, netCashFlow, avgDailyExpense, avgDailyIncome, cashRunway, coverageRatio, dso, dpo, liquidezImediata, workingCapital }
-  }, [data, days])
+  }, [data, days, includeProgrammed])
 
   const forecastStats = useMemo(() => {
     if (!forecastData || forecastData.forecast.length === 0) return null
@@ -1331,7 +1411,20 @@ export default function DashboardPage() {
   )
   if (!data) return null
 
-  const { kpis } = data
+  // kpis efetivo: A Receber/A Pagar/Disponível incluem Programadas conforme o toggle.
+  // Os restantes campos (saldo, contagens, vencidos) ficam inalterados.
+  const rawKpis = data.kpis
+  const toReceiveEff = rawKpis.toReceive + (includeProgrammed ? (rawKpis.toReceiveProgrammed ?? 0) : 0)
+  const toPayEff = rawKpis.toPay + (includeProgrammed ? (rawKpis.toPayProgrammed ?? 0) : 0)
+  const kpis = {
+    ...rawKpis,
+    toReceive: toReceiveEff,
+    toPay: toPayEff,
+    cashAvailable: rawKpis.totalBalance - toPayEff,
+    // Contagens coerentes com os valores: incluem os docs programados quando o toggle está ligado.
+    countReceivablesOpen: rawKpis.countReceivablesOpen + (includeProgrammed ? (rawKpis.countReceivablesProgrammed ?? 0) : 0),
+    countPayablesOpen: rawKpis.countPayablesOpen + (includeProgrammed ? (rawKpis.countPayablesProgrammed ?? 0) : 0),
+  }
   const netPosition = kpis.totalBalance + kpis.toReceive - kpis.toPay
 
   return (
@@ -1340,27 +1433,31 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <div className="flex gap-2">
-          {[30, 60, 90].map((d) => (
-            <button key={d} onClick={() => setDays(d)} className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${days === d ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}>
-              {d}d
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIncludeProgrammed((v) => !v)}
+            title={includeProgrammed ? 'A incluir as faturas programadas nos KPIs A Receber/A Pagar' : 'A excluir as faturas programadas dos KPIs'}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg font-medium border transition-colors ${includeProgrammed ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' : 'bg-gray-100 text-gray-400 border-gray-200 hover:text-gray-600'}`}
+          >
+            {includeProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+            Programadas
+          </button>
+          <div className="flex gap-2">
+            {[30, 60, 90].map((d) => (
+              <button key={d} onClick={() => setDays(d)} className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${days === d ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}>
+                {d}d
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Link to="/bancos" className="block h-full">
           <KpiCard title="Saldo Total" value={formatCurrency(kpis.totalBalance)} icon={<Wallet className="w-6 h-6 text-blue-500" />} className="h-full hover:border-blue-300 transition-colors cursor-pointer" />
         </Link>
-        <KpiCard
-          title="Caixa Disponível"
-          value={formatCurrency(kpis.cashAvailable)}
-          subtitle="Saldo − A Pagar"
-          icon={<Activity className="w-6 h-6 text-indigo-500" />}
-          className="h-full"
-        />
         <Link to="/contas-a-receber" className="block h-full">
           <KpiCard
             title="A Receber"
