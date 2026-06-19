@@ -1314,9 +1314,10 @@ function CashflowStatementTable({ showOpen, showProgrammed }: { showOpen: boolea
 
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
-  // Janela fixa (30d) dos indicadores (médias/rácios) e dos painéis por categoria.
-  // O seletor 30/60/90 foi removido — não governava o gráfico nem os KPIs.
-  const days = 30
+  // Janela dos indicadores (médias/rácios de fluxo) e dos painéis por categoria.
+  // O seletor vive no cartão "Indicadores Financeiros" (é o seu âmbito real); não
+  // governa o gráfico (navegação própria) nem os KPIs (fotografia do momento).
+  const [days, setDays] = useState(30)
   // Filtro de página (topo): "Em aberto" e "Programadas". Aplica-se a TODA a página
   // — KPIs (A Receber/A Pagar/Posição Líquida/Disponível) e gráfico de cash flow.
   // Os dados fechados (movimentos reais) contam sempre. Default: ambos visíveis.
@@ -1540,9 +1541,19 @@ export default function DashboardPage() {
         {/* Indicadores financeiros */}
         {stats && (
           <div className="card p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Gauge className="w-4 h-4 text-gray-400" />
-              <h2 className="text-sm font-semibold text-gray-700">Indicadores Financeiros</h2>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="flex items-center gap-2">
+                <Gauge className="w-4 h-4 text-gray-400" />
+                <h2 className="text-sm font-semibold text-gray-700">Indicadores Financeiros</h2>
+              </div>
+              <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+                {[30, 60, 90].map((d) => (
+                  <button key={d} type="button" onClick={() => setDays(d)} title={`Janela de ${d} dias para médias, rácios e categorias`}
+                    className={`px-2 py-0.5 text-xs font-medium rounded-md transition-colors ${days === d ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    {d}d
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="space-y-2.5">
               {/* Net cash flow highlight */}
