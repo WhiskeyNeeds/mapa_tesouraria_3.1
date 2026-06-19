@@ -162,7 +162,7 @@ interface ColDef {
   isFuture: boolean; isCurrent: boolean
 }
 
-function CashflowStatementTable() {
+function CashflowStatementTable({ showOpen, showProgrammed }: { showOpen: boolean; showProgrammed: boolean }) {
   const { selectedClientId } = useAuth()
   const [inflowOpen, setInflowOpen] = useState(true)
   const [outflowOpen, setOutflowOpen] = useState(true)
@@ -171,10 +171,8 @@ function CashflowStatementTable() {
   const [hoveredColKey, setHoveredColKey] = useState<string | null>(null)
   const [viewType, setViewType] = useState<'cashflow' | 'balances'>('cashflow')
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly'>('monthly')
-  // Toggles do gráfico Cash Flow: dados fechados (históricos reais) são SEMPRE
-  // mostrados; em aberto e programados podem ser ocultados (default = visível).
-  const [showOpen, setShowOpen] = useState(true)
-  const [showProgrammed, setShowProgrammed] = useState(true)
+  // showOpen/showProgrammed vêm do filtro de página (topo do Dashboard), aplicado a
+  // toda a página. Dados fechados (históricos reais) são SEMPRE mostrados.
 
   const [year, setYear] = useState(() => new Date().getFullYear())
   const [monthOffset, setMonthOffset] = useState(0)
@@ -1291,20 +1289,6 @@ function CashflowStatementTable() {
                 </button>
               ))}
             </div>
-            {viewType === 'cashflow' && (
-              <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-                <button type="button" onClick={() => setShowOpen((v) => !v)} title="Mostrar/ocultar dados em aberto"
-                  className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${showOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
-                  {showOpen ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                  Em aberto
-                </button>
-                <button type="button" onClick={() => setShowProgrammed((v) => !v)} title="Mostrar/ocultar dados programados"
-                  className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${showProgrammed ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
-                  {showProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                  Programadas
-                </button>
-              </div>
-            )}
           </div>
           {periodType === 'weekly' ? (
             <div className="flex items-center gap-1">
@@ -1331,8 +1315,11 @@ function CashflowStatementTable() {
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
   const [days, setDays] = useState(30)
-  // Incluir Programadas (SCHEDULED) nos KPIs A Receber/A Pagar e indicadores derivados.
-  const [includeProgrammed, setIncludeProgrammed] = useState(true)
+  // Filtro de página (topo): "Em aberto" e "Programadas". Aplica-se a TODA a página
+  // — KPIs (A Receber/A Pagar/Posição Líquida/Disponível) e gráfico de cash flow.
+  // Os dados fechados (movimentos reais) contam sempre. Default: ambos visíveis.
+  const [showOpen, setShowOpen] = useState(true)
+  const [showProgrammed, setShowProgrammed] = useState(true)
   // forecastDays fixo em 90: a secção "Previsão de Tesouraria" foi removida do
   // Dashboard; o forecast continua a alimentar o indicador de risco (saldo negativo).
   const [forecastDays] = useState(90)
@@ -1365,9 +1352,9 @@ export default function DashboardPage() {
     const netCashFlow = totalIncome - totalExpense
     const avgDailyExpense = chart.length > 0 ? totalExpense / days : 0
     const avgDailyIncome = chart.length > 0 ? totalIncome / days : 0
-    // Valores efetivos: somam as Programadas (SCHEDULED) só quando o toggle está ligado.
-    const toReceive = data.kpis.toReceive + (includeProgrammed ? (data.kpis.toReceiveProgrammed ?? 0) : 0)
-    const toPay = data.kpis.toPay + (includeProgrammed ? (data.kpis.toPayProgrammed ?? 0) : 0)
+    // Valores efetivos: "em aberto" e "programadas" entram conforme o filtro de página.
+    const toReceive = (showOpen ? data.kpis.toReceive : 0) + (showProgrammed ? (data.kpis.toReceiveProgrammed ?? 0) : 0)
+    const toPay = (showOpen ? data.kpis.toPay : 0) + (showProgrammed ? (data.kpis.toPayProgrammed ?? 0) : 0)
     const cashAvailable = data.kpis.totalBalance - toPay
     const cashRunway = avgDailyExpense > 0 ? Math.floor(cashAvailable / avgDailyExpense) : null
     const coverageRatio = toPay > 0 ? toReceive / toPay : null
@@ -1377,7 +1364,7 @@ export default function DashboardPage() {
     const liquidezImediata = toPay > 0 ? data.kpis.totalBalance / toPay : null
     const workingCapital = data.kpis.totalBalance + toReceive - toPay
     return { totalIncome, totalExpense, netCashFlow, avgDailyExpense, avgDailyIncome, cashRunway, coverageRatio, dso, dpo, liquidezImediata, workingCapital }
-  }, [data, days, includeProgrammed])
+  }, [data, days, showOpen, showProgrammed])
 
   const forecastStats = useMemo(() => {
     if (!forecastData || forecastData.forecast.length === 0) return null
@@ -1411,19 +1398,22 @@ export default function DashboardPage() {
   )
   if (!data) return null
 
-  // kpis efetivo: A Receber/A Pagar/Disponível incluem Programadas conforme o toggle.
-  // Os restantes campos (saldo, contagens, vencidos) ficam inalterados.
+  // kpis efetivo: A Receber/A Pagar/Disponível/Posição Líquida refletem o filtro de
+  // página ("em aberto" e/ou "programadas"). Saldo Total fica sempre inalterado.
   const rawKpis = data.kpis
-  const toReceiveEff = rawKpis.toReceive + (includeProgrammed ? (rawKpis.toReceiveProgrammed ?? 0) : 0)
-  const toPayEff = rawKpis.toPay + (includeProgrammed ? (rawKpis.toPayProgrammed ?? 0) : 0)
+  const toReceiveEff = (showOpen ? rawKpis.toReceive : 0) + (showProgrammed ? (rawKpis.toReceiveProgrammed ?? 0) : 0)
+  const toPayEff = (showOpen ? rawKpis.toPay : 0) + (showProgrammed ? (rawKpis.toPayProgrammed ?? 0) : 0)
   const kpis = {
     ...rawKpis,
     toReceive: toReceiveEff,
     toPay: toPayEff,
     cashAvailable: rawKpis.totalBalance - toPayEff,
-    // Contagens coerentes com os valores: incluem os docs programados quando o toggle está ligado.
-    countReceivablesOpen: rawKpis.countReceivablesOpen + (includeProgrammed ? (rawKpis.countReceivablesProgrammed ?? 0) : 0),
-    countPayablesOpen: rawKpis.countPayablesOpen + (includeProgrammed ? (rawKpis.countPayablesProgrammed ?? 0) : 0),
+    // Contagens e vencidos coerentes com o filtro. Os vencidos são um conceito de
+    // "em aberto" (as programadas não vencem), por isso só contam com showOpen.
+    countReceivablesOpen: (showOpen ? rawKpis.countReceivablesOpen : 0) + (showProgrammed ? (rawKpis.countReceivablesProgrammed ?? 0) : 0),
+    countPayablesOpen: (showOpen ? rawKpis.countPayablesOpen : 0) + (showProgrammed ? (rawKpis.countPayablesProgrammed ?? 0) : 0),
+    overdueReceivables: showOpen ? rawKpis.overdueReceivables : 0,
+    overduePayables: showOpen ? rawKpis.overduePayables : 0,
   }
   const netPosition = kpis.totalBalance + kpis.toReceive - kpis.toPay
 
@@ -1434,15 +1424,20 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIncludeProgrammed((v) => !v)}
-            title={includeProgrammed ? 'A incluir as faturas programadas nos KPIs A Receber/A Pagar' : 'A excluir as faturas programadas dos KPIs'}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg font-medium border transition-colors ${includeProgrammed ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' : 'bg-gray-100 text-gray-400 border-gray-200 hover:text-gray-600'}`}
-          >
-            {includeProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-            Programadas
-          </button>
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            <button type="button" onClick={() => setShowOpen((v) => !v)}
+              title="Mostrar/ocultar faturas em aberto em toda a página"
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-md transition-colors ${showOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
+              {showOpen ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              Em aberto
+            </button>
+            <button type="button" onClick={() => setShowProgrammed((v) => !v)}
+              title="Mostrar/ocultar faturas programadas em toda a página"
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium rounded-md transition-colors ${showProgrammed ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>
+              {showProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              Programadas
+            </button>
+          </div>
           <div className="flex gap-2">
             {[30, 60, 90].map((d) => (
               <button key={d} onClick={() => setDays(d)} className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${days === d ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}>
@@ -1519,7 +1514,7 @@ export default function DashboardPage() {
       )}
 
       {/* Cashflow Statement Table */}
-      <CashflowStatementTable />
+      <CashflowStatementTable showOpen={showOpen} showProgrammed={showProgrammed} />
 
       {/* Bank accounts + derived stats */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
