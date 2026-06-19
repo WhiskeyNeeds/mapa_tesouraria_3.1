@@ -8,7 +8,6 @@ import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 import { compareDocs } from '../../../lib/doc-sort.js'
-import { computeNextInternalReference, internalReferencePrefix } from '../../../lib/internal-reference.js'
 import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
 import { earliestPendingDueAt } from '../../../lib/pending-action.js'
 import { syncParentDocStatus } from '../../../lib/parent-status.js'
@@ -615,20 +614,13 @@ export class TreasuryPayablesService {
     // TOConline; caso contrário é local e totalmente editável.
     const origin: TreasuryDocOrigin = data.tocPurchasesDocId ? 'TOCONLINE' : 'LOCAL'
     const created = await this.prisma.$transaction(async (tx) => {
-      // Faturas criadas localmente (origin LOCAL, não recorrência-template) recebem
-      // sempre numeração interna INT{ano}/{n}, ignorando referência manual. Docs TOC
-      // mantêm a referência do TOConline; templates de recorrência ficam fora.
-      // Recorrências: a fatura-raiz nasce SCHEDULED, sem referência (ignora
-      // qualquer referência enviada), com o valor estimado do formulário.
-      let reference = data.recurrence ? null : (data.reference ?? null)
-      if (origin === 'LOCAL' && !data.recurrence) {
-        const year = new Date().getFullYear()
-        const existing = await tx.treasuryPayable.findMany({
-          where: { clientId, reference: { startsWith: internalReferencePrefix(year) } },
-          select: { reference: true },
-        })
-        reference = computeNextInternalReference(existing.map((e) => e.reference), year)
-      }
+      // Docs TOC mantêm a referência do TOConline. Locais usam a referência que o
+      // utilizador escreve (a numeração interna automática foi descontinuada).
+      // Estado inicial: recorrência → SCHEDULED; local avulsa SEM referência →
+      // SCHEDULED (Futura); com referência (ou TOC) → OPEN (real, em aberto).
+      const trimmedRef = data.reference?.trim() || null
+      const reference = data.recurrence ? null : (data.tocPurchasesDocId ? (data.reference ?? null) : trimmedRef)
+      const scheduled = !!data.recurrence || (origin === 'LOCAL' && !data.tocPurchasesDocId && !trimmedRef)
       return tx.treasuryPayable.create({
         data: {
           clientId,
@@ -636,10 +628,10 @@ export class TreasuryPayablesService {
           origin,
           totalAmount: data.totalAmount,
           // Raiz de recorrência = template (não é uma ocorrência): pendingAmount 0,
-          // para não duplicar com a 1.ª instância gerada. As ocorrências (filhas)
-          // levam o valor estimado. Faturas avulsas: pendingAmount = totalAmount.
+          // para não duplicar com a 1.ª instância gerada. As restantes (incl. avulsas
+          // Futuras) levam o valor.
           pendingAmount: data.recurrence ? 0 : data.totalAmount,
-          ...(data.recurrence ? { status: 'SCHEDULED' as const } : {}),
+          ...(scheduled ? { status: 'SCHEDULED' as const } : {}),
           documentDate: data.documentDate ? new Date(data.documentDate) : null,
           dueDate: new Date(data.dueDate),
           currency: data.currency ?? 'EUR',
@@ -709,8 +701,21 @@ export class TreasuryPayablesService {
 
     const updateData: Prisma.TreasuryPayableUpdateInput = {}
     if (isScheduled) {
-      // Em SCHEDULED não aplicamos campos de fatura (dueDate/reference/
-      // documentDate/status/entityName); só valor + categoria (abaixo).
+      // Adicionar uma referência promove a Futura a Em aberto (OPEN) — equivalente,
+      // via edição, a "Marcar como Comprometido".
+      if (data.reference !== undefined) {
+        const ref = data.reference?.trim() || null
+        if (ref) { updateData.reference = ref; updateData.status = 'OPEN' }
+      }
+      // Numa avulsa local (sem recorrência) os restantes campos são editáveis; numa
+      // ocorrência de recorrência a data vem da cadência (não se aplica aqui).
+      if (item.recurrenceId == null) {
+        if (data.entityName   !== undefined) updateData.entityName   = data.entityName
+        if (data.entityNif    !== undefined) updateData.entityNif    = data.entityNif
+        if (data.description  !== undefined) updateData.description  = data.description
+        if (data.dueDate)                    updateData.dueDate      = new Date(data.dueDate)
+        if (data.documentDate)               updateData.documentDate = new Date(data.documentDate)
+      }
     } else if (!isTocLinked) {
       if (data.entityName   !== undefined) updateData.entityName   = data.entityName
       if (data.entityNif    !== undefined) updateData.entityNif    = data.entityNif
