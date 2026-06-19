@@ -967,10 +967,8 @@ export class TreasuryPayablesService {
     }
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided payable')
-    if (item.recurrenceId && item.parentId) {
-      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-      if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
-    }
+    // (As futuras são SCHEDULED e já bloqueadas acima; uma recorrência comprometida
+    // é OPEN e pode liquidar-se mesmo com data futura.)
     const settledAt = manual && opts.date ? new Date(opts.date) : new Date()
     // Valor do comprovativo interno = parte ainda não coberta pelos pagamentos do
     // TOC. Para docs TOC = pendente do espelho TOC; para locais = total da fatura.
@@ -1023,10 +1021,8 @@ export class TreasuryPayablesService {
     if (item.status === 'PAID') throw httpError(409, 'Already paid')
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
-    if (item.recurrenceId && item.parentId) {
-      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-      if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível pagar uma recorrência futura antes da sua data de vencimento')
-    }
+    // (As futuras são SCHEDULED e já bloqueadas acima; uma recorrência comprometida
+    // é OPEN e pode pagar-se mesmo com data futura.)
 
     const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
     const isSplitParent = nonRecurChildren.length > 0
