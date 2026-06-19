@@ -497,7 +497,7 @@ export class TreasuryDashboardService {
       }),
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
-        select: { id: true },
+        select: { id: true, openingBalance: true },
       }),
       this.prisma.tocSalesDocument.findMany({
         where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: { gte: startStr, lte: endStr } },
@@ -509,26 +509,18 @@ export class TreasuryDashboardService {
       }),
     ])
 
-    const balances = await this.fetchAccountBalances(clientId)
-    const currentBalance = bankAccounts.reduce((s, a) => s + (balances.get(a.id) ?? 0), 0)
-
-    // Saldo no início do ano = saldo atual PROJETADO até 1 de Janeiro desse ano,
-    // com o mesmo fluxo das barras (movimentos + pendentes por data efetiva + TOC
-    // não importado). Garante que o mesmo mês mostra o mesmo saldo em qualquer vista
-    // (não "salta" na viragem de ano nem repõe ao saldo de hoje em anos futuros):
-    //   - ano passado/atual: subtrai o fluxo desde o início do ano até hoje;
-    //   - ano futuro: soma o fluxo de hoje até ao início do ano.
-    // (gt no início e lt no futuro evitam contar duas vezes o fluxo de 1 de Janeiro,
-    // que já entra no próprio ano via forward-prop.)
-    // Âncora do saldo desdobrada por estado: balanceAtYearStart = saldoReal + sign*fluxo,
-    // onde sign=-1 (ano passado/atual) ou +1 (futuro). Guardamos a contribuição de cada
-    // componente (com o sinal aplicado) para o frontend poder "devolver" à âncora os
-    // componentes escondidos pelos toggles e reconciliar o saldo com o saldo real.
-    const anchorSign = start <= now ? -1 : 1
-    const anchorFlow = await this.netCashFlowComponents(clientId, start <= now ? { gt: start, lte: now } : { gt: now, lt: start })
-    const balanceAtYearStart = currentBalance + anchorSign * (anchorFlow.settled + anchorFlow.open + anchorFlow.programmed)
-    const anchorOpenContribution = anchorSign * anchorFlow.open
-    const anchorProgrammedContribution = anchorSign * anchorFlow.programmed
+    // Saldo no início do ano = soma dos saldos iniciais das contas (openingBalance,
+    // por defeito 0) MAIS todo o fluxo acumulado ANTES de 1 de Janeiro desse ano
+    // (movimentos/fechadas + faturas em aberto + programadas, pela data efetiva). É uma
+    // acumulação para a frente desde a abertura das contas — não depende do saldo
+    // bancário atual (balanceAfter). Forward-prop dentro do ano soma os fluxos do ano.
+    const openingTotal = bankAccounts.reduce((s, a) => s + Number(a.openingBalance ?? 0), 0)
+    const beforeFlow = await this.netCashFlowComponents(clientId, { lt: start })
+    const balanceAtYearStart = openingTotal + beforeFlow.settled + beforeFlow.open + beforeFlow.programmed
+    // Contribuição (positiva) de cada componente para a âncora, para o frontend remover
+    // do saldo o que estiver escondido pelos toggles (em aberto / programadas).
+    const anchorOpenContribution = beforeFlow.open
+    const anchorProgrammedContribution = beforeFlow.programmed
 
     // Decomposição por status semântico:
     //   settled    = movimentos bancários realizados                  → "Atual" no chart
