@@ -484,9 +484,11 @@ export class ToconlineService {
         const matchLine = lines.find((line) => Number(line.receivable_id) === numericDocId)
         return {
           ...raw,
+          deleted: attrs.deleted,
           _received_for_doc: matchLine ? Number(matchLine.received_value ?? 0) : null,
         }
       })
+      .filter((rc) => (rc as { deleted?: boolean }).deleted !== true)
   }
 
   async getPurchaseDocumentPayments(clientId: string, docId: string, knownIds?: number[]) {
@@ -526,105 +528,103 @@ export class ToconlineService {
         const matchLine = lines.find((line) => Number(line.payable_id) === numericDocId)
         return {
           ...raw,
+          deleted: attrs.deleted,
           _paid_for_doc: matchLine ? Number(matchLine.paid_value ?? matchLine.received_value ?? 0) : null,
         }
       })
+      .filter((pm) => (pm as { deleted?: boolean }).deleted !== true)
   }
 
   async getSalesReceiptLines(clientId: string, receiptId: string) {
-    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_receipts/${receiptId}`)
-    const obj = raw as Record<string, unknown>
+    // Preferir o espelho local (raw do recibo + raw das faturas) — evita N+1
+    // chamadas ao TOConline. Só vai ao TOC se o recibo ainda não foi sincronizado.
+    const tocId = Number(receiptId)
+    const local = !Number.isNaN(tocId)
+      ? await this.prisma.tocSalesReceipt.findUnique({ where: { clientId_tocId: { clientId, tocId } }, select: { raw: true } })
+      : null
 
     let attrs: Record<string, unknown>
-    if (obj.data && typeof obj.data === 'object') {
-      const data = obj.data as Record<string, unknown>
-      attrs = (data.attributes ?? data) as Record<string, unknown>
+    if (local?.raw) {
+      attrs = local.raw as Record<string, unknown>
     } else {
-      attrs = obj
+      const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_receipts/${receiptId}`)
+      const obj = raw as Record<string, unknown>
+      if (obj.data && typeof obj.data === 'object') {
+        const data = obj.data as Record<string, unknown>
+        attrs = (data.attributes ?? data) as Record<string, unknown>
+      } else {
+        attrs = obj
+      }
     }
 
     const lines = Array.isArray(attrs.lines) ? attrs.lines as Array<Record<string, unknown>> : []
     if (lines.length === 0) return []
 
-    const enriched = await Promise.allSettled(
-      lines.map(async (line) => {
-        const receivableId = line.receivable_id
-        if (!receivableId) return line
-        try {
-          const docRaw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_sales_documents/${receivableId}`)
-          const docObj = docRaw as Record<string, unknown>
-          let docAttrs: Record<string, unknown>
-          if (docObj.data && typeof docObj.data === 'object') {
-            const d = docObj.data as Record<string, unknown>
-            docAttrs = (d.attributes ?? d) as Record<string, unknown>
-          } else {
-            docAttrs = docObj
-          }
-          return {
-            ...line,
-            document_no: docAttrs.document_no,
-            _doc_date: docAttrs.date,
-            _doc_due_date: docAttrs.due_date,
-            _doc_gross_total: docAttrs.gross_total,
-            _doc_pending_total: docAttrs.pending_total,
-            _doc_retention: docAttrs.retention,
-          }
-        } catch {
-          return line
-        }
-      })
-    )
-    return enriched
-      .filter((r): r is PromiseFulfilledResult<Record<string, unknown>> => r.status === 'fulfilled')
-      .map((r) => r.value)
+    // Enriquece com os dados das faturas a partir do espelho local (TocSalesDocument).
+    const docIds = [...new Set(lines.map((l) => Number(l.receivable_id)).filter((n) => !Number.isNaN(n)))]
+    const docs = docIds.length
+      ? await this.prisma.tocSalesDocument.findMany({ where: { clientId, tocId: { in: docIds } }, select: { tocId: true, raw: true } })
+      : []
+    const byId = new Map(docs.map((d) => [d.tocId, d.raw as Record<string, unknown>]))
+    return lines.map((line) => {
+      const da = byId.get(Number(line.receivable_id))
+      if (!da) return line
+      return {
+        ...line,
+        document_no: da.document_no,
+        _doc_date: da.date,
+        _doc_due_date: da.due_date,
+        _doc_gross_total: da.gross_total,
+        _doc_pending_total: da.pending_total,
+        _doc_retention: da.retention,
+      }
+    })
   }
 
   async getPurchasePaymentLines(clientId: string, paymentId: string) {
-    const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_payments/${paymentId}`)
-    const obj = raw as Record<string, unknown>
+    // Preferir o espelho local (raw do pagamento + raw das faturas) — evita N+1
+    // chamadas ao TOConline. Só vai ao TOC se o pagamento ainda não foi sincronizado.
+    const tocId = Number(paymentId)
+    const local = !Number.isNaN(tocId)
+      ? await this.prisma.tocPurchasePayment.findUnique({ where: { clientId_tocId: { clientId, tocId } }, select: { raw: true } })
+      : null
 
     let attrs: Record<string, unknown>
-    if (obj.data && typeof obj.data === 'object') {
-      const data = obj.data as Record<string, unknown>
-      attrs = (data.attributes ?? data) as Record<string, unknown>
+    if (local?.raw) {
+      attrs = local.raw as Record<string, unknown>
     } else {
-      attrs = obj
+      const raw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_payments/${paymentId}`)
+      const obj = raw as Record<string, unknown>
+      if (obj.data && typeof obj.data === 'object') {
+        const data = obj.data as Record<string, unknown>
+        attrs = (data.attributes ?? data) as Record<string, unknown>
+      } else {
+        attrs = obj
+      }
     }
 
     const lines = Array.isArray(attrs.lines) ? attrs.lines as Array<Record<string, unknown>> : []
     if (lines.length === 0) return []
 
-    const enriched = await Promise.allSettled(
-      lines.map(async (line) => {
-        const payableId = line.payable_id
-        if (!payableId) return line
-        try {
-          const docRaw = await this.apiGet<unknown>(clientId, `/api/v1/commercial_purchases_documents/${payableId}`)
-          const docObj = docRaw as Record<string, unknown>
-          let docAttrs: Record<string, unknown>
-          if (docObj.data && typeof docObj.data === 'object') {
-            const d = docObj.data as Record<string, unknown>
-            docAttrs = (d.attributes ?? d) as Record<string, unknown>
-          } else {
-            docAttrs = docObj
-          }
-          return {
-            ...line,
-            document_no: docAttrs.document_no,
-            _doc_date: docAttrs.date,
-            _doc_due_date: docAttrs.due_date,
-            _doc_gross_total: docAttrs.gross_total,
-            _doc_pending_total: docAttrs.pending_total,
-            _doc_external_reference: docAttrs.external_reference,
-          }
-        } catch {
-          return line
-        }
-      })
-    )
-    return enriched
-      .filter((r): r is PromiseFulfilledResult<Record<string, unknown>> => r.status === 'fulfilled')
-      .map((r) => r.value)
+    // Enriquece com os dados das faturas a partir do espelho local (TocPurchaseDocument).
+    const docIds = [...new Set(lines.map((l) => Number(l.payable_id)).filter((n) => !Number.isNaN(n)))]
+    const docs = docIds.length
+      ? await this.prisma.tocPurchaseDocument.findMany({ where: { clientId, tocId: { in: docIds } }, select: { tocId: true, raw: true } })
+      : []
+    const byId = new Map(docs.map((d) => [d.tocId, d.raw as Record<string, unknown>]))
+    return lines.map((line) => {
+      const da = byId.get(Number(line.payable_id))
+      if (!da) return line
+      return {
+        ...line,
+        document_no: da.document_no,
+        _doc_date: da.date,
+        _doc_due_date: da.due_date,
+        _doc_gross_total: da.gross_total,
+        _doc_pending_total: da.pending_total,
+        _doc_external_reference: da.external_reference,
+      }
+    })
   }
 
   async getPurchaseDocuments(clientId: string, filters?: Record<string, string>) {

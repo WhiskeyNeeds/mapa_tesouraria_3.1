@@ -6,8 +6,9 @@ import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, statusLabel, statusVariant } from '@/lib/utils'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
+import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import {
-  CheckSquare, Square, RefreshCw, AlertCircle, Search,
+  CheckSquare, Square, AlertCircle, Search,
   ChevronDown, ChevronRight, Undo2, SlidersHorizontal, X,
   Link2, Zap,
 } from 'lucide-react'
@@ -28,6 +29,7 @@ interface TocRawDoc {
 }
 interface Document {
   id: string; reference: string; entityName: string; dueDate: string
+  documentDate?: string | null
   pendingAmount: number; totalAmount: number; status: string
   category?: { name: string; color: string } | null
   type: 'receivable' | 'payable'
@@ -47,8 +49,8 @@ interface RecHistoryItem {
   createdAt: string; direction: string; reversedAt?: string; reversedReason?: string
   createdBy: { name: string }
   movements: Array<{ amount: number; movement: { id: string; date: string; amount: number; description: string; bankAccount?: { id: string; name: string } | null } }>
-  receivables: Array<{ amountAllocated: number; receivable: { id: string; reference: string; entityName: string } }>
-  payables: Array<{ amountAllocated: number; payable: { id: string; reference: string; entityName: string } }>
+  receivables: Array<{ amountAllocated: number; receivable: { id: string; reference: string; entityName: string; documentDate?: string | null; dueDate?: string | null } }>
+  payables: Array<{ amountAllocated: number; payable: { id: string; reference: string; entityName: string; documentDate?: string | null; dueDate?: string | null } }>
 }
 
 // ── Filter helpers ─────────────────────────────────────────────────────────────
@@ -136,20 +138,29 @@ export default function ReconciliationPage() {
     if (settings?.reconciliationDryRun !== undefined) setIsDryRun(settings.reconciliationDryRun)
   }, [settings?.reconciliationDryRun])
 
-  const { data: movementsData, refetch: refetchMovements } = useQuery({
+  // staleTime 0 + refetchOnMount 'always': as listas de pendentes refazem fetch
+  // sempre que a página de reconciliação é mostrada, garantindo que uma fatura
+  // marcada como paga/liquidada noutro sítio nunca aparece aqui sem refresh manual.
+  const { data: movementsData } = useQuery({
     queryKey: ['movements-pending', selectedClientId],
     queryFn: () => api.get<{ items: Movement[] }>(`/treasury/${selectedClientId}/movements?status=UNCLASSIFIED,CLASSIFIED,PARTIAL&limit=500&sortBy=date&sortDir=desc`),
     enabled: !!selectedClientId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: receivablesData } = useQuery({
     queryKey: ['receivables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/receivables?status=OPEN,PARTIAL,SETTLED&reconcilable=true&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: payablesData } = useQuery({
     queryKey: ['payables-pending', selectedClientId],
-    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL,SETTLED&limit=500&sortBy=dueDate&sortDir=asc`),
+    queryFn: () => api.get<{ items: Document[]; total: number }>(`/treasury/${selectedClientId}/payables?status=OPEN,PARTIAL,SETTLED&reconcilable=true&limit=500&sortBy=dueDate&sortDir=asc`),
     enabled: !!selectedClientId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: tocSalesData } = useQuery({
     queryKey: ['toc-sales', selectedClientId],
@@ -157,6 +168,8 @@ export default function ReconciliationPage() {
     enabled: !!selectedClientId,
     retry: false,
     throwOnError: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: tocPurchasesData } = useQuery({
     queryKey: ['toc-purchases', selectedClientId],
@@ -164,6 +177,8 @@ export default function ReconciliationPage() {
     enabled: !!selectedClientId,
     retry: false,
     throwOnError: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const { data: historyData } = useQuery({
     queryKey: ['reconciliations', selectedClientId, historyLimit],
@@ -205,34 +220,43 @@ export default function ReconciliationPage() {
     })
   }, [tocPurchasesData, importedPurchaseIds])
 
-  const allDocs: Document[] = useMemo(() => [
-    ...(receivablesData?.items ?? []).filter((r) => r.status !== 'SETTLED').map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
-    ...(payablesData?.items ?? []).filter((p) => p.status !== 'SETTLED').map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
-    ...tocSalesOnly.map((d): Document => ({
-      id: `toc-${d.id}`,
-      reference: d.document_no,
-      entityName: d.customer_business_name ?? '—',
-      dueDate: d.due_date ?? d.date,
-      pendingAmount: d.pending_total,
-      totalAmount: d.gross_total,
-      status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
-      type: 'receivable',
-      _src: 'toc',
-      _tocRaw: d,
-    })),
-    ...tocPurchasesOnly.map((d): Document => ({
-      id: `toc-${d.id}`,
-      reference: d.document_no,
-      entityName: d.supplier_business_name ?? '—',
-      dueDate: d.due_date ?? d.date,
-      pendingAmount: d.pending_total,
-      totalAmount: d.gross_total,
-      status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
-      type: 'payable',
-      _src: 'toc',
-      _tocRaw: d,
-    })),
-  ], [receivablesData, payablesData, tocSalesOnly, tocPurchasesOnly])
+  const allDocs: Document[] = useMemo(() => {
+    // Documentos com data de emissão futura (ex.: recorrências/forecast ainda não
+    // emitidos) não são reconciliáveis — não devem surgir em Documentos Pendentes.
+    // Documentos sem data de emissão mantêm-se visíveis.
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const notFuture = (documentDate?: string | null) => !documentDate || documentDate.slice(0, 10) <= todayStr
+    return [
+      ...(receivablesData?.items ?? []).filter((r) => r.status !== 'SETTLED' && r.status !== 'PAID').map((r) => ({ ...r, type: 'receivable' as const, _src: 'local' as const })),
+      ...(payablesData?.items ?? []).filter((p) => p.status !== 'SETTLED' && p.status !== 'PAID').map((p) => ({ ...p, type: 'payable' as const, _src: 'local' as const })),
+      ...tocSalesOnly.map((d): Document => ({
+        id: `toc-${d.id}`,
+        reference: d.document_no,
+        entityName: d.customer_business_name ?? '—',
+        dueDate: d.due_date ?? d.date,
+        documentDate: d.date,
+        pendingAmount: d.pending_total,
+        totalAmount: d.gross_total,
+        status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
+        type: 'receivable',
+        _src: 'toc',
+        _tocRaw: d,
+      })),
+      ...tocPurchasesOnly.map((d): Document => ({
+        id: `toc-${d.id}`,
+        reference: d.document_no,
+        entityName: d.supplier_business_name ?? '—',
+        dueDate: d.due_date ?? d.date,
+        documentDate: d.date,
+        pendingAmount: d.pending_total,
+        totalAmount: d.gross_total,
+        status: [1, 5].includes(Number(d.status)) ? 'OPEN' : 'PARTIAL',
+        type: 'payable',
+        _src: 'toc',
+        _tocRaw: d,
+      })),
+    ].filter((d) => notFuture(d.documentDate))
+  }, [receivablesData, payablesData, tocSalesOnly, tocPurchasesOnly])
 
   const docsTruncated = (receivablesData?.total ?? 0) > (receivablesData?.items?.length ?? 0)
     || (payablesData?.total ?? 0) > (payablesData?.items?.length ?? 0)
@@ -255,7 +279,7 @@ export default function ReconciliationPage() {
   // ── Filtered movements ────────────────────────────────────────────────────
   const pendingMovements = useMemo(() => {
     let list = allMovements
-    if (movSearch) list = list.filter((m) => m.description.toLowerCase().includes(movSearch.toLowerCase()))
+    if (movSearch) list = list.filter((m) => (m.description ?? '').toLowerCase().includes(movSearch.toLowerCase()))
     if (movBankId) list = list.filter((m) => m.bankAccount?.id === movBankId)
     if (movSign === 'credit') list = list.filter((m) => Number(m.amount) >= 0)
     if (movSign === 'debit')  list = list.filter((m) => Number(m.amount) < 0)
@@ -270,10 +294,13 @@ export default function ReconciliationPage() {
   const pendingDocs = useMemo(() => {
     let list = allDocs
     if (docType !== 'all') list = list.filter((d) => d.type === docType)
-    if (docSearch) list = list.filter((d) =>
-      d.entityName.toLowerCase().includes(docSearch.toLowerCase()) ||
-      d.reference.toLowerCase().includes(docSearch.toLowerCase())
-    )
+    if (docSearch) {
+      const q = docSearch.toLowerCase()
+      list = list.filter((d) =>
+        (d.entityName ?? '').toLowerCase().includes(q) ||
+        (d.reference ?? '').toLowerCase().includes(q)
+      )
+    }
     if (docDateFrom) list = list.filter((d) => d.dueDate >= docDateFrom)
     if (docDateTo)   list = list.filter((d) => d.dueDate <= docDateTo)
     if (docAmountMin) list = list.filter((d) => Number(d.pendingAmount) >= parseFloat(docAmountMin))
@@ -414,6 +441,34 @@ export default function ReconciliationPage() {
       })
     },
     onSuccess: () => {
+      // Remoção otimista — refletir a ação imediatamente, sem esperar pelo refetch:
+      // documentos totalmente liquidados e movimentos totalmente usados saem já
+      // de "Documentos Pendentes" / "Movimentos". O invalidate a seguir confirma
+      // com os dados do servidor (e ajusta os parciais).
+      const fullySettled = allocations.filter((a) => a.amount >= a.pendingAmount - 0.01)
+      const localDocIds = new Set(fullySettled.filter((a) => a._src !== 'toc').map((a) => a.id))
+      const tocDocIds = new Set(
+        fullySettled.filter((a) => a._src === 'toc' && a._tocRaw).map((a) => Number(a._tocRaw!.id)),
+      )
+      if (localDocIds.size) {
+        for (const k of ['receivables-pending', 'payables-pending']) {
+          qc.setQueryData<{ items: Document[]; total: number }>([k, selectedClientId], (old) =>
+            old ? { ...old, items: old.items.filter((d) => !localDocIds.has(d.id)) } : old)
+        }
+      }
+      if (tocDocIds.size) {
+        for (const k of ['toc-sales', 'toc-purchases']) {
+          qc.setQueryData<TocRawDoc[]>([k, selectedClientId], (old) =>
+            old ? old.filter((d) => !tocDocIds.has(Number(d.id))) : old)
+        }
+      }
+      // Movimentos: só saem se ficaram totalmente reconciliados (sem sobra).
+      if (movementSurplus < 0.01) {
+        const movIds = new Set(selectedMovements.map((m) => m.id))
+        qc.setQueryData<{ items: Movement[] }>(['movements-pending', selectedClientId], (old) =>
+          old ? { ...old, items: old.items.filter((m) => !movIds.has(m.id)) } : old)
+      }
+
       qc.refetchQueries({ queryKey: ['reconciliations'] })
       ;['movements-pending', 'receivables-pending', 'payables-pending',
         'movements', 'receivables', 'payables', 'toc-sales', 'toc-purchases']
@@ -444,7 +499,10 @@ export default function ReconciliationPage() {
   const hasSelection = selectedMovements.length > 0 || selectedDocs.length > 0
 
   // ── Movement row ──────────────────────────────────────────────────────────
-  function MovRow({ m }: { m: Movement }) {
+  // Render helper (not a component): called inline so its element type stays
+  // `button`. Defining it as a `<MovRow>` component would give it a fresh
+  // identity each render, remounting the whole list and resetting scroll.
+  function renderMovRow(m: Movement) {
     const selected = !!selectedMovements.find((x) => x.id === m.id)
     const isCredit = Number(m.amount) >= 0
     const amtCls = isCredit ? 'text-emerald-700' : 'text-red-700'
@@ -456,6 +514,7 @@ export default function ReconciliationPage() {
     const remainingAmt = fullAmt - reconciledAmt
     return (
       <button
+        key={m.id}
         onClick={() => toggleMovement(m)}
         disabled={isBlocked}
         className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-100
@@ -492,7 +551,8 @@ export default function ReconciliationPage() {
   }
 
   // ── Document row ──────────────────────────────────────────────────────────
-  function DocRow({ d }: { d: Document }) {
+  // Render helper (not a component) — see renderMovRow above.
+  function renderDocRow(d: Document) {
     const selected = !!selectedDocs.find((x) => x.id === d.id)
     const isBlocked = !selected && currentDirection !== null &&
       ((d.type === 'receivable' && currentDirection === 'EXPENSE') || (d.type === 'payable' && currentDirection === 'REVENUE'))
@@ -502,6 +562,7 @@ export default function ReconciliationPage() {
     const amtCls = d.type === 'receivable' ? 'text-emerald-700' : 'text-red-700'
     return (
       <button
+        key={d.id}
         onClick={() => toggleDoc(d)}
         disabled={isBlocked}
         className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-100
@@ -545,7 +606,8 @@ export default function ReconciliationPage() {
   }
 
   // ── Section headers ───────────────────────────────────────────────────────
-  function SectionHeader({ label, count, sign }: { label: string; count: number; sign: 'credit' | 'debit' }) {
+  // Render helper (not a component) — see renderMovRow above.
+  function renderSectionHeader({ label, count, sign }: { label: string; count: number; sign: 'credit' | 'debit' }) {
     const isBlocked = currentDirection !== null &&
       ((sign === 'credit' && currentDirection === 'EXPENSE') || (sign === 'debit' && currentDirection === 'REVENUE'))
     const cls = sign === 'credit' ? 'bg-emerald-50/80 text-emerald-800' : 'bg-red-50/80 text-red-800'
@@ -561,14 +623,18 @@ export default function ReconciliationPage() {
   return (
     <div className="space-y-5 pb-28">
       {/* Page header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="section-title">Reconciliação</h1>
           <p className="section-subtitle mt-0.5">Associe movimentos bancários a documentos de compra e venda</p>
         </div>
-        <button onClick={() => refetchMovements()} className="btn-ghost flex items-center gap-1.5 text-xs">
-          <RefreshCw className="w-3.5 h-3.5" /> Atualizar
-        </button>
+        <TocSyncStatus invalidateKeys={[
+          ['movements-pending', selectedClientId ?? ''],
+          ['receivables-pending', selectedClientId ?? ''],
+          ['payables-pending', selectedClientId ?? ''],
+          ['toc-sales', selectedClientId ?? ''],
+          ['toc-purchases', selectedClientId ?? ''],
+        ]} />
       </div>
 
       {/* Two-column selection */}
@@ -663,7 +729,7 @@ export default function ReconciliationPage() {
 
           {/* Movement list */}
           <div className="flex-1 overflow-y-auto" style={{ maxHeight: '420px' }}>
-            {pendingMovements.map((m) => <MovRow key={m.id} m={m} />)}
+            {pendingMovements.map((m) => renderMovRow(m))}
             {pendingMovements.length === 0 && (
               <div className="px-4 py-10 text-center text-gray-400 text-sm">
                 {allMovements.length === 0
@@ -762,14 +828,14 @@ export default function ReconciliationPage() {
             )}
             {pendingReceivables.length > 0 && (
               <>
-                <SectionHeader label="↓ Contas a Receber" count={pendingReceivables.length} sign="credit" />
-                {pendingReceivables.map((d) => <DocRow key={d.id} d={d} />)}
+                {renderSectionHeader({ label: '↓ Contas a Receber', count: pendingReceivables.length, sign: 'credit' })}
+                {pendingReceivables.map((d) => renderDocRow(d))}
               </>
             )}
             {pendingPayables.length > 0 && (
               <>
-                <SectionHeader label="↑ Contas a Pagar" count={pendingPayables.length} sign="debit" />
-                {pendingPayables.map((d) => <DocRow key={d.id} d={d} />)}
+                {renderSectionHeader({ label: '↑ Contas a Pagar', count: pendingPayables.length, sign: 'debit' })}
+                {pendingPayables.map((d) => renderDocRow(d))}
               </>
             )}
             {pendingDocs.length === 0 && (
@@ -888,6 +954,11 @@ export default function ReconciliationPage() {
             const uniqueAccounts = Array.from(
               new Map(rec.movements.flatMap((l) => l.movement.bankAccount ? [[l.movement.bankAccount.id, l.movement.bankAccount.name]] : [])).entries()
             ).map(([, name]) => name)
+            // Nº das faturas reconciliadas (N-para-N: associadas a todos os movimentos desta reconciliação).
+            const docRefs = [
+              ...rec.receivables.map((l) => l.receivable.reference),
+              ...rec.payables.map((l) => l.payable.reference),
+            ].filter((r): r is string => !!r)
             return (
               <div key={rec.id}>
                 <div
@@ -946,6 +1017,10 @@ export default function ReconciliationPage() {
                               {link.movement.bankAccount && (
                                 <span className="ml-1.5 text-[11px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full font-medium">{link.movement.bankAccount.name}</span>
                               )}
+                              <div className="text-[11px] text-gray-400">{formatDate(link.movement.date)}</div>
+                              {docRefs.length > 0 && (
+                                <div className="text-[11px] text-gray-500 truncate">Fat.: {docRefs.join(', ')}</div>
+                              )}
                             </div>
                             <span className={`font-semibold whitespace-nowrap ${Number(link.movement.amount) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
                               {Number(link.movement.amount) >= 0 ? '+' : '−'}{formatCurrency(Math.abs(Number(link.movement.amount)))}
@@ -959,19 +1034,33 @@ export default function ReconciliationPage() {
                       <div className="space-y-1.5">
                         {rec.receivables.map((link) => (
                           <div key={link.receivable.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
-                            <span className="truncate mr-2">
+                            <div className="truncate mr-2 min-w-0">
                               <span className="text-emerald-700 font-bold mr-1 text-[10px]">CR</span>
                               {link.receivable.reference} · {link.receivable.entityName}
-                            </span>
+                              {(link.receivable.documentDate || link.receivable.dueDate) && (
+                                <div className="text-[11px] text-gray-400">
+                                  {link.receivable.documentDate && <>Doc. {formatDate(link.receivable.documentDate)}</>}
+                                  {link.receivable.documentDate && link.receivable.dueDate && ' · '}
+                                  {link.receivable.dueDate && <>Venc. {formatDate(link.receivable.dueDate)}</>}
+                                </div>
+                              )}
+                            </div>
                             <span className="font-semibold text-emerald-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
                           </div>
                         ))}
                         {rec.payables.map((link) => (
                           <div key={link.payable.id} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-gray-100">
-                            <span className="truncate mr-2">
+                            <div className="truncate mr-2 min-w-0">
                               <span className="text-red-700 font-bold mr-1 text-[10px]">CP</span>
                               {link.payable.reference} · {link.payable.entityName}
-                            </span>
+                              {(link.payable.documentDate || link.payable.dueDate) && (
+                                <div className="text-[11px] text-gray-400">
+                                  {link.payable.documentDate && <>Doc. {formatDate(link.payable.documentDate)}</>}
+                                  {link.payable.documentDate && link.payable.dueDate && ' · '}
+                                  {link.payable.dueDate && <>Venc. {formatDate(link.payable.dueDate)}</>}
+                                </div>
+                              )}
+                            </div>
                             <span className="font-semibold text-red-700 whitespace-nowrap">{formatCurrency(Number(link.amountAllocated))}</span>
                           </div>
                         ))}

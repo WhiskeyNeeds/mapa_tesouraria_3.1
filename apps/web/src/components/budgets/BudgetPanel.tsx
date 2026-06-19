@@ -160,7 +160,7 @@ export default function BudgetPanel({
 
 
   return (
-    <div className="w-[420px] flex-shrink-0 border-l border-gray-200 bg-white flex flex-col h-full overflow-hidden">
+    <div className="lg:w-80 xl:w-96 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-start justify-between mb-3">
@@ -190,7 +190,7 @@ export default function BudgetPanel({
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-200 bg-gray-50 flex-shrink-0">
+      <div className="flex border-b border-gray-100 flex-shrink-0">
         {([
           { key: 'transactions', label: 'Transações' },
           { key: 'rules', label: 'Regras' },
@@ -199,9 +199,9 @@ export default function BudgetPanel({
           <button
             key={t.key}
             onClick={() => setActiveTab(t.key)}
-            className={`flex-1 py-2 text-xs font-medium border-b-2 -mb-px transition-colors ${
+            className={`flex-1 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
               activeTab === t.key
-                ? 'border-primary-500 text-primary-600'
+                ? 'border-primary-600 text-primary-700'
                 : `border-transparent ${t.key === 'review' && pendingCount > 0 ? 'text-amber-600' : 'text-gray-500 hover:text-gray-700'}`
             }`}
           >
@@ -406,7 +406,7 @@ export default function BudgetPanel({
         open={selectedDocId !== null}
         onClose={() => setSelectedDocId(null)}
         title=""
-        size="sm"
+        size="lg"
         hideHeader
         noPadding
       >
@@ -414,6 +414,7 @@ export default function BudgetPanel({
           <DocDetailPanel
             docId={selectedDocId}
             docType={budget.type === 'EXPENSE' ? 'payable' : 'receivable'}
+            variant="modal"
             onClose={() => setSelectedDocId(null)}
             onMutated={invalidate}
           />

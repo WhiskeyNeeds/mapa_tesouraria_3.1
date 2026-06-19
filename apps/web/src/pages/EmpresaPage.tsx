@@ -4,6 +4,7 @@ import type { ComponentType } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
+import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
 import TocSyncStatus from '@/components/ui/TocSyncStatus'
 import {
   Search, Users, Truck, Package, Wrench, AlertTriangle,
@@ -210,7 +211,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
 
             return (<>
               {dHdr('Identificação')}
-              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                 <Field label="NIF"                   value={d.tax_registration_number} mono />
                 <Field label="Nome"                  value={d.business_name} />
                 <Field label="Sub-conta"             value={d.sub_account} mono />
@@ -225,13 +226,13 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
               </div>
 
               {dHdr('Crédito')}
-              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                 <Field label="Limite de crédito (valor)" value={d.credit_limit_value} price />
                 <Field label="Limite de crédito (dias)"  value={d.credit_limit_days} />
               </div>
 
               {dHdr('Contacto')}
-              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                 <Field label="Nome de contacto" value={d.contact_name} />
                 <Field label="E-mail"           value={d.email} />
                 <Field label="Telefone"         value={d.phone_number} />
@@ -259,7 +260,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
                 return (
                   <div key={i}>
                     {dHdr(heading)}
-                    <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                    <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                       <Field label="Designação"       value={addr.name} />
                       <Field label="Código postal"    value={addr.postcode} mono />
                       <Field label="Morada"           value={addr.address_detail} full />
@@ -298,7 +299,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
             const addresses = (supplierDetail?._addresses ?? []) as Record<string, unknown>[]
             return (<>
               {dHdr('Identificação')}
-              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                 <Field label="NIF" value={d.tax_registration_number} mono />
                 <Field label="Nome" value={d.business_name} />
                 <Field label="Sub-conta" value={d.sub_account} mono />
@@ -311,7 +312,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
               </div>
 
               {dHdr('Contacto')}
-              <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+              <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                 <Field label="E-mail" value={d.email} />
                 <Field label="Website" value={d.website} />
               </div>
@@ -336,7 +337,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
                 return (
                   <div key={i}>
                     {dHdr(heading)}
-                    <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+                    <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
                       <Field label="Designação"       value={addr.name} />
                       <Field label="Código postal"    value={addr.postcode} mono />
                       <Field label="Morada"           value={addr.address_detail} full />
@@ -363,7 +364,7 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
           {/* ── PRODUTOS / SERVIÇOS ── */}
           {(tab === 'produtos' || tab === 'servicos') && (<>
             {dHdr('Identificação')}
-            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+            <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
               <Field label="Código" value={row.item_code} mono />
               <Field label="Taxa de IVA" value={row.tax_code} />
               <Field label="Descrição" value={row.item_description} full />
@@ -388,13 +389,13 @@ function DetalheModal({ tab, row, clientId, onClose }: { tab: Tab; row: TocRow; 
             </div>
 
             {dHdr('Compra e Stock')}
-            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+            <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
               <Field label="Preço de compra" value={row.purchase_price} price />
               <Field label="Código de barras (EAN)" value={row.ean_barcode} mono />
             </div>
 
             {dHdr('Custos')}
-            <div className="px-6 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+            <div className="px-6 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
               <Field label="Custo financeiro" value={row.financial_cost} price />
               <Field label="Custo de transporte" value={row.transport_cost} price />
               <Field label="Outros custos" value={row.other_cost} price />
@@ -472,6 +473,7 @@ function TabTable({
   clientId: string
 }) {
   const navigate = useNavigate()
+  const hScroll = useStickyHScrollbar<HTMLDivElement>()
   const isEntity = tab === 'clientes' || tab === 'fornecedores'
   const defaultSort = isEntity ? 'business_name' : 'item_description'
 
@@ -673,8 +675,8 @@ function TabTable({
           {rows.length === 0 ? 'Sem registos.' : 'Nenhum resultado para os filtros aplicados.'}
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        <div ref={hScroll} className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[720px] lg:min-w-0">
             <thead>
               <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                 {cols.map((c) => (
@@ -799,7 +801,7 @@ export default function EmpresaPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold text-gray-900">Empresa</h1>
         <div className="flex items-center gap-3">
           <TocSyncStatus invalidateKeys={[
@@ -812,7 +814,7 @@ export default function EmpresaPage() {
 
       <div className="card">
         {/* Tabs */}
-        <div className="flex items-center border-b border-gray-100 px-2">
+        <div className="flex items-center border-b border-gray-100 px-2 overflow-x-auto">
           {TABS.map((tab) => {
             const count = counts[tab.id]
             const Icon = tab.icon

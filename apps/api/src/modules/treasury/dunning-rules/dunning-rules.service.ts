@@ -1,4 +1,4 @@
-import type { PrismaClient, Prisma, TreasuryFollowupDirection } from '@prisma/client'
+import type { PrismaClient, Prisma, TreasuryFollowupDirection, TreasuryDunningActionType, TreasuryFollowupImportance } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import type { FollowupsService } from '../followups/followups.service.js'
 import type { ToconlineService } from '../../toconline/toconline.service.js'
@@ -9,6 +9,10 @@ export interface DunningRuleInput {
   offsetDays: number
   direction?: TreasuryFollowupDirection
   emailTemplateId?: string | null
+  actionType?: TreasuryDunningActionType
+  taskTitle?: string | null
+  taskDescription?: string | null
+  taskImportance?: TreasuryFollowupImportance
   minAmount?: number | null
   maxAmount?: number | null
   categoryId?: string | null
@@ -60,9 +64,15 @@ export class TreasuryDunningRulesService {
     if (typeof data.offsetDays !== 'number' || !Number.isFinite(data.offsetDays)) {
       throw httpError(400, 'Offset de dias inválido')
     }
-    if (!data.emailTemplateId) throw httpError(400, 'Template de email é obrigatório')
     await this.assertTrackOwnership(clientId, data.trackId)
-    await this.assertTemplateOwnership(clientId, data.emailTemplateId)
+
+    const actionType = data.actionType ?? 'EMAIL'
+    if (actionType === 'EMAIL') {
+      if (!data.emailTemplateId) throw httpError(400, 'Template de email é obrigatório')
+      await this.assertTemplateOwnership(clientId, data.emailTemplateId)
+    } else {
+      if (!data.taskTitle?.trim()) throw httpError(400, 'Título da tarefa é obrigatório')
+    }
 
     return this.prisma.treasuryDunningRule.create({
       data: {
@@ -71,7 +81,11 @@ export class TreasuryDunningRulesService {
         name: data.name.trim(),
         offsetDays: Math.trunc(data.offsetDays),
         direction: data.direction ?? 'RECEIVABLE',
-        emailTemplateId: data.emailTemplateId,
+        actionType,
+        emailTemplateId: actionType === 'EMAIL' ? data.emailTemplateId : null,
+        taskTitle: actionType === 'EMAIL' ? null : data.taskTitle!.trim(),
+        taskDescription: actionType === 'EMAIL' ? null : (data.taskDescription?.trim() || null),
+        taskImportance: data.taskImportance ?? 'NORMAL',
         minAmount: data.minAmount ?? null,
         maxAmount: data.maxAmount ?? null,
         categoryId: data.categoryId ?? null,
@@ -98,13 +112,36 @@ export class TreasuryDunningRulesService {
     if (data.isActive !== undefined) updateData.isActive = data.isActive
     if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder
 
+    const effectiveActionType = data.actionType ?? rule.actionType
+    if (data.actionType !== undefined) updateData.actionType = data.actionType
+
+    if (effectiveActionType === 'EMAIL') {
+      // emailTemplateId tratado no bloco existente mais abaixo.
+      if (data.actionType === 'EMAIL') {
+        updateData.taskTitle = null
+        updateData.taskDescription = null
+      }
+    } else {
+      const title = data.taskTitle ?? rule.taskTitle
+      if (!title?.trim()) throw httpError(400, 'Título da tarefa é obrigatório')
+      updateData.taskTitle = title.trim()
+      if (data.taskDescription !== undefined) {
+        updateData.taskDescription = data.taskDescription?.trim() || null
+      }
+      // Ao mudar de EMAIL para TASK/CALL, desliga o template.
+      if (data.actionType !== undefined && data.actionType !== 'EMAIL') {
+        updateData.emailTemplate = { disconnect: true }
+      }
+    }
+    if (data.taskImportance !== undefined) updateData.taskImportance = data.taskImportance
+
     if (data.categoryId !== undefined) {
       updateData.category = data.categoryId === null
         ? { disconnect: true }
         : { connect: { id: data.categoryId } }
     }
 
-    if (data.emailTemplateId !== undefined) {
+    if (data.emailTemplateId !== undefined && effectiveActionType === 'EMAIL') {
       if (!data.emailTemplateId) throw httpError(400, 'Template de email é obrigatório')
       await this.assertTemplateOwnership(clientId, data.emailTemplateId)
       updateData.emailTemplate = { connect: { id: data.emailTemplateId } }
@@ -226,7 +263,7 @@ export class TreasuryDunningRulesService {
         ruleResults.push({ ...ruleSummary, reason: 'PAYABLE_NOT_SUPPORTED' })
         continue
       }
-      if (!rule.emailTemplate) {
+      if (rule.actionType === 'EMAIL' && !rule.emailTemplate) {
         ruleResults.push({ ...ruleSummary, reason: 'NO_TEMPLATE' })
         continue
       }
@@ -281,6 +318,34 @@ export class TreasuryDunningRulesService {
             })
 
         try {
+          if (rule.actionType === 'TASK' || rule.actionType === 'CALL') {
+            if (!this.followups) throw new Error('FollowupsService não injetado no DunningRulesService')
+            await this.followups.createCallTask(clientId, adminId, {
+              receivableId: inv.id,
+              direction: 'RECEIVABLE',
+              title: rule.taskTitle ?? rule.name,
+              description: rule.taskDescription ?? undefined,
+              importance: rule.taskImportance,
+              dueAt: targetDate,
+              plannedType: rule.actionType === 'CALL' ? 'CALL' : 'TASK',
+              extraPayload: { dunningRuleId: rule.id, executionId: exec.id, automatic: true },
+            })
+            await this.prisma.treasuryDunningExecution.update({
+              where: { id: exec.id },
+              data: { status: 'SENT', executedAt: now },
+            })
+            totalSent++
+            ruleSummary.sentCount++
+            ruleSummary.sent.push({
+              receivableId: inv.id,
+              reference: inv.reference,
+              entityName: inv.entityName,
+              totalAmount: inv.totalAmount?.toString() ?? null,
+              promisedPaymentDate: inv.promisedPaymentDate ? inv.promisedPaymentDate.toISOString() : null,
+            })
+            continue
+          }
+
           // Override de teste em dev — todos os emails vão para um endereço fixo.
           const overrideTo = process.env.DUNNING_TEST_RECIPIENT?.trim()
           let recipient: string | null = overrideTo || null
@@ -304,9 +369,9 @@ export class TreasuryDunningRulesService {
             receivableId: inv.id,
             direction: 'RECEIVABLE',
             to: [recipient],
-            subject: rule.emailTemplate.subject,
-            bodyHtml: rule.emailTemplate.bodyHtml,
-            templateId: rule.emailTemplate.id,
+            subject: rule.emailTemplate!.subject,
+            bodyHtml: rule.emailTemplate!.bodyHtml,
+            templateId: rule.emailTemplate!.id,
             attachInvoicePdf: false,
           })
 
@@ -367,14 +432,14 @@ export class TreasuryDunningRulesService {
    */
   private async autoImportTocSalesDocs(
     clientId: string,
-    rules: Array<{ direction: string; offsetDays: number; emailTemplate: unknown }>,
+    rules: Array<{ direction: string; offsetDays: number; emailTemplate: unknown; actionType: string; taskTitle: string | null }>,
     today: Date,
     adminId: string,
   ) {
     if (!this.toconline) return
 
     const offsets = rules
-      .filter((r) => r.direction !== 'PAYABLE' && r.emailTemplate)
+      .filter((r) => r.direction !== 'PAYABLE' && (r.actionType === 'EMAIL' ? !!r.emailTemplate : !!r.taskTitle))
       .map((r) => r.offsetDays)
     if (offsets.length === 0) return
 

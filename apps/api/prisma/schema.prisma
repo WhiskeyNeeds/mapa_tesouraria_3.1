@@ -41,10 +41,18 @@ enum TreasuryDocOrigin {
 }
 
 enum TreasuryDocStatus {
+  SCHEDULED
   OPEN
   PARTIAL
+  PAID
   SETTLED
   VOID
+}
+
+enum TreasurySettlementSource {
+  LOCAL
+  INSTALLMENTS
+  RECONCILIATION
 }
 
 enum TreasuryMovementStatus {
@@ -112,6 +120,12 @@ enum TreasuryFollowupDirection {
   PAYABLE
 }
 
+enum TreasuryDunningActionType {
+  EMAIL
+  TASK
+  CALL
+}
+
 enum TreasuryEmailTemplateScope {
   RECEIVABLE
   PAYABLE
@@ -145,6 +159,7 @@ model User {
 
   userRoles   UserRole[]
   userClients UserClient[]
+  refreshTokens RefreshToken[]
 
   treasuryReceivablesCreated      TreasuryReceivable[]        @relation("ReceivablesCreated")
   treasuryPayablesCreated         TreasuryPayable[]           @relation("PayablesCreated")
@@ -161,6 +176,23 @@ model User {
   @@index([email])
   @@index([isActive])
   @@map("users")
+}
+
+/// Refresh tokens persistidos (durável, sobrevive a reinícios e suporta vários
+/// em simultâneo). Guarda-se o hash SHA-256 do token, nunca o token em claro.
+/// A rotação apaga a linha usada; o logout apaga todas as do utilizador.
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 model AppRole {
@@ -464,6 +496,21 @@ model TreasuryReceivable {
   recurrenceId        String?
   parentId            String?
   promisedPaymentDate DateTime?
+  // Instante em que o documento foi marcado como PAID/SETTLED (data de
+  // liquidação). Usado pela janela do KPI "Recebido". Reposto a null quando o
+  // estado regressa a OPEN/PARTIAL/VOID.
+  settledAt           DateTime?
+  // Como o documento ficou pago/liquidado. null quando OPEN/PARTIAL/VOID.
+  // LOCAL = marcado manualmente; INSTALLMENTS = mãe derivada das parcelas;
+  // RECONCILIATION = reconciliado pelo valor total. Gateia a reversão.
+  settledVia          TreasurySettlementSource?
+  // Referência do recibo registado manualmente ao liquidar (PAID -> SETTLED).
+  // A data do recibo é guardada em `settledAt`. Limpa ao reverter a liquidação.
+  receiptReference    String?   @db.VarChar(80)
+  // Valor coberto pelo recibo interno = parte ainda não coberta por recibos do
+  // TOConline no momento da liquidação. Limpo ao reverter e ao detetar (sync)
+  // que o TOConline já cobre tudo (pendente TOC = 0).
+  receiptAmount       Decimal?  @db.Decimal(18, 2)
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)
@@ -487,6 +534,7 @@ model TreasuryReceivable {
 
   @@unique([clientId, reference])
   @@index([clientId, status, dueDate])
+  @@index([clientId, status, settledAt])
   @@index([clientId, categoryId])
   @@index([clientId, origin])
   @@index([clientId, budgetId])
@@ -528,6 +576,23 @@ model TreasuryPayable {
   recurrenceId        String?
   parentId            String?
   promisedPaymentDate DateTime?
+  // Marca "Pronta para Pagar": anotação local não destrutiva que faz a fatura
+  // surgir no separador "Futuros Pagamentos" sem sair do seu separador de
+  // origem (Fornecedores/Outras). Limpa automaticamente ao pagar/liquidar.
+  readyToPay          Boolean   @default(false)
+  // Como o documento ficou pago/liquidado. Ver TreasuryReceivable.settledVia.
+  settledVia          TreasurySettlementSource?
+  // Instante em que o documento foi pago/liquidado (data real de pagamento).
+  // Espelha TreasuryReceivable.settledAt. Reposto a null ao reverter para
+  // OPEN/PARTIAL. Usado pela coluna "Pago em" e pela ordenação por essa data.
+  settledAt           DateTime?
+  // Referência do comprovativo/pagamento registado manualmente ao liquidar
+  // (PAID -> SETTLED). A data é guardada em `settledAt`. Limpa ao reverter.
+  paymentReference    String?   @db.VarChar(80)
+  // Valor coberto pelo comprovativo interno = parte ainda não coberta por
+  // pagamentos do TOConline no momento da liquidação. Limpo ao reverter e ao
+  // detetar (sync) que o TOConline já cobre tudo (pendente TOC = 0).
+  paymentAmount       Decimal?  @db.Decimal(18, 2)
 
   budgetId           String?
   budgetAutoAssigned Boolean @default(false)
@@ -1000,6 +1065,11 @@ model TreasuryDunningRule {
   direction       TreasuryFollowupDirection @default(RECEIVABLE)
   emailTemplateId String?
 
+  actionType      TreasuryDunningActionType @default(EMAIL)
+  taskTitle       String?                   @db.VarChar(300)
+  taskDescription String?
+  taskImportance  TreasuryFollowupImportance @default(NORMAL)
+
   /// Filtros opcionais que restringem a quais faturas a regra se aplica.
   minAmount  Decimal? @db.Decimal(18, 2)
   maxAmount  Decimal? @db.Decimal(18, 2)
@@ -1130,12 +1200,21 @@ model TocSalesDocument {
   grossTotal   Decimal? @db.Decimal(18, 2)
   pendingTotal Decimal? @db.Decimal(18, 2)
   receiptsIds  Int[]
+  // Campos extraídos do `raw` para evitar carregar o blob JSON inteiro em
+  // queries de listagem/KPIs — ler `raw` para 1000s de linhas é a origem da
+  // lentidão. Preenchidos no sync (extractSalesDocFields) e por backfill nas
+  // migrações. O `raw` mantém-se e é carregado só para os itens da página
+  // (detalhe/reconciliação na UI). `documentType` em minúsculas.
+  documentType String?
+  documentNo   String?
+  customerName String?
   raw          Json
   syncedAt     DateTime @default(now())
 
   @@unique([clientId, tocId])
   @@index([clientId, customerId])
   @@index([clientId, date])
+  @@index([clientId, status])
   @@map("toc_sales_documents")
 }
 

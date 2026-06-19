@@ -3,6 +3,7 @@ import type { PrismaClient, TreasuryMovementSource, TreasuryMovementStatus, Pris
 import { Prisma as PrismaRuntime } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { TreasuryBankAccountsService } from '../bank-accounts/bank-accounts.service.js'
+import { resolveDocAmountsFromDb } from '../../../lib/toc-overlay.js'
 
 export interface CsvMovement {
   date: string
@@ -125,6 +126,10 @@ export class TreasuryBankMovementsService {
         include: {
           category: { select: { id: true, name: true, color: true, type: true } },
           bankAccount: { select: { id: true, name: true, bankName: true } },
+          reconciliationLinks: {
+            where: { reconciliation: { status: 'CONFIRMED' } },
+            select: { amount: true, reconciliation: { select: { isDryRun: true } } },
+          },
         },
         orderBy,
         skip: (page - 1) * limit,
@@ -144,7 +149,30 @@ export class TreasuryBankMovementsService {
       })
     }
 
-    return { total, page, limit, items }
+    // Deriva um resumo de reconciliação por movimento. Necessário porque, em
+    // dry-run (o default), o confirm() não altera o status nem reconciledAmount
+    // do movimento — a reconciliação existe apenas como registos de ligação.
+    const mapped = items.map(({ reconciliationLinks, ...m }) => {
+      const allocated = reconciliationLinks.reduce((s, l) => s + Math.abs(Number(l.amount)), 0)
+      const fullAmount = Math.abs(Number(m.amount))
+      // Reconciliação só por dry-run quando há ligações e nenhuma foi sincronizada
+      // com o TOConline.
+      const isDryRun = reconciliationLinks.length > 0 && !reconciliationLinks.some((l) => !l.reconciliation.isDryRun)
+      let reconciliation: { state: 'RECONCILED' | 'PARTIAL'; isDryRun: boolean; allocated: number } | null = null
+      if (m.status === 'RECONCILED') {
+        reconciliation = { state: 'RECONCILED', isDryRun, allocated }
+      } else if (m.status === 'PARTIAL') {
+        reconciliation = { state: 'PARTIAL', isDryRun, allocated }
+      } else if (allocated > 0.01) {
+        // Fallback para reconciliações dry-run antigas, criadas antes de o estado
+        // local passar a ser sempre atualizado (status do movimento não mudou).
+        const covered = allocated >= fullAmount - 0.01
+        reconciliation = { state: covered ? 'RECONCILED' : 'PARTIAL', isDryRun, allocated }
+      }
+      return { ...m, reconciliation }
+    })
+
+    return { total, page, limit, items: mapped }
   }
 
   async importMovements(clientId: string, bankAccountId: string, movements: CsvMovement[], source: TreasuryMovementSource, userId: string, importId?: string) {
@@ -425,24 +453,30 @@ export class TreasuryBankMovementsService {
         if (recon.status === 'CONFIRMED') {
           for (const link of recon.receivables) {
             const rec = link.receivable
-            const newReceived = Math.max(0, Number(rec.receivedAmount) - Number(link.amountAllocated))
+            // total/received reais via overlay TOC: em docs ligados o totalAmount
+            // local é null, pelo que `total - received` gravava pending negativo.
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'receivable', rec)
+            const newReceived = Math.max(0, settled - Number(link.amountAllocated))
             await tx.treasuryReceivable.update({
               where: { id: link.receivableId },
               data: {
                 receivedAmount: newReceived,
-                pendingAmount: Number(rec.totalAmount) - newReceived,
+                pendingAmount: Math.max(0, total - newReceived),
                 status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
+                settledAt: null,
               },
             })
           }
           for (const link of recon.payables) {
             const pay = link.payable
-            const newPaid = Math.max(0, Number(pay.paidAmount) - Number(link.amountAllocated))
+            // total/paid reais via overlay TOC (ver nota no bloco dos receivables).
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'payable', pay)
+            const newPaid = Math.max(0, settled - Number(link.amountAllocated))
             await tx.treasuryPayable.update({
               where: { id: link.payableId },
               data: {
                 paidAmount: newPaid,
-                pendingAmount: Number(pay.totalAmount) - newPaid,
+                pendingAmount: Math.max(0, total - newPaid),
                 status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
               },
             })

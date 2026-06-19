@@ -73,3 +73,88 @@
     @apply text-sm text-gray-500;
   }
 }
+
+/* ── Botão "ir para budget" (painel de detalhe) ──────────────────
+   Pill circular tingido com a cor do próprio budget (via currentColor,
+   definido inline) com micro-interação da seta no hover. */
+.budget-goto {
+  background-color: color-mix(in srgb, currentColor 11%, transparent);
+  transition: background-color .18s ease, transform .12s ease;
+}
+.budget-goto:hover { background-color: color-mix(in srgb, currentColor 20%, transparent); }
+.budget-goto:active { transform: scale(0.9); }
+.budget-goto:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 45%, transparent); }
+.budget-goto-arrow { transition: transform .2s cubic-bezier(.34, 1.45, .5, 1); }
+.budget-goto:hover .budget-goto-arrow { transform: translate(1.5px, -1.5px); }
+
+/* ── Barra de scroll horizontal flutuante (fixa ao fundo da janela) ──
+   Mantém o scroll horizontal de tabelas largas sempre acessível, sem ter de
+   rolar a página até ao fundo da tabela. Gerida por useStickyHScrollbar. */
+.hscroll-host { scrollbar-width: none; -ms-overflow-style: none; }
+.hscroll-host::-webkit-scrollbar { height: 0 !important; width: 0 !important; }
+.hscroll-floating {
+  position: fixed;
+  bottom: 0;
+  z-index: 35;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 13px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+  scrollbar-width: thin;
+}
+.hscroll-floating::-webkit-scrollbar { height: 9px; }
+.hscroll-floating::-webkit-scrollbar-track { background: transparent; }
+.hscroll-floating::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.55); border-radius: 9999px; }
+.hscroll-floating::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 0.8); }
+.hscroll-floating-spacer { height: 1px; }
+.dark .hscroll-floating { background: rgba(15, 23, 42, 0.92); border-top-color: rgba(255, 255, 255, 0.08); }
+
+/* ── Modo escuro — remap global de previsualização ──────────────
+   Em vez de anotar dark: nas ~800 utilizações de classes claras
+   espalhadas pelas páginas, remapeamos aqui as classes mais comuns
+   quando o <html> tem .dark. É uma abordagem rápida para PREVER o
+   aspeto; a versão definitiva seria variantes dark: por componente.
+   As regras .dark .x têm maior especificidade que as utilitárias
+   originais, por isso prevalecem. */
+.dark body { @apply bg-slate-900 text-slate-100; }
+.dark ::-webkit-scrollbar-thumb { @apply bg-slate-600 hover:bg-slate-500; }
+
+/* Classes de componente */
+.dark .card { @apply bg-slate-800 border-slate-700 shadow-none; }
+.dark .card-hover:hover { @apply border-slate-600; }
+.dark .btn-secondary { @apply bg-slate-800 text-slate-200 border-slate-600 hover:bg-slate-700 hover:border-slate-500; }
+.dark .btn-ghost { @apply text-slate-400 hover:bg-slate-700 hover:text-slate-200; }
+.dark .input { @apply bg-slate-900 border-slate-600 text-slate-100 placeholder:text-slate-500; }
+.dark .input:disabled { @apply bg-slate-800 text-slate-500; }
+.dark .label { @apply text-slate-300; }
+.dark .table-row:hover { @apply bg-slate-700/40; }
+.dark .section-title { @apply text-slate-100; }
+.dark .section-subtitle { @apply text-slate-400; }
+
+/* Superfícies */
+.dark .bg-white { @apply bg-slate-800; }
+.dark .bg-gray-50,
+.dark .bg-slate-50,
+.dark .bg-gray-100 { @apply bg-slate-700; }
+.dark .hover\:bg-gray-50:hover,
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-gray-100:hover { @apply bg-slate-700; }
+
+/* Texto */
+.dark .text-gray-900 { @apply text-slate-100; }
+.dark .text-gray-800 { @apply text-slate-200; }
+.dark .text-gray-700 { @apply text-slate-300; }
+.dark .text-gray-600 { @apply text-slate-400; }
+.dark .text-gray-500 { @apply text-slate-400; }
+.dark .text-gray-400 { @apply text-slate-500; }
+
+/* Limites/bordas */
+.dark .border-gray-50,
+.dark .border-gray-100,
+.dark .border-gray-200 { @apply border-slate-700; }
+.dark .divide-gray-50 > :not([hidden]) ~ :not([hidden]),
+.dark .divide-gray-100 > :not([hidden]) ~ :not([hidden]) { border-color: theme('colors.slate.700'); }

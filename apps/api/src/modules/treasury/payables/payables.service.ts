@@ -1,4 +1,4 @@
-import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma, TocPurchaseDocument } from '@prisma/client'
+import type { PrismaClient, TreasuryDocStatus, TreasuryDocOrigin, TreasuryRecurrenceFrequency, Prisma, TocPurchaseDocument, TreasurySettlementSource } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { computeNextDate } from '../recurrences/utils.js'
 import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
@@ -6,6 +6,12 @@ import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
 import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
+import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
+import { clearBareTocPurchaseStub } from '../../../lib/toc-sync/dedup.js'
+import { compareDocs } from '../../../lib/doc-sort.js'
+import { detachDocFromConfirmedReconciliations } from '../../../lib/reconciliation-detach.js'
+import { earliestPendingDueAt } from '../../../lib/pending-action.js'
+import { syncParentDocStatus } from '../../../lib/parent-status.js'
 
 interface PayableListItem {
   id: string
@@ -17,26 +23,34 @@ interface PayableListItem {
   pendingAmount: number | Prisma.Decimal | null
   paidAmount: number | Prisma.Decimal | null
   status: TreasuryDocStatus
+  settledVia: TreasurySettlementSource | null
+  settledAt: Date | null
+  /** Referência do comprovativo de pagamento registado ao liquidar (null se não houver). */
+  paymentReference: string | null
+  /** Valor coberto pelo comprovativo interno (null se não houver). */
+  paymentAmount: number | Prisma.Decimal | null
+  /** Data efetiva de pagamento (calculada): pagamento ao fornecedor no TOConline ›
+   *  última parcela paga › settledAt manual. null enquanto não houver pagamento. */
+  paymentDate: Date | string | null
   origin: TreasuryDocOrigin
   tocPurchasesDocId: string | null
   tocSupplierId: string | null
   recurrenceId: string | null
   parentId: string | null
   promisedPaymentDate: Date | null
+  readyToPay: boolean
+  /** Tem tarefa de contacto pendente (CALL_TASK PENDING) — mostra ícone "Contatar Cliente". */
+  needsContact?: boolean
+  /** dueAt (ISO) mais antigo das CALL_TASK PENDING com prazo — alimenta o "!" de ação pendente. null se não houver. */
+  _pendingActionDueAt?: string | null
   category: { id: string; name: string; color: string | null; launchToc: boolean } | null
+  budget: { id: string; name: string; color: string | null } | null
   children: unknown[]
   _src: 'local' | 'toc'
   _tocRaw: Prisma.JsonValue | null
   _statusToc: TreasuryDocStatus | null
   _statusDiffersFromToc: boolean
   [key: string]: unknown
-}
-
-function mapTocStatus(tocStatus: number | null | undefined): TreasuryDocStatus | null {
-  if (tocStatus == null || tocStatus === 0 || tocStatus === 4) return null
-  if (tocStatus === 3) return 'SETTLED'
-  if (tocStatus === 2) return 'PARTIAL'
-  return 'OPEN'
 }
 
 function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null {
@@ -56,13 +70,20 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
     pendingAmount: pending,
     paidAmount: paid,
     status: mappedStatus,
+    settledVia: null,
+    settledAt: null,
+    paymentReference: null,
+    paymentAmount: null,
+    paymentDate: null,
     origin: 'TOCONLINE',
     tocPurchasesDocId: String(d.tocId),
     tocSupplierId: d.supplierId != null ? String(d.supplierId) : null,
     recurrenceId: null,
     parentId: null,
     promisedPaymentDate: null,
+    readyToPay: false,
     category: null,
+    budget: null,
     children: [],
     _src: 'toc',
     _tocRaw: d.raw,
@@ -71,37 +92,25 @@ function mapTocPurchaseToPayable(d: TocPurchaseDocument): PayableListItem | null
   }
 }
 
-function resolveStatusOverlay(
-  localStatus: TreasuryDocStatus,
-  localPaid: number | Prisma.Decimal | null | undefined,
-  tocStatus: TreasuryDocStatus,
-  tocGross: number,
-  tocPending: number,
-): { status: TreasuryDocStatus; paid: number; pending: number; statusDiffers: boolean } {
-  if (localStatus === 'SETTLED') {
-    return { status: 'SETTLED', paid: tocGross, pending: 0, statusDiffers: tocStatus !== 'SETTLED' }
-  }
-  if (localStatus === 'VOID') {
-    return { status: 'VOID', paid: 0, pending: 0, statusDiffers: true }
-  }
-  if (localStatus === 'PARTIAL') {
-    const paid = Number(localPaid ?? 0)
-    return { status: 'PARTIAL', paid, pending: Math.max(0, tocGross - paid), statusDiffers: tocStatus !== 'PARTIAL' }
-  }
-  return {
-    status: tocStatus,
-    paid: Math.max(0, tocGross - tocPending),
-    pending: tocPending,
-    statusDiffers: false,
-  }
-}
-
 type LocalPayableRow = Prisma.TreasuryPayableGetPayload<{
   include: {
     category: { select: { id: true; name: true; color: true; launchToc: true } }
+    budget: { select: { id: true; name: true; color: true } }
     children: true
   }
 }>
+
+/** Data-base de pagamento (sem TOC): a maior data de liquidação das parcelas
+ *  (última parcela paga) quando o doc está dividido; caso contrário o `settledAt`
+ *  da marcação manual de Pago/Liquidado. O pagamento ao fornecedor no TOConline,
+ *  quando existe, sobrepõe-se a isto na fase de enriquecimento da listagem. */
+function basePaymentDate(local: LocalPayableRow): Date | null {
+  const paidSplits = (local.children ?? []).filter((c) => c.recurrenceId == null && c.settledAt != null)
+  if (paidSplits.length > 0) {
+    return paidSplits.reduce<Date>((max, c) => (c.settledAt! > max ? c.settledAt! : max), paidSplits[0].settledAt!)
+  }
+  return local.settledAt ?? null
+}
 
 function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchaseDocument): PayableListItem | null {
   if (!tocDoc) {
@@ -115,13 +124,20 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
       pendingAmount: local.pendingAmount,
       paidAmount: local.paidAmount,
       status: local.status,
+      settledVia: local.settledVia,
+      settledAt: local.settledAt,
+      paymentReference: local.paymentReference,
+      paymentAmount: local.paymentAmount,
+      paymentDate: basePaymentDate(local),
       origin: local.origin,
       tocPurchasesDocId: local.tocPurchasesDocId,
       tocSupplierId: local.tocSupplierId,
       recurrenceId: local.recurrenceId,
       parentId: local.parentId,
       promisedPaymentDate: local.promisedPaymentDate,
+      readyToPay: local.readyToPay,
       category: local.category,
+      budget: local.budget,
       children: local.children,
       _src: local.tocPurchasesDocId ? 'toc' : 'local',
       _tocRaw: null,
@@ -143,15 +159,22 @@ function overlayLocalPayableWithToc(local: LocalPayableRow, tocDoc?: TocPurchase
     dueDate: tocDoc.dueDate ? new Date(tocDoc.dueDate) : local.dueDate,
     totalAmount: gross,
     pendingAmount: merged.pending,
-    paidAmount: merged.paid,
+    paidAmount: merged.settled,
     status: merged.status,
+    settledVia: local.settledVia,
+    settledAt: local.settledAt,
+    paymentReference: local.paymentReference,
+    paymentAmount: local.paymentAmount,
+    paymentDate: basePaymentDate(local),
     origin: 'TOCONLINE',
     tocPurchasesDocId: local.tocPurchasesDocId,
     tocSupplierId: local.tocSupplierId ?? (tocDoc.supplierId != null ? String(tocDoc.supplierId) : null),
     recurrenceId: local.recurrenceId,
     parentId: local.parentId,
     promisedPaymentDate: local.promisedPaymentDate,
+    readyToPay: local.readyToPay,
     category: local.category,
+    budget: local.budget,
     children: local.children,
     _src: 'toc',
     _tocRaw: tocDoc.raw,
@@ -175,6 +198,9 @@ export class TreasuryPayablesService {
     status?: TreasuryDocStatus | TreasuryDocStatus[]
     origin?: TreasuryDocOrigin
     categoryId?: string
+    uncategorized?: boolean
+    budgetId?: string
+    unbudgeted?: boolean
     entityName?: string
     dueDateFrom?: string
     dueDateTo?: string
@@ -184,8 +210,21 @@ export class TreasuryPayablesService {
     paymentDateTo?: string
     isRecurrent?: boolean
     overdue?: boolean
+    // "Passou prazo pagamento": pendentes cuja data prometida de pagamento — ou,
+    // na ausência desta, a data de vencimento de origem — já passou.
+    pastPaymentDeadline?: boolean
     tocSupplierId?: string
-    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status'
+    // 'fornecedores' = ligados ao TOConline (tocPurchasesDocId != null);
+    // 'outras' = operações locais (tocPurchasesDocId == null). Cada separador
+    // ordena/pagina o seu próprio conjunto no servidor.
+    bucket?: 'fornecedores' | 'outras'
+    // "Futuros Pagamentos": faturas marcadas como Pronta para Pagar. Atravessa os
+    // buckets (Fornecedores + Outras) — quando ligado, ignora a restrição de bucket.
+    readyToPay?: boolean
+    // Modo de reconciliação: mostra as parcelas (filhas de split) em vez da mãe
+    // dividida. Inverte a exclusão padrão (que esconde parcelas e mostra a mãe).
+    reconcilable?: boolean
+    sortBy?: 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'settledAt' | 'status'
     sortDir?: 'asc' | 'desc'
     page?: number
     limit?: number
@@ -195,8 +234,8 @@ export class TreasuryPayablesService {
     // the engine. Idempotent: returns immediately when there's nothing to generate.
     await this.recurrencesSvc.processForClient(clientId, 180)
 
-    const { page = 1, limit = 50, status, origin, categoryId, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, tocSupplierId, sortBy = 'dueDate', sortDir = 'asc' } = filters
-    const statusList: TreasuryDocStatus[] | undefined = overdue
+    const { page = 1, limit = 50, status, origin, categoryId, uncategorized, budgetId, unbudgeted, entityName, dueDateFrom, dueDateTo, docDateFrom, docDateTo, paymentDateFrom, paymentDateTo, isRecurrent, overdue, pastPaymentDeadline, tocSupplierId, bucket, readyToPay, reconcilable, sortBy = 'dueDate', sortDir = 'asc' } = filters
+    const statusList: TreasuryDocStatus[] | undefined = (overdue || pastPaymentDeadline)
       ? ['OPEN', 'PARTIAL']
       : Array.isArray(status) ? status : status ? [status] : undefined
 
@@ -207,8 +246,11 @@ export class TreasuryPayablesService {
     const localWhere: Prisma.TreasuryPayableWhereInput = {
       clientId,
       deletedAt: null,
-      NOT: { parentId: { not: null }, recurrenceId: null },
+      ...(reconcilable
+        ? { NOT: { children: { some: { recurrenceId: null, deletedAt: null } } } }
+        : { NOT: { parentId: { not: null }, recurrenceId: null } }),
       ...(categoryId ? { categoryId } : {}),
+      ...(budgetId ? { budgetId } : {}),
       ...(paymentDateFrom || paymentDateTo ? {
         promisedPaymentDate: {
           ...(paymentDateFrom ? { gte: new Date(paymentDateFrom) } : {}),
@@ -223,10 +265,11 @@ export class TreasuryPayablesService {
         where: localWhere,
         include: {
           category: { select: { id: true, name: true, color: true, launchToc: true } },
+          budget: { select: { id: true, name: true, color: true } },
           children: { where: { deletedAt: null }, orderBy: { dueDate: 'asc' } },
         },
       }),
-      (categoryId || isRecurrent !== undefined || paymentDateFrom || paymentDateTo)
+      (categoryId || budgetId || isRecurrent !== undefined || paymentDateFrom || paymentDateTo)
         ? Promise.resolve([] as TocPurchaseDocument[])
         : this.prisma.tocPurchaseDocument.findMany({
             where: {
@@ -249,7 +292,7 @@ export class TreasuryPayablesService {
     const importedTocIds = new Set(localRows.map((p) => p.tocPurchasesDocId).filter((s): s is string => !!s))
     const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
     const tocPureMapped: PayableListItem[] = []
-    if (origin !== 'LOCAL') {
+    if (origin !== 'LOCAL' && bucket !== 'outras') {
       for (const d of allTocDocs) {
         if (importedTocIds.has(String(d.tocId))) continue
         const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
@@ -259,7 +302,10 @@ export class TreasuryPayablesService {
       }
     }
 
-    const now = new Date()
+    // "Vencido" = prazo já passou (antes de hoje); um documento com vencimento
+    // hoje ainda não está vencido. Usar meia-noite de hoje mantém este filtro
+    // alinhado com a contagem do cartão "Vencidas" (que compara contra hoje 00:00).
+    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
     const docDateFromTs = docDateFrom ? new Date(docDateFrom).getTime() : null
     const docDateToTs = docDateTo ? new Date(new Date(docDateTo).getTime() + 86400000).getTime() : null
     const dueDateFromTs = dueDateFrom ? new Date(dueDateFrom).getTime() : null
@@ -267,7 +313,18 @@ export class TreasuryPayablesService {
     const entityQuery = entityName?.toLowerCase()
 
     const matches = (item: PayableListItem) => {
+      if (bucket === 'outras' && item.tocPurchasesDocId != null) return false
+      if (bucket === 'fornecedores' && item.tocPurchasesDocId == null) return false
+      // "Futuros Pagamentos": só faturas marcadas e ainda por pagar. Faturas
+      // pagas/liquidadas/anuladas saem do separador (a flag é limpa ao pagar,
+      // mas guardamos esta rede de segurança para docs TOC liquidados via sync).
+      if (readyToPay) {
+        if (!item.readyToPay) return false
+        if (item.status === 'PAID' || item.status === 'SETTLED' || item.status === 'VOID') return false
+      }
       if (statusList && !statusList.includes(item.status)) return false
+      if (uncategorized && item.category != null) return false
+      if (unbudgeted && item.budget != null) return false
       if (origin && item.origin !== origin) return false
       if (entityQuery) {
         const en = (item.entityName ?? '').toLowerCase()
@@ -275,7 +332,11 @@ export class TreasuryPayablesService {
         if (!en.includes(entityQuery) && !rf.includes(entityQuery)) return false
       }
       if (tocSupplierId && item.tocSupplierId !== tocSupplierId) return false
-      if (overdue && (item.dueDate == null || item.dueDate >= now)) return false
+      if (overdue && (item.dueDate == null || item.dueDate >= startOfToday)) return false
+      if (pastPaymentDeadline) {
+        const effPay = item.promisedPaymentDate ?? item.dueDate
+        if (effPay == null || effPay >= startOfToday) return false
+      }
       if (dueDateFromTs != null && (item.dueDate == null || item.dueDate.getTime() < dueDateFromTs)) return false
       if (dueDateToTs != null && (item.dueDate == null || item.dueDate.getTime() >= dueDateToTs)) return false
       if (docDateFromTs != null && (item.documentDate == null || item.documentDate.getTime() < docDateFromTs)) return false
@@ -285,21 +346,66 @@ export class TreasuryPayablesService {
 
     const allItems = [...localWithOverlay, ...tocPureMapped].filter(matches)
 
-    const sortKey = sortBy as keyof PayableListItem
-    allItems.sort((a, b) => {
-      const rawA = a[sortKey], rawB = b[sortKey]
-      const va = rawA instanceof Date ? rawA.getTime() : rawA
-      const vb = rawB instanceof Date ? rawB.getTime() : rawB
-      if (va == null && vb == null) return 0
-      if (va == null) return sortDir === 'asc' ? 1 : -1
-      if (vb == null) return sortDir === 'asc' ? -1 : 1
-      if (va < vb) return sortDir === 'asc' ? -1 : 1
-      if (va > vb) return sortDir === 'asc' ? 1 : -1
-      return 0
-    })
+    allItems.sort((a, b) => compareDocs(a, b, sortBy, sortDir))
 
     const total = allItems.length
     const items = allItems.slice((page - 1) * limit, page * limit)
+
+    // Enriquecimento via pagamentos ao fornecedor no TOConline:
+    //  - filtra `payments_ids` no raw para só os ATIVOS (exclui anulados), para o
+    //    contador de pagamentos do frontend não os incluir;
+    //  - data efetiva de pagamento (precedência máxima) para docs liquidados/pagos.
+    const paymentIdsByItem = new Map<string, number[]>()
+    const allPaymentIds = new Set<number>()
+    for (const it of items) {
+      if (!it.tocPurchasesDocId) continue
+      const toc = tocById.get(Number(it.tocPurchasesDocId))
+      const ids = Array.isArray(toc?.paymentsIds)
+        ? (toc!.paymentsIds as unknown[]).map(Number).filter((n) => !Number.isNaN(n))
+        : []
+      if (ids.length) {
+        paymentIdsByItem.set(it.id, ids)
+        ids.forEach((n) => allPaymentIds.add(n))
+      }
+    }
+    if (allPaymentIds.size) {
+      const payments = await this.prisma.tocPurchasePayment.findMany({
+        where: { clientId, tocId: { in: [...allPaymentIds] }, NOT: { raw: { path: ['deleted'], equals: true } } },
+        select: { tocId: true, date: true },
+      })
+      const activeIds = new Set(payments.map((pm) => pm.tocId))
+      const dateByPayment = new Map(payments.map((pm) => [pm.tocId, pm.date]))
+      for (const it of items) {
+        const ids = paymentIdsByItem.get(it.id)
+        if (!ids) continue
+        const active = ids.filter((id) => activeIds.has(id))
+        // Reescreve payments_ids no raw com só os ativos (alimenta o contador).
+        if (it._tocRaw && typeof it._tocRaw === 'object') {
+          it._tocRaw = { ...(it._tocRaw as Record<string, unknown>), payments_ids: active }
+        }
+        if (it.status === 'SETTLED' || it.status === 'PAID') {
+          const dates = active.map((id) => dateByPayment.get(id)).filter((d): d is string => !!d).sort()
+          if (dates.length) it.paymentDate = dates[dates.length - 1] // ISO date mais recente
+        }
+      }
+    }
+
+    // Sinaliza as faturas (da página atual) com tarefa de contacto pendente
+    // (CALL_TASK PENDING) — o frontend mostra o ícone "Contatar Cliente". Só os
+    // ids locais (cuid) têm follow-ups; itens TOC puros (id `toc-…`) nunca casam.
+    const localIds = items.map((i) => i.id).filter((id) => !id.startsWith('toc-'))
+    if (localIds.length > 0) {
+      const pendingTasks = await this.prisma.treasuryFollowup.findMany({
+        where: { clientId, payableId: { in: localIds }, kind: 'CALL_TASK', status: 'PENDING' },
+        select: { payableId: true, dueAt: true },
+      })
+      const needsContactIds = new Set(pendingTasks.map((t) => t.payableId))
+      const dueByDoc = earliestPendingDueAt(pendingTasks.map((t) => ({ docId: t.payableId, dueAt: t.dueAt })))
+      for (const item of items) {
+        item.needsContact = needsContactIds.has(item.id)
+        item._pendingActionDueAt = dueByDoc.get(item.id) ?? null
+      }
+    }
 
     return { total, page, limit, items }
   }
@@ -326,6 +432,19 @@ export class TreasuryPayablesService {
       select: { id: true },
     })
     return created.id
+  }
+
+  /**
+   * Lookup puro (sem criar): id do payable local ligado a um doc de compras TOConline.
+   * Devolve null quando ainda não existe ligação local — usado para decidir se a UI
+   * abre o painel rico ou mantém o comportamento inline.
+   */
+  async findLocalIdByTocDoc(clientId: string, tocDocId: string): Promise<{ id: string } | null> {
+    const existing = await this.prisma.treasuryPayable.findFirst({
+      where: { clientId, tocPurchasesDocId: tocDocId, deletedAt: null },
+      select: { id: true },
+    })
+    return existing ? { id: existing.id } : null
   }
 
   /** Bloqueia mutações que alteram dados da fatura em docs com tocPurchasesDocId. */
@@ -361,7 +480,15 @@ export class TreasuryPayablesService {
         : null
       if (!existing && !tocDoc) throw httpError(404, 'Payable not found')
       // Para resolveLocalPayableId já termos um existing, devolvemos esse com overlay
-      if (existing) return { ...existing, _tocOverlay: tocDoc ?? null }
+      const localReturn = existing ? { ...existing, _tocOverlay: tocDoc ?? null } : null
+      if (localReturn) return localReturn
+      // Leitura de um doc TOConline puro (sem registo local ainda): devolvemos o
+      // documento TOC mapeado em vez de 404 para o painel poder abrir. Apenas as
+      // rotas de leitura chegam aqui; as de escrita resolvem o id local antes.
+      if (tocDoc) {
+        const mapped = mapTocPurchaseToPayable(tocDoc)
+        if (mapped) return { ...mapped, _tocOverlay: tocDoc } as unknown as NonNullable<typeof localReturn>
+      }
       throw httpError(404, 'Payable não tem registo de ligação ainda — chame primeiro resolveLocalPayableId')
     }
     const item = await this.prisma.treasuryPayable.findFirst({
@@ -487,6 +614,7 @@ export class TreasuryPayablesService {
     let recurrenceId = data.recurrenceId
 
     if (data.recurrence) {
+      if (!(data.totalAmount > 0)) throw httpError(400, 'Valor estimado obrigatório na recorrência')
       const firstDueDate = new Date(data.dueDate)
       const rec = await this.prisma.treasuryRecurrence.create({
         data: {
@@ -502,27 +630,46 @@ export class TreasuryPayablesService {
       recurrenceId = rec.id
     }
 
-    const created = await this.prisma.treasuryPayable.create({
-      data: {
-        clientId,
-        createdById: userId,
-        origin: category?.launchToc ? 'TOCONLINE' : 'LOCAL',
-        totalAmount: data.totalAmount,
-        // Template roots have pendingAmount=0; actual transactions are the children
-        pendingAmount: data.recurrence ? 0 : data.totalAmount,
-        documentDate: data.documentDate ? new Date(data.documentDate) : null,
-        dueDate: new Date(data.dueDate),
-        currency: data.currency ?? 'EUR',
-        categoryId: data.categoryId,
-        entityName: data.entityName ?? null,
-        entityNif: data.entityNif,
-        tocSupplierId: data.tocSupplierId,
-        tocPurchasesDocId: data.tocPurchasesDocId,
-        reference: data.reference ?? null,
-        description: data.description,
-        recurrenceId,
-        ...(resolvedBudgetId ? { budgetId: resolvedBudgetId, budgetAutoAssigned } : {}),
-      },
+    // Origem determinada pela ligação ao TOConline (tocPurchasesDocId), não pela
+    // categoria: `launchToc` está descontinuado (a app já não escreve no TOC).
+    // Um documento só é 'TOCONLINE' quando está efetivamente associado a um doc
+    // TOConline; caso contrário é local e totalmente editável.
+    const origin: TreasuryDocOrigin = data.tocPurchasesDocId ? 'TOCONLINE' : 'LOCAL'
+    const created = await this.prisma.$transaction(async (tx) => {
+      // Docs TOC mantêm a referência do TOConline. Locais usam a referência que o
+      // utilizador escreve (a numeração interna automática foi descontinuada).
+      // Estado inicial: recorrência → SCHEDULED; local avulsa SEM referência →
+      // SCHEDULED (Futura); com referência (ou TOC) → OPEN (real, em aberto).
+      const trimmedRef = data.reference?.trim() || null
+      const reference = data.recurrence ? null : (data.tocPurchasesDocId ? (data.reference ?? null) : trimmedRef)
+      const scheduled = !!data.recurrence || (origin === 'LOCAL' && !data.tocPurchasesDocId && !trimmedRef)
+      // Dedup por referência: liga a um doc TOConline de compra com a mesma referência.
+      const autoTocId = (!scheduled && !data.tocPurchasesDocId) ? await this.matchTocPurchasesDocId(clientId, reference) : null
+      return tx.treasuryPayable.create({
+        data: {
+          clientId,
+          createdById: userId,
+          origin,
+          totalAmount: data.totalAmount,
+          // Raiz de recorrência = template (não é uma ocorrência): pendingAmount 0,
+          // para não duplicar com a 1.ª instância gerada. As restantes (incl. avulsas
+          // Futuras) levam o valor.
+          pendingAmount: data.recurrence ? 0 : data.totalAmount,
+          ...(scheduled ? { status: 'SCHEDULED' as const } : {}),
+          documentDate: data.documentDate ? new Date(data.documentDate) : null,
+          dueDate: new Date(data.dueDate),
+          currency: data.currency ?? 'EUR',
+          categoryId: data.categoryId,
+          entityName: data.entityName ?? null,
+          entityNif: data.entityNif,
+          tocSupplierId: data.tocSupplierId,
+          tocPurchasesDocId: data.tocPurchasesDocId ?? autoTocId,
+          reference,
+          description: data.description,
+          recurrenceId,
+          ...(resolvedBudgetId ? { budgetId: resolvedBudgetId, budgetAutoAssigned } : {}),
+        },
+      })
     })
 
     await audit(this.prisma, {
@@ -551,6 +698,24 @@ export class TreasuryPayablesService {
     return created
   }
 
+  /** Dedup por referência: devolve o tocPurchasesDocId de um documento TOConline de
+   *  compra com o MESMO número (igual, com trim) que ainda não esteja ligado a outro
+   *  local. O nº vive no raw.document_no (não há coluna), por isso usa-se filtro JSON. */
+  private async matchTocPurchasesDocId(clientId: string, reference: string | null | undefined): Promise<string | null> {
+    const ref = reference?.trim()
+    if (!ref) return null
+    const toc = await this.prisma.tocPurchaseDocument.findFirst({
+      where: { clientId, status: { in: [1, 2, 3, 5] }, raw: { path: ['document_no'], equals: ref } },
+      select: { tocId: true },
+    })
+    if (!toc) return null
+    const tocId = String(toc.tocId)
+    // Unifica: se um stub vazio já estiver ligado a este TOC, remove-o; se houver um
+    // local com dados, é conflito real e não se liga.
+    const canLink = await clearBareTocPurchaseStub(this.prisma, clientId, tocId)
+    return canLink ? tocId : null
+  }
+
   async update(clientId: string, userId: string, id: string, data: Partial<{
     entityName: string
     entityNif: string | null
@@ -558,7 +723,7 @@ export class TreasuryPayablesService {
     reference: string
     documentDate: string
     dueDate: string
-    categoryId: string
+    categoryId: string | null
     budgetId: string | null
     budgetAutoAssigned: boolean
     totalAmount: number
@@ -570,8 +735,36 @@ export class TreasuryPayablesService {
     const item = await this.getById(clientId, id)
     const isTocLinked = !!item.tocPurchasesDocId
 
+    // Fatura programada (previsão futura de recorrência): só o valor estimado e
+    // a categoria são editáveis. A data vem da cadência da recorrência e a
+    // referência define-se ao comprometer — qualquer dueDate/reference enviado é
+    // ignorado (sem erro). totalAmount e categoryId são tratados mais abaixo.
+    const isScheduled = item.status === 'SCHEDULED'
+
     const updateData: Prisma.TreasuryPayableUpdateInput = {}
-    if (!isTocLinked) {
+    if (isScheduled) {
+      // Adicionar uma referência promove a Futura a Em aberto (OPEN) — equivalente,
+      // via edição, a "Marcar como Comprometido".
+      if (data.reference !== undefined) {
+        const ref = data.reference?.trim() || null
+        if (ref) {
+          updateData.reference = ref; updateData.status = 'OPEN'
+          if (!item.tocPurchasesDocId) {
+            const tocId = await this.matchTocPurchasesDocId(clientId, ref)
+            if (tocId) updateData.tocPurchasesDocId = tocId
+          }
+        }
+      }
+      // Numa avulsa local (sem recorrência) os restantes campos são editáveis; numa
+      // ocorrência de recorrência a data vem da cadência (não se aplica aqui).
+      if (item.recurrenceId == null) {
+        if (data.entityName   !== undefined) updateData.entityName   = data.entityName
+        if (data.entityNif    !== undefined) updateData.entityNif    = data.entityNif
+        if (data.description  !== undefined) updateData.description  = data.description
+        if (data.dueDate)                    updateData.dueDate      = new Date(data.dueDate)
+        if (data.documentDate)               updateData.documentDate = new Date(data.documentDate)
+      }
+    } else if (!isTocLinked) {
       if (data.entityName   !== undefined) updateData.entityName   = data.entityName
       if (data.entityNif    !== undefined) updateData.entityNif    = data.entityNif
       if (data.description  !== undefined) updateData.description  = data.description
@@ -584,7 +777,7 @@ export class TreasuryPayablesService {
       if (data.description !== undefined) updateData.description = data.description
     }
 
-    if (data.tocPurchasesDocId !== undefined) {
+    if (!isScheduled && data.tocPurchasesDocId !== undefined) {
       const clash = await this.prisma.treasuryPayable.findFirst({
         where: { clientId, tocPurchasesDocId: data.tocPurchasesDocId, deletedAt: null, NOT: { id } },
         select: { id: true },
@@ -613,12 +806,16 @@ export class TreasuryPayablesService {
       }
     }
 
-    if (data.categoryId) {
+    if (data.categoryId === null) {
+      updateData.category = { disconnect: true }
+    } else if (data.categoryId) {
       const category = await this.prisma.treasuryCategory.findFirst({ where: { id: data.categoryId, clientId, deletedAt: null } })
       if (!category) throw httpError(404, 'Category not found')
       if (category.type !== 'EXPENSE') throw httpError(400, `Categoria '${category.name}' é de Receita; não pode ser associada a uma conta a pagar`)
       updateData.category = { connect: { id: data.categoryId } }
-      updateData.origin = category.launchToc ? 'TOCONLINE' : 'LOCAL'
+      // A origem reflete a ligação ao TOConline, não a categoria. Considera também
+      // uma associação feita nesta mesma chamada (data.tocPurchasesDocId).
+      updateData.origin = (data.tocPurchasesDocId ?? item.tocPurchasesDocId) ? 'TOCONLINE' : 'LOCAL'
     }
 
     if (data.budgetId !== undefined) {
@@ -637,9 +834,16 @@ export class TreasuryPayablesService {
 
     if (data.totalAmount !== undefined) {
       // Allow overriding amount when associating a TOC doc (tocPurchasesDocId also being set)
-      if (item.status !== 'OPEN' && !data.tocPurchasesDocId) throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
+      if (item.status !== 'OPEN' && !isScheduled && !data.tocPurchasesDocId) throw httpError(409, 'Só é possível alterar o valor de documentos em aberto sem pagamentos')
       updateData.totalAmount = data.totalAmount
-      if (item.status === 'OPEN') updateData.pendingAmount = data.totalAmount
+      // Mantém pendingAmount sincronizado com o valor estimado em OPEN e SCHEDULED.
+      // Exceção: a raiz-template de uma recorrência (recurrenceId != null &&
+      // parentId == null) é um template, não uma ocorrência — fica a 0 para não
+      // duplicar com a 1.ª instância gerada.
+      if (item.status === 'OPEN' || isScheduled) {
+        const isRecurrenceTemplate = item.recurrenceId != null && item.parentId == null
+        updateData.pendingAmount = isRecurrenceTemplate ? 0 : data.totalAmount
+      }
     }
 
     const updated = await this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
@@ -689,43 +893,161 @@ export class TreasuryPayablesService {
     return updated
   }
 
-  private async syncParentStatus(clientId: string, parentId: string) {
-    const children = await this.prisma.treasuryPayable.findMany({
-      where: { parentId, deletedAt: null, recurrenceId: null },
-      select: { status: true, paidAmount: true, pendingAmount: true, promisedPaymentDate: true, dueDate: true },
-    })
-    if (children.length === 0) return
-    const paidAmount = children.reduce((s, c) => s + Number(c.paidAmount ?? 0), 0)
-    const pendingAmount = children.reduce((s, c) => s + Number(c.pendingAmount ?? 0), 0)
-    const allSettled = children.every((c) => c.status === 'SETTLED')
-    const someSettledOrPartial = children.some((c) => c.status === 'SETTLED' || c.status === 'PARTIAL')
-    const status: TreasuryDocStatus = allSettled ? 'SETTLED' : someSettledOrPartial ? 'PARTIAL' : 'OPEN'
-
-    // Earliest pending parcela drives the parent's promisedPaymentDate.
-    // SETTLED/VOID children are excluded (already paid or cancelled).
-    const pendingDates = children
-      .filter((c) => c.status !== 'SETTLED' && c.status !== 'VOID')
-      .map((c) => c.promisedPaymentDate ?? c.dueDate)
-      .filter((d): d is Date => d != null)
-    const promisedPaymentDate = pendingDates.length > 0
-      ? pendingDates.reduce((min, d) => d < min ? d : min, pendingDates[0])
-      : null
-    await this.prisma.treasuryPayable.update({ where: { id: parentId }, data: { status, paidAmount, pendingAmount, promisedPaymentDate } })
-  }
-
-  async settle(clientId: string, userId: string, id: string) {
-    id = await this.resolveLocalPayableId(clientId, userId, id)
-    const item = await this.getById(clientId, id)
-    if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
-    if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided payable')
-    if (item.recurrenceId && item.parentId) {
-      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-      if (item.dueDate && item.dueDate > todayStart) throw httpError(409, 'Não é possível liquidar uma recorrência futura antes da sua data de vencimento')
+  /** Atribuição de categoria em massa. Reaproveita `update()` por documento (que
+   *  resolve docs TOC para um registo local, valida a categoria, faz cascade às
+   *  parcelas e regista auditoria). Resiliente: documentos que falhem não abortam
+   *  os restantes. Devolve a contagem de sucessos e os erros por id.
+   *  `categoryId: null` remove a categoria (reverter categorização em massa). */
+  async bulkSetCategory(clientId: string, userId: string, ids: string[], categoryId: string | null) {
+    if (categoryId !== null) {
+      const category = await this.prisma.treasuryCategory.findFirst({ where: { id: categoryId, clientId, deletedAt: null } })
+      if (!category) throw httpError(404, 'Category not found')
+      if (category.type !== 'EXPENSE') throw httpError(400, `Categoria '${category.name}' é de Receita; não pode ser associada a contas a pagar`)
     }
 
-    const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status !== 'SETTLED' && c.status !== 'VOID')
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        await this.update(clientId, userId, id, { categoryId })
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
+  /** Atribuição de budget em massa. Espelha `bulkSetCategory`. Resiliente a
+   *  falhas individuais. `budgetId: null` remove o budget. */
+  async bulkSetBudget(clientId: string, userId: string, ids: string[], budgetId: string | null) {
+    if (budgetId !== null) await this.budgetsSvc.assertCompatible(clientId, budgetId, 'EXPENSE')
+
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        await this.update(clientId, userId, id, { budgetId })
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
+  /** Atribuição de estado em massa. Despacha cada documento para o método
+   *  por-documento correspondente (`pay`/`settle`/`unsettle`/`void`), herdando
+   *  todas as regras de negócio, cascatas às parcelas e auditoria. Resiliente:
+   *  documentos que não possam transitar (ex.: liquidar fatura TOConline, anular
+   *  já liquidado) são apanhados e não abortam os restantes. */
+  async bulkSetStatus(clientId: string, userId: string, ids: string[], status: 'PAID' | 'SETTLED' | 'OPEN' | 'VOID') {
+    // Liquidar exige registar o comprovativo (referência + data) por documento,
+    // por isso não é permitido em massa: cada fatura liquida-se individualmente.
+    if (status === 'SETTLED') throw httpError(400, 'A liquidação tem de registar o pagamento — liquide cada documento individualmente.')
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        if (status === 'PAID') await this.pay(clientId, userId, id)
+        else if (status === 'OPEN') await this.unsettle(clientId, userId, id)
+        else await this.void(clientId, userId, id)
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
+  /** Eliminação em massa. Despacha cada documento para `delete`, herdando o
+   *  soft-delete, cascata de recorrências e auditoria. Resiliente: falhas
+   *  individuais são apanhadas e não abortam os restantes. */
+  async bulkDelete(clientId: string, userId: string, ids: string[]) {
+    let updated = 0
+    const errors: Array<{ id: string; error: string }> = []
+    for (const id of ids) {
+      try {
+        await this.delete(clientId, userId, id)
+        updated++
+      } catch (err) {
+        errors.push({ id, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return { updated, failed: errors.length, errors }
+  }
+
+  private syncParentStatus(clientId: string, parentId: string) {
+    return syncParentDocStatus(this.prisma, clientId, 'payable', parentId)
+  }
+
+  async commit(clientId: string, userId: string, id: string, opts: { reference: string; amount: number; date: string }) {
+    id = await this.resolveLocalPayableId(clientId, userId, id)
+    const item = await this.getById(clientId, id)
+    if (item.status !== 'SCHEDULED') throw httpError(409, 'Só é possível comprometer uma fatura programada')
+    const reference = opts.reference?.trim()
+    if (!reference) throw httpError(400, 'A referência é obrigatória')
+    if (!opts.date) throw httpError(400, 'A data é obrigatória')
+    if (!(opts.amount > 0)) throw httpError(400, 'O valor é obrigatório')
+    // Dedup: se já existe um documento TOConline com esta referência, liga.
+    const autoTocId = item.tocPurchasesDocId ? null : await this.matchTocPurchasesDocId(clientId, reference)
+    const result = await this.prisma.treasuryPayable.update({
+      where: { id },
+      data: {
+        status: 'OPEN',
+        reference,
+        totalAmount: opts.amount,
+        pendingAmount: opts.amount,
+        paidAmount: 0,
+        dueDate: new Date(opts.date),
+        ...(autoTocId ? { tocPurchasesDocId: autoTocId } : {}),
+      },
+    })
+    await audit(this.prisma, { clientId, userId, action: 'payable.commit', entityType: 'Payable', entityId: id, payload: { reference, amount: opts.amount, date: opts.date } })
+    return result
+  }
+
+  async settle(clientId: string, userId: string, id: string, opts: { paymentReference?: string; date?: string } = {}) {
+    id = await this.resolveLocalPayableId(clientId, userId, id)
+    const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
+    const ref = opts.paymentReference?.trim()
+    const manual = !!ref
+    // Via manual (registo do comprovativo de pagamento): exige documento Pago +
+    // referência + data. Única forma de liquidar manualmente (incl. faturas TOC,
+    // cuja liquidação automática continua a vir do sync).
+    if (item.tocPurchasesDocId && !manual) throw httpError(409, 'A liquidação de faturas do TOConline é gerida automaticamente pelo TOConline')
+    if (manual) {
+      if (item.status !== 'PAID') throw httpError(409, 'Só é possível registar comprovativo numa conta paga (Pago → Liquidado)')
+      if (!opts.date) throw httpError(400, 'A data do pagamento é obrigatória')
+    }
+    if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
+    if (item.status === 'VOID') throw httpError(409, 'Cannot settle a voided payable')
+    // (As futuras são SCHEDULED e já bloqueadas acima; uma recorrência comprometida
+    // é OPEN e pode liquidar-se mesmo com data futura.)
+    const settledAt = manual && opts.date ? new Date(opts.date) : new Date()
+    // Valor do comprovativo interno = parte ainda não coberta pelos pagamentos do
+    // TOC. Para docs TOC = pendente do espelho TOC; para locais = total da fatura.
+    const tocOverlay = (item as { _tocOverlay?: { pendingTotal?: unknown; grossTotal?: unknown } | null })._tocOverlay
+    const paymentAmount = !manual ? undefined
+      : item.tocPurchasesDocId
+        ? Number((tocOverlay?.pendingTotal ?? tocOverlay?.grossTotal ?? 0) as Prisma.Decimal | number)
+        : Number(item.totalAmount ?? 0)
+
+    const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
+    const isSplitParent = nonRecurChildren.length > 0
 
     const result = await this.prisma.$transaction(async (tx) => {
+      if (isSplitParent) {
+        await tx.$executeRaw`
+          UPDATE "treasury_payables"
+          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "settledAt" = ${settledAt}, "updatedAt" = NOW()
+          WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('SETTLED','VOID')
+        `
+        if (manual) await tx.treasuryPayable.update({ where: { id }, data: { paymentReference: ref, paymentAmount } })
+        await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
+        return null
+      }
       const parent = await tx.treasuryPayable.update({
         where: { id },
         data: {
@@ -733,38 +1055,77 @@ export class TreasuryPayablesService {
           pendingAmount: item.tocPurchasesDocId ? null : 0,
           paidAmount: item.tocPurchasesDocId ? null : item.totalAmount,
           promisedPaymentDate: null,
+          readyToPay: false,
+          settledVia: 'LOCAL',
+          settledAt,
+          ...(manual ? { paymentReference: ref, paymentAmount } : {}),
         },
       })
-      // Cascade: settling a parent settles all its non-recurring open/partial children at once.
-      if (splitChildren.length > 0) {
-        await tx.$executeRaw`
-          UPDATE "treasury_payables"
-          SET "status" = 'SETTLED', "pendingAmount" = 0, "paidAmount" = "totalAmount", "updatedAt" = NOW()
-          WHERE "parentId" = ${id}
-            AND "recurrenceId" IS NULL
-            AND "deletedAt" IS NULL
-            AND "status" NOT IN ('SETTLED', 'VOID')
-        `
-      }
-      await audit(tx, {
-        clientId, userId,
-        action: 'payable.settle',
-        entityType: 'Payable', entityId: id,
-        payload: { from: item.status, to: 'SETTLED', cascadedChildren: splitChildren.length },
-      })
+      await audit(tx, { clientId, userId, action: 'payable.settle', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'SETTLED', via: 'LOCAL', paymentReference: ref ?? null } })
       return parent
     })
 
+    if (isSplitParent) await this.syncParentStatus(clientId, id)
     if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
-    return result
+    return result ?? this.prisma.treasuryPayable.findUnique({ where: { id } })
+  }
+
+  async pay(clientId: string, userId: string, id: string) {
+    id = await this.resolveLocalPayableId(clientId, userId, id)
+    const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
+    if (item.status === 'PAID') throw httpError(409, 'Already paid')
+    if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
+    if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
+    // (As futuras são SCHEDULED e já bloqueadas acima; uma recorrência comprometida
+    // é OPEN e pode pagar-se mesmo com data futura.)
+
+    const nonRecurChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
+    const isSplitParent = nonRecurChildren.length > 0
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      if (isSplitParent) {
+        await tx.$executeRaw`
+          UPDATE "treasury_payables"
+          SET "status" = 'PAID', "pendingAmount" = 0, "paidAmount" = "totalAmount", "readyToPay" = false, "settledVia" = 'LOCAL', "settledAt" = NOW(), "updatedAt" = NOW()
+          WHERE "parentId" = ${id} AND "recurrenceId" IS NULL AND "deletedAt" IS NULL AND "status" NOT IN ('PAID','SETTLED','VOID')
+        `
+        await audit(tx, { clientId, userId, action: 'payable.pay', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'PAID', via: 'INSTALLMENTS', cascadedChildren: nonRecurChildren.length } })
+        return null
+      }
+      const parent = await tx.treasuryPayable.update({
+        where: { id },
+        data: {
+          status: 'PAID',
+          pendingAmount: item.tocPurchasesDocId ? null : 0,
+          paidAmount: item.tocPurchasesDocId ? null : item.totalAmount,
+          promisedPaymentDate: null,
+          readyToPay: false,
+          settledVia: 'LOCAL',
+          settledAt: new Date(),
+        },
+      })
+      await audit(tx, { clientId, userId, action: 'payable.pay', entityType: 'Payable', entityId: id, payload: { from: item.status, to: 'PAID', via: 'LOCAL' } })
+      return parent
+    })
+
+    if (isSplitParent) await this.syncParentStatus(clientId, id)
+    if (item.parentId && !item.recurrenceId) await this.syncParentStatus(clientId, item.parentId)
+    return result ?? this.prisma.treasuryPayable.findUnique({ where: { id } })
   }
 
   async unsettle(clientId: string, userId: string, id: string) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
-    if (item.status !== 'SETTLED') throw httpError(409, 'Apenas documentos liquidados podem ser revertidos')
-
-    const settledChildren = (item.children ?? []).filter((c) => !c.recurrenceId && c.status === 'SETTLED')
+    // Faturas liquidadas no TOConline (recibo emitido, status 3) refletem a
+    // contabilidade — a liquidação não pode ser anulada aqui, só no TOConline.
+    const tocOverlay = (item as { _tocOverlay?: { status?: number | null } | null })._tocOverlay
+    if (item.tocPurchasesDocId && mapTocStatus(tocOverlay?.status ?? null) === 'SETTLED') {
+      throw httpError(409, 'Fatura liquidada no TOConline (recibo emitido) — não é possível anular a liquidação aqui.')
+    }
+    if (item.status !== 'SETTLED' && item.status !== 'PAID') throw httpError(409, 'Apenas documentos pagos ou liquidados podem ser revertidos')
+    if (item.settledVia === 'INSTALLMENTS') throw httpError(409, 'Esta fatura ficou paga pelas parcelas — reverta parcela a parcela.')
+    if (item.settledVia === 'RECONCILIATION') throw httpError(409, 'Esta fatura ficou paga por reconciliação — reverta anulando a reconciliação correspondente.')
 
     const result = await this.prisma.$transaction(async (tx) => {
       const parent = await tx.treasuryPayable.update({
@@ -773,25 +1134,29 @@ export class TreasuryPayablesService {
           status: 'OPEN',
           pendingAmount: item.tocPurchasesDocId ? null : item.totalAmount,
           paidAmount: item.tocPurchasesDocId ? null : 0,
+          settledVia: null,
+          settledAt: null,
+          paymentReference: null,
+          paymentAmount: null,
         },
       })
-      // Cascade: reverting the parent reverts every SETTLED non-recurring child.
-      if (settledChildren.length > 0) {
-        await tx.$executeRaw`
-          UPDATE "treasury_payables"
-          SET "status" = 'OPEN', "pendingAmount" = "totalAmount", "paidAmount" = 0, "updatedAt" = NOW()
-          WHERE "parentId" = ${id}
-            AND "recurrenceId" IS NULL
-            AND "deletedAt" IS NULL
-            AND "status" = 'SETTLED'
-        `
-      }
       await audit(tx, {
         clientId, userId,
         action: 'payable.unsettle',
         entityType: 'Payable', entityId: id,
-        payload: { from: 'SETTLED', to: 'OPEN', cascadedChildren: settledChildren.length },
+        payload: { from: item.status, to: 'OPEN', via: item.settledVia },
       })
+      // Anular o pagamento também reverte (parcialmente) a reconciliação: desliga
+      // apenas esta fatura, mantendo os restantes documentos/movimentos.
+      const detached = await detachDocFromConfirmedReconciliations(tx, clientId, userId, 'payable', id)
+      if (detached.reconciliations > 0) {
+        await audit(tx, {
+          clientId, userId,
+          action: 'payable.reconcile_reverse',
+          entityType: 'Payable', entityId: id,
+          payload: { amount: detached.amount, reconciliations: detached.reconciliations, partial: true },
+        })
+      }
       return parent
     })
 
@@ -802,6 +1167,8 @@ export class TreasuryPayablesService {
   async partialPayment(clientId: string, userId: string, id: string, amount: number) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
+    if (item.status === 'PAID') throw httpError(409, 'Already paid')
     if (item.status === 'SETTLED') throw httpError(409, 'Already settled')
     if (item.status === 'VOID') throw httpError(409, 'Cannot pay a voided payable')
     if (amount <= 0) throw httpError(400, 'Amount must be positive')
@@ -827,8 +1194,17 @@ export class TreasuryPayablesService {
   }
 
   async void(clientId: string, userId: string, id: string) {
+    // Faturas do TOConline não podem ser anuladas na app: o seu ciclo de vida
+    // (incl. anulação) é gerido no TOConline e refletido via sync. Bloqueia antes
+    // de `resolveLocalPayableId` para não criar uma anotação local desnecessária.
+    if (id.startsWith('toc-')) {
+      throw httpError(409, 'Faturas do TOConline não podem ser anuladas na app — a anulação tem de ser feita no TOConline.')
+    }
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.tocPurchasesDocId) {
+      throw httpError(409, 'Faturas do TOConline não podem ser anuladas na app — a anulação tem de ser feita no TOConline.')
+    }
     if (item.status === 'SETTLED') throw httpError(409, 'Cannot void a settled payable')
     const result = await this.prisma.treasuryPayable.update({ where: { id }, data: { status: 'VOID' } })
     await audit(this.prisma, {
@@ -895,6 +1271,8 @@ export class TreasuryPayablesService {
   async setPromisedDate(clientId: string, userId: string, id: string, date: string | null) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
+    if (item.status === 'SETTLED') throw httpError(409, 'Não é possível definir data de pagamento numa fatura já paga/liquidada')
     const newDate = date ? new Date(date) : null
     const result = await this.prisma.treasuryPayable.update({
       where: { id },
@@ -912,9 +1290,107 @@ export class TreasuryPayablesService {
     return result
   }
 
+  /** Marca/desmarca "Pronta para Pagar" (separador Futuros Pagamentos). Anotação
+   *  local não destrutiva — não altera o estado nem move a fatura do seu bucket.
+   *  Ao desmarcar, `promisedPaymentDate` opcional define/repõe a data de pagamento
+   *  no mesmo update (atómico): data → define; `null` → repõe a data de vencimento
+   *  (limpa o promisedPaymentDate); `undefined` → não toca na data.
+   *  Quando se define uma NOVA data (não null) ao desmarcar, `reason` é obrigatório:
+   *  registamos uma nota com o motivo e criamos uma tarefa para contactar o
+   *  fornecedor — tudo na mesma transação. */
+  async setReadyToPay(
+    clientId: string,
+    userId: string,
+    id: string,
+    ready: boolean,
+    promisedPaymentDate?: string | null,
+    reason?: string,
+  ) {
+    id = await this.resolveLocalPayableId(clientId, userId, id)
+    const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
+    // Só faturas em aberto podem entrar em Futuros Pagamentos. Parcialmente pagas,
+    // pagas, liquidadas ou anuladas ficam de fora. Desmarcar (ready=false) é sempre
+    // permitido (rede de limpeza para docs que mudaram de estado).
+    if (ready && item.status !== 'OPEN') {
+      throw httpError(409, 'Apenas faturas em aberto podem ser marcadas como prontas para pagar')
+    }
+    // A directiva de data só se aplica ao desmarcar e só quando o campo é fornecido.
+    const alsoSetDate = !ready && promisedPaymentDate !== undefined
+    const newDate = alsoSetDate ? (promisedPaymentDate ? new Date(promisedPaymentDate) : null) : undefined
+    // "Definir data de pagamento" no fluxo de remover: nova data (não null) exige
+    // motivo e gera nota + tarefa de contacto ao fornecedor.
+    const settingNewDate = alsoSetDate && newDate != null
+    const trimmedReason = reason?.trim()
+    if (settingNewDate && !trimmedReason) {
+      throw httpError(400, 'Motivo obrigatório ao definir uma nova data de pagamento')
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.treasuryPayable.update({
+        where: { id },
+        data: {
+          readyToPay: ready,
+          ...(alsoSetDate ? { promisedPaymentDate: newDate } : {}),
+        },
+      })
+      await audit(tx, {
+        clientId, userId,
+        action: 'payable.set_ready_to_pay',
+        entityType: 'Payable', entityId: id,
+        payload: { from: item.readyToPay, to: ready },
+      })
+      if (alsoSetDate) {
+        await audit(tx, {
+          clientId, userId,
+          action: 'payable.set_promised_date',
+          entityType: 'Payable', entityId: id,
+          payload: {
+            from: item.promisedPaymentDate?.toISOString() ?? null,
+            to: newDate?.toISOString() ?? null,
+          },
+        })
+      }
+      if (settingNewDate) {
+        const dateStr = newDate!.toISOString().slice(0, 10)
+        // Nota com o motivo da alteração (registo histórico na timeline).
+        await tx.treasuryFollowup.create({
+          data: {
+            clientId,
+            createdById: userId,
+            direction: 'PAYABLE',
+            kind: 'NOTE',
+            status: 'DONE',
+            payableId: id,
+            title: 'Alteração de data de pagamento',
+            description: `Nova data de pagamento: ${dateStr}. Motivo: ${trimmedReason}`,
+            completedAt: new Date(),
+          },
+        })
+        // Tarefa pendente para contactar o fornecedor sobre a nova data.
+        await tx.treasuryFollowup.create({
+          data: {
+            clientId,
+            createdById: userId,
+            direction: 'PAYABLE',
+            kind: 'CALL_TASK',
+            status: 'PENDING',
+            importance: 'NORMAL',
+            payableId: id,
+            title: 'Contactar fornecedor sobre nova data de pagamento',
+            description: `Nova data de pagamento: ${dateStr}. Motivo: ${trimmedReason}`,
+            dueAt: newDate,
+          },
+        })
+      }
+      return result
+    })
+  }
+
   async split(clientId: string, userId: string, id: string, installments: Array<{ promisedPaymentDate: string; amount: number; description?: string }>) {
     id = await this.resolveLocalPayableId(clientId, userId, id)
     const item = await this.getById(clientId, id)
+    if (item.status === 'SCHEDULED') throw httpError(409, 'Fatura programada: comprometa-a primeiro (Marcar como Comprometido)')
     if (item.status !== 'OPEN') throw httpError(409, 'Só é possível dividir documentos em aberto')
     if (item.parentId) throw httpError(409, 'Não é possível dividir uma parcela')
     const splitChildren = (item.children ?? []).filter((c) => !c.recurrenceId)
@@ -945,7 +1421,10 @@ export class TreasuryPayablesService {
               entityName: item.entityName,
               entityNif: item.entityNif ?? undefined,
               tocSupplierId: item.tocSupplierId ?? undefined,
-              tocPurchasesDocId: item.tocPurchasesDocId ?? undefined,
+              // Abordagem A: as parcelas NÃO herdam o tocPurchasesDocId da mãe.
+              // São documentos locais com referência sufixada (-1, -2…) e valor
+              // próprio; assim o overlay TOC não as reescreve com o nº/valor da
+              // fatura inteira. A mãe mantém a ligação ao TOConline.
               reference: `${refBase}-${i + 1}`,
               description: inst.description ?? item.description ?? undefined,
               documentDate: item.documentDate,
@@ -1088,8 +1567,16 @@ export class TreasuryPayablesService {
     return { classified, skipped: unclassified.length - classified }
   }
 
-  async getKpis(clientId: string) {
+  async getKpis(clientId: string, opts: { days?: number; all?: boolean } = {}) {
     const now = new Date()
+    // Janela do "Pago": 'all' = desde sempre; days = últimos N dias a contar de
+    // hoje; sem opção = mês civil atual (default histórico, usado pela query
+    // principal de KPIs que não passa parâmetros).
+    const paidFrom = opts.all
+      ? null
+      : opts.days != null
+        ? new Date(now.getTime() - opts.days * 86400000)
+        : new Date(now.getFullYear(), now.getMonth(), 1)
     // "Abertas": emitted but not settled. Excludes recurrence templates (parentless
     // with recurrenceId) and future recurrence instances (dueDate > now).
     const abertasClause: Prisma.TreasuryPayableWhereInput = {
@@ -1101,9 +1588,20 @@ export class TreasuryPayablesService {
     const localOnlyClause: Prisma.TreasuryPayableWhereInput = {
       clientId, deletedAt: null,
       tocPurchasesDocId: null,
+      // Exclui as parcelas-filhas de um split (parentId != null, recurrenceId null):
+      // a mãe já agrega o pendingAmount das parcelas (via syncParentStatus), por isso
+      // contá-las também duplicava o valor. Alinha com o clause da lista.
+      NOT: { parentId: { not: null }, recurrenceId: null },
       ...abertasClause,
     }
-    const [totalOpenLocal, overdueLocal, paidMonth] = await Promise.all([
+    // Programadas (SCHEDULED): recorrências futuras ainda não comprometidas. Não
+    // se aplica o abertasClause (são futuras por natureza); mantém-se a dedup de
+    // splits e a exclusão de docs TOC (SCHEDULED é sempre local).
+    const programmedClause: Prisma.TreasuryPayableWhereInput = {
+      clientId, deletedAt: null, tocPurchasesDocId: null,
+      NOT: { parentId: { not: null }, recurrenceId: null },
+    }
+    const [totalOpenLocal, overdueLocal, paidMonth, totalProgrammedLocal] = await Promise.all([
       this.prisma.treasuryPayable.aggregate({
         where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] } },
         _sum: { pendingAmount: true },
@@ -1113,8 +1611,13 @@ export class TreasuryPayablesService {
         where: { ...localOnlyClause, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { lt: now } },
       }),
       this.prisma.treasuryPayable.aggregate({
-        where: { clientId, deletedAt: null, status: 'SETTLED', updatedAt: { gte: new Date(now.getFullYear(), now.getMonth(), 1) } },
+        where: { clientId, deletedAt: null, status: { in: ['PAID', 'SETTLED'] }, ...(paidFrom ? { updatedAt: { gte: paidFrom } } : {}) },
         _sum: { totalAmount: true },
+      }),
+      this.prisma.treasuryPayable.aggregate({
+        where: { ...programmedClause, status: 'SCHEDULED' },
+        _sum: { pendingAmount: true },
+        _count: true,
       }),
     ])
 
@@ -1133,11 +1636,19 @@ export class TreasuryPayablesService {
       where: { clientId, status: { in: [1, 2, 5] } },
       select: { tocId: true, dueDate: true, status: true, pendingTotal: true, grossTotal: true, raw: true },
     })
+    // Docs TOC liquidados/pagos/anulados localmente (overlay) deixam de ser
+    // pendentes — excluídos dos totais (decisão: "Pago" não conta como pendente).
+    const overriddenToc = await this.prisma.treasuryPayable.findMany({
+      where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null }, status: { in: ['PAID', 'SETTLED', 'VOID'] } },
+      select: { tocPurchasesDocId: true },
+    })
+    const overriddenTocIds = new Set(overriddenToc.map((p) => Number(p.tocPurchasesDocId)))
     const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
     let tocTotalPending = 0
     let tocOpenCount = 0
     let tocOverdue = 0
     for (const d of tocDocs) {
+      if (overriddenTocIds.has(d.tocId)) continue
       const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
       if (!PURCH_INVOICE_TYPES.has(docType)) continue
       const pending = Number(d.pendingTotal ?? d.grossTotal ?? 0)
@@ -1148,12 +1659,48 @@ export class TreasuryPayablesService {
       if (isOverdue) tocOverdue += 1
     }
 
+    // Contadores dos cartões compactos clicáveis (dataset completo, com overlay TOC).
+    // Os cartões aplicam os seus presets ao separador Fornecedores, por isso a
+    // contagem tem de partilhar o mesmo universo (bucket 'fornecedores'); caso
+    // contrário o badge incluiria "Outras Operações" que o filtro não mostra.
+    const cardItems = (await this.list(clientId, { limit: 1_000_000, page: 1, bucket: 'fornecedores' })).items
+    const startToday = new Date(); startToday.setHours(0, 0, 0, 0)
+    const wd = startToday.getDay() // 0=Dom … 6=Sáb
+    const weekStart = new Date(startToday); weekStart.setDate(startToday.getDate() + (wd === 0 ? -6 : 1 - wd))
+    const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7) // exclusivo
+    const isPending = (s: string) => s === 'OPEN' || s === 'PARTIAL'
+    let cUncat = 0, cUnbudgeted = 0, cPending = 0, cOverdue = 0, cWeek = 0, cPastPay = 0
+    for (const it of cardItems) {
+      if (it.status !== 'VOID' && it.category == null) cUncat++
+      if (it.status !== 'VOID' && it.budget == null) cUnbudgeted++
+      if (isPending(it.status)) {
+        cPending++
+        if (it.dueDate != null && it.dueDate < startToday) cOverdue++
+        if (it.promisedPaymentDate != null && it.promisedPaymentDate >= weekStart && it.promisedPaymentDate < weekEnd) cWeek++
+        // "Passou prazo pagamento": usa a data prometida ou, na falta dela, a data
+        // de vencimento de origem. Itens vencidos sem compromisso registado entram.
+        const effPay = it.promisedPaymentDate ?? it.dueDate
+        if (effPay != null && effPay < startToday) cPastPay++
+      }
+    }
+
     return {
       totalPending: Number(totalOpenLocal._sum?.pendingAmount ?? 0) + tocTotalPending,
+      // Programadas (SCHEDULED) — separado, para o dashboard poder incluir/excluir.
+      totalProgrammed: Number(totalProgrammedLocal._sum?.pendingAmount ?? 0),
+      countProgrammed: totalProgrammedLocal._count,
       countOpen: totalOpenLocal._count + tocOpenCount,
       countOverdue: overdueLocal + tocOverdue,
       paidThisMonth: Number(paidMonth._sum?.totalAmount ?? 0),
       aging: { '0-30': buckets[0], '31-60': buckets[1], '61-90': buckets[2] },
+      cards: {
+        uncategorized: cUncat,
+        unbudgeted: cUnbudgeted,
+        pending: cPending,
+        overdue: cOverdue,
+        dueThisWeek: cWeek,
+        pastPaymentDeadline: cPastPay,
+      },
     }
   }
 }

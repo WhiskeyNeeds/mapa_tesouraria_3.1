@@ -1,6 +1,8 @@
 import type { PrismaClient, TreasuryCategoryType } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 import { ToconlineService } from '../../toconline/toconline.service.js'
+import { resolveDocAmountsFromDb } from '../../../lib/toc-overlay.js'
+import { syncParentDocStatus } from '../../../lib/parent-status.js'
 
 export interface ReconciliationItem {
   movementIds: string[]
@@ -33,8 +35,8 @@ export class TreasuryReconciliationsService {
         where,
         include: {
           movements: { include: { movement: { select: { id: true, date: true, amount: true, description: true, bankAccount: { select: { id: true, name: true } } } } } },
-          receivables: { include: { receivable: { select: { id: true, reference: true, entityName: true, pendingAmount: true } } } },
-          payables: { include: { payable: { select: { id: true, reference: true, entityName: true, pendingAmount: true } } } },
+          receivables: { include: { receivable: { select: { id: true, reference: true, entityName: true, pendingAmount: true, documentDate: true, dueDate: true, tocSalesDocId: true } } } },
+          payables: { include: { payable: { select: { id: true, reference: true, entityName: true, pendingAmount: true, documentDate: true, dueDate: true, tocPurchasesDocId: true } } } },
           createdBy: { select: { id: true, name: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -43,7 +45,60 @@ export class TreasuryReconciliationsService {
       }),
     ])
 
+    // Docs do TOConline guardam reference/entityName a null na linha local — vivem
+    // no espelho TOC. Enriquecemos para o histórico mostrar o nº/nome da fatura.
+    await this.enrichTocDocRefs(clientId, items)
+
     return { total, page, limit, items }
+  }
+
+  /** Preenche reference/entityName a partir do espelho TOConline nos documentos
+   *  ligados (sales: colunas documentNo/customerName; purchases: campos do raw). */
+  private async enrichTocDocRefs(
+    clientId: string,
+    items: Array<{
+      receivables: Array<{ receivable: { reference: string | null; entityName: string | null; tocSalesDocId: string | null } }>
+      payables: Array<{ payable: { reference: string | null; entityName: string | null; tocPurchasesDocId: string | null } }>
+    }>,
+  ) {
+    const salesTocIds = new Set<number>()
+    const purchTocIds = new Set<number>()
+    for (const rec of items) {
+      for (const l of rec.receivables) if (l.receivable.tocSalesDocId) salesTocIds.add(Number(l.receivable.tocSalesDocId))
+      for (const l of rec.payables) if (l.payable.tocPurchasesDocId) purchTocIds.add(Number(l.payable.tocPurchasesDocId))
+    }
+    if (salesTocIds.size === 0 && purchTocIds.size === 0) return
+
+    const [salesDocs, purchDocs] = await Promise.all([
+      salesTocIds.size
+        ? this.prisma.tocSalesDocument.findMany({ where: { clientId, tocId: { in: [...salesTocIds] } }, select: { tocId: true, documentNo: true, customerName: true } })
+        : Promise.resolve([]),
+      purchTocIds.size
+        ? this.prisma.tocPurchaseDocument.findMany({ where: { clientId, tocId: { in: [...purchTocIds] } }, select: { tocId: true, raw: true } })
+        : Promise.resolve([]),
+    ])
+    const salesMap = new Map(salesDocs.map((d) => [d.tocId, d]))
+    const purchMap = new Map(purchDocs.map((d) => [d.tocId, d]))
+
+    for (const rec of items) {
+      for (const l of rec.receivables) {
+        const r = l.receivable
+        if (!r.tocSalesDocId) continue
+        const t = salesMap.get(Number(r.tocSalesDocId))
+        if (!t) continue
+        if (!r.reference) r.reference = t.documentNo ?? null
+        if (!r.entityName) r.entityName = t.customerName ?? null
+      }
+      for (const l of rec.payables) {
+        const p = l.payable
+        if (!p.tocPurchasesDocId) continue
+        const t = purchMap.get(Number(p.tocPurchasesDocId))
+        if (!t) continue
+        const raw = (t.raw ?? {}) as Record<string, unknown>
+        if (!p.reference) p.reference = (raw.document_no as string) ?? null
+        if (!p.entityName) p.entityName = (raw.supplier_business_name as string) ?? null
+      }
+    }
   }
 
   async getById(clientId: string, id: string) {
@@ -89,7 +144,11 @@ export class TreasuryReconciliationsService {
 
       if (!doc) throw httpError(404, `Document ${alloc.id} not found`)
       if (alloc.amount <= 0) throw httpError(400, `Allocation amount must be positive`)
-      if (alloc.amount > Number(doc.pendingAmount)) throw httpError(400, `Allocation ${alloc.amount} exceeds pending ${doc.pendingAmount} for ${doc.reference}`)
+      // O pending fiável vem do overlay TOC: para docs ligados ao TOConline os
+      // campos de valor locais estão a null (vivem no espelho toc*Document), por
+      // isso ler doc.pendingAmount cru dava sempre null → 0 e bloqueava tudo.
+      const { pending, reference } = await resolveDocAmountsFromDb(this.prisma, clientId, alloc.type, doc)
+      if (alloc.amount > pending + 0.01) throw httpError(400, `Allocation ${alloc.amount} exceeds pending ${pending} for ${reference}`)
 
       totalAllocated += alloc.amount
       // launchToc forçado a false: a app deixou de lançar recibos/pagamentos no
@@ -148,16 +207,18 @@ export class TreasuryReconciliationsService {
         await tx.treasuryReconciliationMovement.create({
           data: { reconciliationId: recon.id, movementId: movId, amount: movAllocated },
         })
-        if (!isDryRun) {
-          const newReconciledAmount = Number(mov.reconciledAmount) + movAllocated
-          await tx.treasuryBankMovement.update({
-            where: { id: movId },
-            data: {
-              reconciledAmount: newReconciledAmount,
-              status: newReconciledAmount >= movFullAmt - 0.01 ? 'RECONCILED' : 'PARTIAL',
-            },
-          })
-        }
+        // O estado local é sempre atualizado, mesmo em dry-run. dry-run significa
+        // apenas "não escrever no TOConline" — a reconciliação é registada localmente,
+        // por isso o movimento deixa de surgir como disponível e o reverse() (que
+        // também atualiza o estado sem verificar dry-run) fica coerente.
+        const newReconciledAmount = Number(mov.reconciledAmount) + movAllocated
+        await tx.treasuryBankMovement.update({
+          where: { id: movId },
+          data: {
+            reconciledAmount: newReconciledAmount,
+            status: newReconciledAmount >= movFullAmt - 0.01 ? 'RECONCILED' : 'PARTIAL',
+          },
+        })
       }
 
       // Link and process allocations
@@ -191,20 +252,37 @@ export class TreasuryReconciliationsService {
             data: { reconciliationId: recon.id, receivableId: alloc.id, amountAllocated: alloc.amount, tocReceiptId, tocError },
           })
 
-          if (!isDryRun) {
-            const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
-            if (rec) {
-              const newReceived = Number(rec.receivedAmount) + alloc.amount
-              const newPending = Number(rec.totalAmount) - newReceived
-              await tx.treasuryReceivable.update({
-                where: { id: alloc.id },
-                data: {
-                  receivedAmount: newReceived,
-                  pendingAmount: Math.max(0, newPending),
-                  status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
-                },
-              })
-            }
+          // Atualização local sempre aplicada (ver nota no bloco dos movimentos).
+          const rec = await tx.treasuryReceivable.findUnique({ where: { id: alloc.id } })
+          if (rec) {
+            // total/received reais via overlay TOC — em docs ligados os campos
+            // locais estão a null, pelo que somar sobre eles marcaria PAID
+            // indevidamente numa reconciliação parcial.
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'receivable', rec)
+            const newReceived = settled + alloc.amount
+            const newPending = Math.max(0, total - newReceived)
+            await tx.treasuryReceivable.update({
+              where: { id: alloc.id },
+              data: {
+                receivedAmount: newReceived,
+                pendingAmount: newPending,
+                // Conciliação bancária marca "Pago" (PAID); a "Liquidada" (SETTLED)
+                // fica reservada ao recibo emitido no TOConline (sync status 3).
+                status: newPending <= 0.01 ? 'PAID' : 'PARTIAL',
+                settledAt: newPending <= 0.01 ? new Date() : null,
+                settledVia: newPending <= 0.01 ? 'RECONCILIATION' : null,
+              },
+            })
+            // Regista na timeline da própria fatura (entityType Receivable).
+            await tx.treasuryAuditLog.create({
+              data: {
+                clientId, userId,
+                action: 'receivable.reconcile',
+                entityType: 'Receivable', entityId: alloc.id,
+                payload: { amount: alloc.amount, reconciliationId: recon.id, fullySettled: newPending <= 0.01 },
+              },
+            })
+            if (rec.parentId && !rec.recurrenceId) await syncParentDocStatus(tx, clientId, 'receivable', rec.parentId)
           }
         } else {
           let tocPaymentId: string | undefined
@@ -228,20 +306,35 @@ export class TreasuryReconciliationsService {
             data: { reconciliationId: recon.id, payableId: alloc.id, amountAllocated: alloc.amount, tocPaymentId, tocError },
           })
 
-          if (!isDryRun) {
-            const pay = await tx.treasuryPayable.findUnique({ where: { id: alloc.id } })
-            if (pay) {
-              const newPaid = Number(pay.paidAmount) + alloc.amount
-              const newPending = Number(pay.totalAmount) - newPaid
-              await tx.treasuryPayable.update({
-                where: { id: alloc.id },
-                data: {
-                  paidAmount: newPaid,
-                  pendingAmount: Math.max(0, newPending),
-                  status: newPending <= 0.01 ? 'SETTLED' : 'PARTIAL',
-                },
-              })
-            }
+          // Atualização local sempre aplicada (ver nota no bloco dos movimentos).
+          const pay = await tx.treasuryPayable.findUnique({ where: { id: alloc.id } })
+          if (pay) {
+            // total/paid reais via overlay TOC (ver nota no bloco dos receivables).
+            const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'payable', pay)
+            const newPaid = settled + alloc.amount
+            const newPending = Math.max(0, total - newPaid)
+            await tx.treasuryPayable.update({
+              where: { id: alloc.id },
+              data: {
+                paidAmount: newPaid,
+                pendingAmount: newPending,
+                // Conciliação bancária marca "Pago" (PAID); a "Liquidada" (SETTLED)
+                // fica reservada ao recibo emitido no TOConline (sync status 3).
+                status: newPending <= 0.01 ? 'PAID' : 'PARTIAL',
+                settledVia: newPending <= 0.01 ? 'RECONCILIATION' : null,
+                settledAt: newPending <= 0.01 ? new Date() : null,
+              },
+            })
+            // Regista na timeline da própria fatura (entityType Payable).
+            await tx.treasuryAuditLog.create({
+              data: {
+                clientId, userId,
+                action: 'payable.reconcile',
+                entityType: 'Payable', entityId: alloc.id,
+                payload: { amount: alloc.amount, reconciliationId: recon.id, fullySettled: newPending <= 0.01 },
+              },
+            })
+            if (pay.parentId && !pay.recurrenceId) await syncParentDocStatus(tx, clientId, 'payable', pay.parentId)
           }
         }
       }
@@ -290,15 +383,29 @@ export class TreasuryReconciliationsService {
       for (const link of recon.receivables) {
         const rec = await tx.treasuryReceivable.findUnique({ where: { id: link.receivableId } })
         if (rec) {
-          const newReceived = Math.max(0, Number(rec.receivedAmount) - Number(link.amountAllocated))
+          // total/received reais via overlay TOC: em docs ligados o totalAmount
+          // local é null, pelo que `total - received` gravava pending negativo.
+          const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'receivable', rec)
+          const newReceived = Math.max(0, settled - Number(link.amountAllocated))
           await tx.treasuryReceivable.update({
             where: { id: link.receivableId },
             data: {
               receivedAmount: newReceived,
-              pendingAmount: Number(rec.totalAmount) - newReceived,
+              pendingAmount: Math.max(0, total - newReceived),
               status: newReceived <= 0 ? 'OPEN' : 'PARTIAL',
+              settledAt: null,
+              settledVia: null,
             },
           })
+          await tx.treasuryAuditLog.create({
+            data: {
+              clientId, userId,
+              action: 'receivable.reconcile_reverse',
+              entityType: 'Receivable', entityId: link.receivableId,
+              payload: { amount: Number(link.amountAllocated), reconciliationId },
+            },
+          })
+          if (rec.parentId && !rec.recurrenceId) await syncParentDocStatus(tx, clientId, 'receivable', rec.parentId)
         }
       }
 
@@ -306,15 +413,28 @@ export class TreasuryReconciliationsService {
       for (const link of recon.payables) {
         const pay = await tx.treasuryPayable.findUnique({ where: { id: link.payableId } })
         if (pay) {
-          const newPaid = Math.max(0, Number(pay.paidAmount) - Number(link.amountAllocated))
+          // total/paid reais via overlay TOC (ver nota no bloco dos receivables).
+          const { total, settled } = await resolveDocAmountsFromDb(this.prisma, clientId, 'payable', pay)
+          const newPaid = Math.max(0, settled - Number(link.amountAllocated))
           await tx.treasuryPayable.update({
             where: { id: link.payableId },
             data: {
               paidAmount: newPaid,
-              pendingAmount: Number(pay.totalAmount) - newPaid,
+              pendingAmount: Math.max(0, total - newPaid),
               status: newPaid <= 0 ? 'OPEN' : 'PARTIAL',
+              settledVia: null,
+              settledAt: null,
             },
           })
+          await tx.treasuryAuditLog.create({
+            data: {
+              clientId, userId,
+              action: 'payable.reconcile_reverse',
+              entityType: 'Payable', entityId: link.payableId,
+              payload: { amount: Number(link.amountAllocated), reconciliationId },
+            },
+          })
+          if (pay.parentId && !pay.recurrenceId) await syncParentDocStatus(tx, clientId, 'payable', pay.parentId)
         }
       }
 

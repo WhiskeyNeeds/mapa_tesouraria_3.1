@@ -27,4 +27,4 @@ Obrigado por querer contribuir. Siga estas diretrizes para pull requests, issues
 
 **Obrigado!**
 
-Contribuições bem-vindas — se tiveres dúvidas, abre uma issue descrevendo o objetivo.
+Contribuições bem-vindas

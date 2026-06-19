@@ -107,7 +107,18 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     const rows = await fastify.prisma.tocSalesReceipt.findMany({
       where: { clientId, tocId: { in: receiptIds } },
     })
-    return reply.send(rows.map((r) => r.raw))
+    // Anexa _received_for_doc = valor que este recibo imputou a esta fatura
+    // (linha cuja receivable_id == docId), calculado do raw já guardado.
+    // Só recibos ativos (exclui anulados/eliminados: raw.deleted === true).
+    const numericDocId = Number(docId)
+    return reply.send(rows
+      .filter((r) => ((r.raw as { deleted?: boolean } | null)?.deleted) !== true)
+      .map((r) => {
+        const raw = r.raw as Record<string, unknown>
+        const lines = Array.isArray(raw.lines) ? raw.lines as Array<Record<string, unknown>> : []
+        const matchLine = lines.find((l) => Number(l.receivable_id) === numericDocId)
+        return { ...raw, _received_for_doc: matchLine ? Number(matchLine.received_value ?? 0) : null }
+      }))
   })
 
   fastify.get('/toconline/:clientId/purchases/:docId/payments', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {
@@ -133,7 +144,18 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     const rows = await fastify.prisma.tocPurchasePayment.findMany({
       where: { clientId, tocId: { in: paymentIds } },
     })
-    return reply.send(rows.map((r) => r.raw))
+    // Anexa _paid_for_doc = valor que este pagamento imputou a esta fatura
+    // (linha cuja payable_id == docId), calculado do raw já guardado.
+    // Só pagamentos ativos (exclui anulados/eliminados: raw.deleted === true).
+    const numericDocId = Number(docId)
+    return reply.send(rows
+      .filter((r) => ((r.raw as { deleted?: boolean } | null)?.deleted) !== true)
+      .map((r) => {
+        const raw = r.raw as Record<string, unknown>
+        const lines = Array.isArray(raw.lines) ? raw.lines as Array<Record<string, unknown>> : []
+        const matchLine = lines.find((l) => Number(l.payable_id) === numericDocId)
+        return { ...raw, _paid_for_doc: matchLine ? Number(matchLine.paid_value ?? matchLine.received_value ?? 0) : null }
+      }))
   })
 
   fastify.get('/toconline/:clientId/sales-receipts/:receiptId/lines', { onRequest: [fastify.authenticate, fastify.requireClientAccess] }, async (request, reply) => {

@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import type { ToconlineService } from '../../modules/toconline/toconline.service.js'
+import { clearBareTocSalesStub, clearBareTocPurchaseStub } from './dedup.js'
 
 type Raw = Record<string, unknown>
 
@@ -79,6 +80,10 @@ export function extractSalesDocFields(clientId: string, item: Raw) {
     grossTotal: num(item.gross_total),
     pendingTotal: num(item.pending_total),
     receiptsIds: intArr(item.receipts_ids),
+    documentType: str(item.document_type)?.toLowerCase() ?? null,
+    // Sem trim: espelha `raw->>'...'` do backfill (valor verbatim ou null).
+    documentNo: typeof item.document_no === 'string' ? item.document_no : null,
+    customerName: typeof item.customer_business_name === 'string' ? item.customer_business_name : null,
     raw: item as object,
     syncedAt: new Date(),
   }
@@ -182,26 +187,94 @@ export async function syncServices(prisma: PrismaClient, svc: ToconlineService, 
 
 export async function syncSalesDocuments(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllSalesDocumentsFlat(clientId)
-  return upsertAll(
-    rows.map(r => extractSalesDocFields(clientId, r)),
+  const items = rows.map(r => extractSalesDocFields(clientId, r))
+  const result = await upsertAll(
+    items,
     item => prisma.tocSalesDocument.upsert({
       where: { clientId_tocId: { clientId, tocId: item.tocId } },
       create: item,
       update: { ...item },
     }),
   )
+  // Recibo interno (stand-in): quando o TOConline já cobre a fatura por completo
+  // (recibo emitido / pendente 0), o recibo registado manualmente deixa de fazer
+  // sentido — limpa-o para não duplicar com o recibo real do TOConline.
+  const coveredTocIds = items
+    .filter(i => Number(i.status) === 3 || Number(i.pendingTotal ?? 0) <= 0)
+    .map(i => String(i.tocId))
+  if (coveredTocIds.length) {
+    await prisma.treasuryReceivable.updateMany({
+      where: { clientId, tocSalesDocId: { in: coveredTocIds }, receiptReference: { not: null } },
+      data: { receiptReference: null, receiptAmount: null },
+    })
+  }
+  // Dedup por referência (TOC → local): liga faturas locais sem ligação TOC cuja
+  // referência coincide (igual, com trim) com o nº do documento TOC sincronizado —
+  // evita duplicados. Aplica-se a locais em aberto OU fechadas (não anuladas).
+  const unlinkedRec = await prisma.treasuryReceivable.findMany({
+    where: { clientId, tocSalesDocId: null, deletedAt: null, reference: { not: null }, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] } },
+    select: { id: true, reference: true },
+  })
+  if (unlinkedRec.length) {
+    const byRef = new Map(unlinkedRec.map(r => [r.reference!.trim(), r.id]))
+    for (const i of items) {
+      const ref = i.documentNo?.trim()
+      if (!ref) continue
+      const localId = byRef.get(ref)
+      if (!localId) continue
+      byRef.delete(ref)
+      const tocId = String(i.tocId)
+      if (!(await clearBareTocSalesStub(prisma, clientId, tocId))) continue
+      await prisma.treasuryReceivable.update({ where: { id: localId }, data: { tocSalesDocId: tocId } })
+    }
+  }
+  return result
 }
 
 export async function syncPurchaseDocuments(prisma: PrismaClient, svc: ToconlineService, clientId: string) {
   const rows = await svc.getAllPurchaseDocumentsFlat(clientId)
-  return upsertAll(
-    rows.map(r => extractPurchaseDocFields(clientId, r)),
+  const items = rows.map(r => extractPurchaseDocFields(clientId, r))
+  const result = await upsertAll(
+    items,
     item => prisma.tocPurchaseDocument.upsert({
       where: { clientId_tocId: { clientId, tocId: item.tocId } },
       create: item,
       update: { ...item },
     }),
   )
+  // Comprovativo interno (stand-in): quando o TOConline já cobre a fatura por
+  // completo (pagamento registado / pendente 0), limpa o comprovativo manual
+  // para não duplicar com o pagamento real do TOConline.
+  const coveredTocIds = items
+    .filter(i => Number(i.status) === 3 || Number(i.pendingTotal ?? 0) <= 0)
+    .map(i => String(i.tocId))
+  if (coveredTocIds.length) {
+    await prisma.treasuryPayable.updateMany({
+      where: { clientId, tocPurchasesDocId: { in: coveredTocIds }, paymentReference: { not: null } },
+      data: { paymentReference: null, paymentAmount: null },
+    })
+  }
+  // Dedup por referência (TOC → local), igual aos receivables. O nº do documento
+  // de compra vive no `raw.document_no` (não há coluna), por isso lê-se do raw.
+  const unlinkedPay = await prisma.treasuryPayable.findMany({
+    where: { clientId, tocPurchasesDocId: null, deletedAt: null, reference: { not: null }, status: { in: ['OPEN', 'PARTIAL', 'PAID', 'SETTLED'] } },
+    select: { id: true, reference: true },
+  })
+  if (unlinkedPay.length) {
+    const byRef = new Map(unlinkedPay.map(r => [r.reference!.trim(), r.id]))
+    for (const i of items) {
+      const docNo = (i.raw as Record<string, unknown>).document_no
+      const ref = typeof docNo === 'string' ? docNo.trim() : ''
+      if (!ref) continue
+      const localId = byRef.get(ref)
+      if (!localId) continue
+      byRef.delete(ref)
+      const tocId = String(i.tocId)
+      if (!(await clearBareTocPurchaseStub(prisma, clientId, tocId))) continue
+      await prisma.treasuryPayable.update({ where: { id: localId }, data: { tocPurchasesDocId: tocId } })
+    }
+  }
+  return result
 }
 
 export async function syncSalesReceipts(prisma: PrismaClient, svc: ToconlineService, clientId: string) {

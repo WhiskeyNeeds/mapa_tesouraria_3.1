@@ -1,12 +1,32 @@
 import type { PrismaClient } from '@prisma/client'
 import { resolveAccountBalance } from '../bank-accounts/balance.js'
 import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.js'
+import { TreasuryReceivablesService } from '../receivables/receivables.service.js'
+import { TreasuryPayablesService } from '../payables/payables.service.js'
+import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
+import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 
 export class TreasuryDashboardService {
   private recurrencesSvc: TreasuryRecurrencesService
+  private receivablesSvc: TreasuryReceivablesService
+  private payablesSvc: TreasuryPayablesService
 
   constructor(private prisma: PrismaClient) {
     this.recurrencesSvc = new TreasuryRecurrencesService(prisma)
+    // Reutiliza os KPIs de Contas a Receber/Pagar para o "A Receber"/"A Pagar" do
+    // dashboard usarem exatamente os mesmos critérios do "Total Pendente"
+    // (single source of truth: dedup de splits, exclui recorrências futuras e docs
+    // TOC liquidados localmente).
+    this.receivablesSvc = new TreasuryReceivablesService(
+      prisma,
+      new TreasuryBudgetsService(prisma),
+      new TreasuryBudgetRulesService(prisma),
+    )
+    this.payablesSvc = new TreasuryPayablesService(
+      prisma,
+      new TreasuryBudgetsService(prisma),
+      new TreasuryBudgetRulesService(prisma),
+    )
   }
 
   private async fetchAccountBalances(clientId: string): Promise<Map<string, number>> {
@@ -80,7 +100,7 @@ export class TreasuryDashboardService {
     const now = new Date()
     const from = new Date(Date.now() - days * 86400000)
 
-    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements, settings, tocReceivables, tocPayables] = await Promise.all([
+    const [bankAccounts, balances, receivableKpis, payableKpis, movements, recentMovements, settings, tocReceivables, tocPayables, receivablesPageKpis, payablesPageKpis] = await Promise.all([
       this.prisma.treasuryBankAccount.findMany({
         where: { clientId, isActive: true, deletedAt: null },
         select: { id: true, name: true, bankName: true, currency: true, ibanLast4: true, minBalance: true },
@@ -113,13 +133,21 @@ export class TreasuryDashboardService {
       this.prisma.treasurySettings.findUnique({ where: { clientId } }),
       this.fetchPendingTocDocs(clientId, 'receivable'),
       this.fetchPendingTocDocs(clientId, 'payable'),
+      this.receivablesSvc.getKpis(clientId),
+      this.payablesSvc.getKpis(clientId),
     ])
 
     const totalBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
-    const tocReceivablesPending = tocReceivables.reduce((s, d) => s + d.pendingAmount, 0)
-    const tocPayablesPending = tocPayables.reduce((s, d) => s + d.pendingAmount, 0)
-    const toReceive = Number(receivableKpis._sum.pendingAmount ?? 0) + tocReceivablesPending
-    const toPay = Number(payableKpis._sum.pendingAmount ?? 0) + tocPayablesPending
+    // "A Receber"/"A Pagar" usam os mesmos critérios do "Total Pendente" das páginas
+    // de Contas a Receber/Pagar (single source of truth: dedup de splits, exclui
+    // recorrências futuras não comprometidas e docs TOC liquidados localmente).
+    // As Programadas (SCHEDULED) vêm em separado para o dashboard poder incluí-las
+    // ou não (toggle "Incluir programadas").
+    const toReceive = receivablesPageKpis.totalPending
+    const toPay = payablesPageKpis.totalPending
+    const toReceiveProgrammed = receivablesPageKpis.totalProgrammed
+    const toPayProgrammed = payablesPageKpis.totalProgrammed
+    // cashAvailable base (sem programadas); o frontend recalcula conforme o toggle.
     const cashAvailable = totalBalance - toPay
 
     // Build daily chart data
@@ -218,8 +246,11 @@ export class TreasuryDashboardService {
     return {
       kpis: {
         totalBalance, cashAvailable, toReceive, toPay,
+        toReceiveProgrammed, toPayProgrammed,
         countReceivablesOpen: receivableKpis._count + tocReceivables.length,
         countPayablesOpen: payableKpis._count + tocPayables.length,
+        countReceivablesProgrammed: receivablesPageKpis.countProgrammed,
+        countPayablesProgrammed: payablesPageKpis.countProgrammed,
         overdueReceivables, overduePayables,
       },
       bankAccounts: bankAccounts.map((a) => {
@@ -295,11 +326,11 @@ export class TreasuryDashboardService {
 
       const [pendingRec, pendingPay] = await Promise.all([
         this.prisma.treasuryReceivable.findMany({
-          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: futureStart, lte: endOfYear } },
+          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, dueDate: { gte: futureStart, lte: endOfYear } },
           select: { dueDate: true, pendingAmount: true },
         }),
         this.prisma.treasuryPayable.findMany({
-          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: futureStart, lte: endOfYear } },
+          where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, dueDate: { gte: futureStart, lte: endOfYear } },
           select: { dueDate: true, pendingAmount: true },
         }),
       ])
@@ -380,6 +411,62 @@ export class TreasuryDashboardService {
     }
   }
 
+  /**
+   * Fluxo de caixa líquido (entradas − saídas) num intervalo de datas, com a MESMA
+   * definição das barras mensais: movimentos bancários + pendentes locais
+   * (OPEN/PARTIAL, por data efetiva = promessa ?? vencimento, excluindo a mãe de
+   * splits) + docs TOConline não importados (por vencimento). Usado para projetar o
+   * saldo inicial de cada ano de forma consistente entre vistas.
+   */
+  private async netCashFlow(clientId: string, dateCond: { gt?: Date; gte?: Date; lt?: Date; lte?: Date }): Promise<number> {
+    const c = await this.netCashFlowComponents(clientId, dateCond)
+    return c.settled + c.open + c.programmed
+  }
+
+  // Fluxo de caixa líquido desdobrado por estado (settled = movimentos, open =
+  // OPEN/PARTIAL + TOC, programmed = SCHEDULED). Usado para reconciliar a âncora
+  // do saldo com os toggles em aberto/programadas do dashboard.
+  private async netCashFlowComponents(clientId: string, dateCond: { gt?: Date; gte?: Date; lt?: Date; lte?: Date }): Promise<{ settled: number; open: number; programmed: number }> {
+    const strCond: { gt?: string; gte?: string; lt?: string; lte?: string } = {}
+    if (dateCond.gt) strCond.gt = dateCond.gt.toISOString().slice(0, 10)
+    if (dateCond.gte) strCond.gte = dateCond.gte.toISOString().slice(0, 10)
+    if (dateCond.lt) strCond.lt = dateCond.lt.toISOString().slice(0, 10)
+    if (dateCond.lte) strCond.lte = dateCond.lte.toISOString().slice(0, 10)
+    const ACTIVE_TOC_STATUS = [1, 2, 5]
+    const effDate = { OR: [{ promisedPaymentDate: dateCond }, { promisedPaymentDate: null, dueDate: dateCond }] }
+    const [movs, rec, pay, tocAnnotatedRec, tocAnnotatedPay, tocSales, tocPurch] = await Promise.all([
+      this.prisma.treasuryBankMovement.findMany({ where: { clientId, deletedAt: null, date: dateCond }, select: { amount: true } }),
+      // Só locais PUROS (sem tocLink): as faturas TOC contam pelo espelho.
+      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
+      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
+      this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: { not: null } }, select: { tocSalesDocId: true, status: true } }),
+      this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } }, select: { tocPurchasesDocId: true, status: true } }),
+      this.prisma.tocSalesDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
+      this.prisma.tocPurchaseDocument.findMany({ where: { clientId, status: { in: ACTIVE_TOC_STATUS }, dueDate: strCond }, select: { tocId: true, pendingTotal: true, grossTotal: true, raw: true } }),
+    ])
+    const settled = movs.reduce((s, m) => s + Number(m.amount), 0)
+    let open = 0, programmed = 0
+    for (const r of rec) { const amt = Number(r.pendingAmount ?? 0); if (r.status === 'SCHEDULED') programmed += amt; else open += amt }
+    for (const p of pay) { const amt = Number(p.pendingAmount ?? 0); if (p.status === 'SCHEDULED') programmed -= amt; else open -= amt }
+    // Docs TOC liquidados localmente (PAID/SETTLED/VOID) saem do total; os restantes
+    // contam pelo espelho (igual ao getKpis).
+    const RESOLVED = new Set(['PAID', 'SETTLED', 'VOID'])
+    const overSales = new Set(tocAnnotatedRec.filter((r) => RESOLVED.has(r.status)).map((r) => String(r.tocSalesDocId)))
+    const overPurch = new Set(tocAnnotatedPay.filter((p) => RESOLVED.has(p.status)).map((p) => String(p.tocPurchasesDocId)))
+    const SALES = new Set(['ft', 'fs', 'fr']), PURCH = new Set(['fc', 'dsp'])
+    for (const d of tocSales) {
+      if (overSales.has(String(d.tocId))) continue
+      const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (SALES.has(dt)) open += Number(d.pendingTotal ?? d.grossTotal ?? 0)
+    }
+    for (const d of tocPurch) {
+      if (overPurch.has(String(d.tocId))) continue
+      const dt = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
+      if (PURCH.has(dt)) open -= Number(d.pendingTotal ?? d.grossTotal ?? 0)
+    }
+    return { settled, open, programmed }
+  }
+
   async getCashflowStatement(clientId: string, year: number) {
     const start = new Date(year, 0, 1)
     const end = new Date(year, 11, 31, 23, 59, 59)
@@ -425,14 +512,23 @@ export class TreasuryDashboardService {
     const balances = await this.fetchAccountBalances(clientId)
     const currentBalance = bankAccounts.reduce((s, a) => s + (balances.get(a.id) ?? 0), 0)
 
-    // Balance at start of year = currentBalance - sum(movements entre year_start e now).
-    // Permite forward-prop dos saldos mensais (em vez de back-prop, que se quebra
-    // quando há projeções de pending docs em meses futuros do ano corrente).
-    const movementsSinceYearStart = await this.prisma.treasuryBankMovement.findMany({
-      where: { clientId, deletedAt: null, date: { gte: start, lte: now < end ? now : end } },
-      select: { amount: true },
-    })
-    const balanceAtYearStart = currentBalance - movementsSinceYearStart.reduce((s, m) => s + Number(m.amount), 0)
+    // Saldo no início do ano = saldo atual PROJETADO até 1 de Janeiro desse ano,
+    // com o mesmo fluxo das barras (movimentos + pendentes por data efetiva + TOC
+    // não importado). Garante que o mesmo mês mostra o mesmo saldo em qualquer vista
+    // (não "salta" na viragem de ano nem repõe ao saldo de hoje em anos futuros):
+    //   - ano passado/atual: subtrai o fluxo desde o início do ano até hoje;
+    //   - ano futuro: soma o fluxo de hoje até ao início do ano.
+    // (gt no início e lt no futuro evitam contar duas vezes o fluxo de 1 de Janeiro,
+    // que já entra no próprio ano via forward-prop.)
+    // Âncora do saldo desdobrada por estado: balanceAtYearStart = saldoReal + sign*fluxo,
+    // onde sign=-1 (ano passado/atual) ou +1 (futuro). Guardamos a contribuição de cada
+    // componente (com o sinal aplicado) para o frontend poder "devolver" à âncora os
+    // componentes escondidos pelos toggles e reconciliar o saldo com o saldo real.
+    const anchorSign = start <= now ? -1 : 1
+    const anchorFlow = await this.netCashFlowComponents(clientId, start <= now ? { gt: start, lte: now } : { gt: now, lt: start })
+    const balanceAtYearStart = currentBalance + anchorSign * (anchorFlow.settled + anchorFlow.open + anchorFlow.programmed)
+    const anchorOpenContribution = anchorSign * anchorFlow.open
+    const anchorProgrammedContribution = anchorSign * anchorFlow.programmed
 
     // Decomposição por status semântico:
     //   settled    = movimentos bancários realizados                  → "Atual" no chart
@@ -445,6 +541,25 @@ export class TreasuryDashboardService {
     const monthlyProgrammedIncome = new Array(12).fill(0)
     const monthlyProgrammedExpense = new Array(12).fill(0)
 
+    // Pendentes desdobrados por categoria E por estado (em aberto vs programadas),
+    // para a tabela bater certo com os totais/saldo e reagir aos toggles do gráfico.
+    const catOpenMonthly = new Map<string, number[]>()
+    const catProgrammedMonthly = new Map<string, number[]>()
+    const uncatOpenIncome = new Array(12).fill(0)
+    const uncatOpenExpense = new Array(12).fill(0)
+    const uncatProgrammedIncome = new Array(12).fill(0)
+    const uncatProgrammedExpense = new Array(12).fill(0)
+    const addCatPending = (categoryId: string | null, idx: number, amt: number, income: boolean, programmed: boolean) => {
+      if (!categoryId) {
+        const arr = programmed ? (income ? uncatProgrammedIncome : uncatProgrammedExpense) : (income ? uncatOpenIncome : uncatOpenExpense)
+        arr[idx] += amt
+        return
+      }
+      const map = programmed ? catProgrammedMonthly : catOpenMonthly
+      if (!map.has(categoryId)) map.set(categoryId, new Array(12).fill(0))
+      map.get(categoryId)![idx] += amt
+    }
+
     for (const m of movements) {
       const idx = m.date.getMonth()
       const amt = Number(m.amount)
@@ -453,47 +568,84 @@ export class TreasuryDashboardService {
     }
 
     // Pending docs OPEN/PARTIAL — injectados em qualquer mês (passado, atual ou
-    // futuro). Exclui split parcelas (parentId set, recurrenceId null) para
-    // evitar double-count com o pai. Subdivide entre "open" e "programmed"
-    // consoante existir recurrenceId.
-    const [pendingRec, pendingPay] = await Promise.all([
+    // futuro). A DATA que conta é a promessa de pagamento (promisedPaymentDate),
+    // com recurso ao vencimento (dueDate) só quando não há promessa. Exclui a mãe
+    // de um split (children) — as parcelas entram com a sua própria promessa — e
+    // subdivide entre "open" e "programmed" consoante existir recurrenceId.
+    const inYear = { gte: start, lte: end }
+    const byEffectiveDate = { OR: [{ promisedPaymentDate: inYear }, { promisedPaymentDate: null, dueDate: inYear }] }
+    const [pendingRec, pendingPay, tocAnnotatedRec, tocAnnotatedPay] = await Promise.all([
+      // Só locais PUROS (sem tocSalesDocId): as faturas TOC contam pelo espelho. Os
+      // receivables que anotam um doc TOC têm pendingAmount=0, por isso incluí-los
+      // aqui não somava nada (o valor real vive no tocSalesDocument).
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocSalesDocId: true },
+        where: { clientId, deletedAt: null, tocSalesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...byEffectiveDate },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, recurrenceId: true, status: true, categoryId: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: start, lte: end } },
-        select: { dueDate: true, pendingAmount: true, recurrenceId: true, tocPurchasesDocId: true },
+        where: { clientId, deletedAt: null, tocPurchasesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...byEffectiveDate },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, recurrenceId: true, status: true, categoryId: true },
+      }),
+      // Anotações locais sobre docs TOC: os liquidados (PAID/SETTLED/VOID) suprimem o
+      // espelho; os restantes só fornecem o override de categoria ao ramo TOC.
+      this.prisma.treasuryReceivable.findMany({
+        where: { clientId, deletedAt: null, tocSalesDocId: { not: null } },
+        select: { tocSalesDocId: true, status: true, categoryId: true },
+      }),
+      this.prisma.treasuryPayable.findMany({
+        where: { clientId, deletedAt: null, tocPurchasesDocId: { not: null } },
+        select: { tocPurchasesDocId: true, status: true, categoryId: true },
       }),
     ])
 
-    // tocIds que já existem como treasuryReceivable/Payable — evita
-    // double-count quando o doc TOC também foi importado para local.
-    const importedSalesTocIds = new Set(pendingRec.map(r => r.tocSalesDocId).filter((s): s is string => !!s))
-    const importedPurchTocIds = new Set(pendingPay.map(p => p.tocPurchasesDocId).filter((s): s is string => !!s))
+    // Overlay TOC (igual ao getKpis): docs TOC liquidados localmente saem do total;
+    // os restantes contam pelo espelho, levando a categoria da anotação se existir.
+    const RESOLVED = new Set(['PAID', 'SETTLED', 'VOID'])
+    const overriddenSalesTocIds = new Set<string>()
+    const overriddenPurchTocIds = new Set<string>()
+    const salesAnnotationCat = new Map<string, string | null>()
+    const purchAnnotationCat = new Map<string, string | null>()
+    for (const r of tocAnnotatedRec) {
+      const id = String(r.tocSalesDocId)
+      if (RESOLVED.has(r.status)) overriddenSalesTocIds.add(id)
+      else salesAnnotationCat.set(id, r.categoryId)
+    }
+    for (const p of tocAnnotatedPay) {
+      const id = String(p.tocPurchasesDocId)
+      if (RESOLVED.has(p.status)) overriddenPurchTocIds.add(id)
+      else purchAnnotationCat.set(id, p.categoryId)
+    }
 
     for (const r of pendingRec) {
-      if (!r.dueDate || r.dueDate.getFullYear() !== year) continue
-      const idx = r.dueDate.getMonth()
+      const eff = r.promisedPaymentDate ?? r.dueDate
+      if (!eff || eff.getFullYear() !== year) continue
+      const idx = eff.getMonth()
       const amt = Number(r.pendingAmount ?? 0)
-      if (r.recurrenceId) monthlyProgrammedIncome[idx] += amt
+      // Programadas = SCHEDULED (recorrência futura ainda não comprometida).
+      // Comprometida (OPEN) entra em "em aberto".
+      const programmed = r.status === 'SCHEDULED'
+      if (programmed) monthlyProgrammedIncome[idx] += amt
       else monthlyOpenIncome[idx] += amt
+      addCatPending(r.categoryId, idx, amt, true, programmed)
     }
     for (const p of pendingPay) {
-      if (!p.dueDate || p.dueDate.getFullYear() !== year) continue
-      const idx = p.dueDate.getMonth()
+      const eff = p.promisedPaymentDate ?? p.dueDate
+      if (!eff || eff.getFullYear() !== year) continue
+      const idx = eff.getMonth()
       const amt = Number(p.pendingAmount ?? 0)
-      if (p.recurrenceId) monthlyProgrammedExpense[idx] += amt
+      // Programadas = SCHEDULED (recorrência futura ainda não comprometida).
+      const programmed = p.status === 'SCHEDULED'
+      if (programmed) monthlyProgrammedExpense[idx] += amt
       else monthlyOpenExpense[idx] += amt
+      addCatPending(p.categoryId, idx, amt, false, programmed)
     }
 
-    // Faturas TOC sincronizadas que ainda não foram importadas como
-    // receivable/payable — contam como "open" (não têm recorrência). Filtra
-    // pelos tipos elegíveis (raw.document_type) tal como o auto-import fazia.
+    // Faturas TOC do espelho — contam como "open" (não têm recorrência), exceto as
+    // liquidadas localmente. Filtra pelos tipos elegíveis (raw.document_type).
     const SALES_INVOICE_TYPES = new Set(['ft', 'fs', 'fr'])
     const PURCH_INVOICE_TYPES = new Set(['fc', 'dsp'])
     for (const d of tocSalesPending) {
-      if (importedSalesTocIds.has(String(d.tocId))) continue
+      if (overriddenSalesTocIds.has(String(d.tocId))) continue
       const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
       if (!SALES_INVOICE_TYPES.has(docType)) continue
       if (!d.dueDate) continue
@@ -502,9 +654,10 @@ export class TreasuryDashboardService {
       const amt = Number(d.pendingTotal ?? d.grossTotal ?? 0)
       if (amt <= 0) continue
       monthlyOpenIncome[due.getMonth()] += amt
+      addCatPending(salesAnnotationCat.get(String(d.tocId)) ?? null, due.getMonth(), amt, true, false)
     }
     for (const d of tocPurchPending) {
-      if (importedPurchTocIds.has(String(d.tocId))) continue
+      if (overriddenPurchTocIds.has(String(d.tocId))) continue
       const docType = String((d.raw as { document_type?: unknown } | null)?.document_type ?? '').toLowerCase()
       if (!PURCH_INVOICE_TYPES.has(docType)) continue
       if (!d.dueDate) continue
@@ -513,33 +666,25 @@ export class TreasuryDashboardService {
       const amt = Number(d.pendingTotal ?? d.grossTotal ?? 0)
       if (amt <= 0) continue
       monthlyOpenExpense[due.getMonth()] += amt
+      addCatPending(purchAnnotationCat.get(String(d.tocId)) ?? null, due.getMonth(), amt, false, false)
     }
 
-    // Totais agregados para tabela e back-compute do saldo.
-    //
-    // IMPORTANTE: para meses **passados e atual** usa-se SÓ settled (movimentos
-    // bancários realizados) — pending docs em aberto não contam como cash já
-    // realizado, e contá-los aqui distorceria o saldo histórico. Para meses
-    // **futuros** somam-se as 3 séries (settled + open + programmed) porque
-    // representam a projeção de saldo assumindo que os pending vão liquidar.
-    // Os arrays separados (Settled/Open/Programmed) continuam disponíveis para
-    // o chart, que renderiza as 3 séries independentemente da fase temporal.
-    const sameYear = now.getFullYear() === year
-    const currentMonthIdx = sameYear ? now.getMonth() : (now.getFullYear() > year ? 12 : -1)
+    // Totais agregados para tabela e saldo. Em TODOS os meses somam-se as 3
+    // séries (settled + open + programmed): o saldo é uma projeção contínua de
+    // forecast — pendentes vencidos em meses passados também contam, porque
+    // influenciam o saldo projetado dali em diante. (Para a visão puramente
+    // contabilística "só banco", o ajuste é mudar as datas de pagamento.)
+    // Sem dupla contagem: a parte já paga de uma fatura é movimento (settled) e
+    // só a parte por liquidar (pendingAmount) entra em open/programmed.
     const monthlyIncome = new Array(12).fill(0)
     const monthlyExpense = new Array(12).fill(0)
     for (let i = 0; i < 12; i++) {
-      monthlyIncome[i] = monthlySettledIncome[i]
-      monthlyExpense[i] = monthlySettledExpense[i]
-      if (i > currentMonthIdx) {
-        monthlyIncome[i]  += monthlyOpenIncome[i]  + monthlyProgrammedIncome[i]
-        monthlyExpense[i] += monthlyOpenExpense[i] + monthlyProgrammedExpense[i]
-      }
+      monthlyIncome[i]  = monthlySettledIncome[i]  + monthlyOpenIncome[i]  + monthlyProgrammedIncome[i]
+      monthlyExpense[i] = monthlySettledExpense[i] + monthlyOpenExpense[i] + monthlyProgrammedExpense[i]
     }
 
-    // Forward-prop a partir de balanceAtYearStart (correctamente derivado do
-    // histórico). Para passado/atual usa só movements (settled). Para futuro
-    // soma os pending (open + programmed) — projeção do saldo no fim do mês.
+    // Forward-prop a partir de balanceAtYearStart: saldo no fim de cada mês =
+    // saldo inicial + entradas - saídas (já com settled + open + programmed).
     const endingBalances = new Array(12).fill(0)
     const startingBalances = new Array(12).fill(0)
     startingBalances[0] = balanceAtYearStart
@@ -565,10 +710,14 @@ export class TreasuryDashboardService {
       catDirectMonthly.get(m.categoryId)![idx] += Math.abs(amt)
     }
 
-    // Build hierarchy tree
+    // Build hierarchy tree. Cada categoria mantém 3 séries separadas — settled
+    // (movimentos), open e programmed (pendentes) — para a tabela reagir aos
+    // toggles do gráfico. `monthly` (total) = settled + open + programmed.
+    const zeros12 = () => new Array(12).fill(0)
     type CatNode = {
       id: string; name: string; type: string; color: string | null; parentId: string | null
-      ownMonthly: number[]; monthly: number[]
+      ownSettled: number[]; ownOpen: number[]; ownProgrammed: number[]
+      settled: number[]; open: number[]; programmed: number[]; monthly: number[]
       children: CatNode[]
     }
 
@@ -576,8 +725,10 @@ export class TreasuryDashboardService {
     for (const c of categories) {
       nodeMap.set(c.id, {
         id: c.id, name: c.name, type: c.type, color: c.color, parentId: c.parentId,
-        ownMonthly: catDirectMonthly.get(c.id) ?? new Array(12).fill(0),
-        monthly: new Array(12).fill(0),
+        ownSettled: catDirectMonthly.get(c.id) ?? zeros12(),
+        ownOpen: catOpenMonthly.get(c.id) ?? zeros12(),
+        ownProgrammed: catProgrammedMonthly.get(c.id) ?? zeros12(),
+        settled: zeros12(), open: zeros12(), programmed: zeros12(), monthly: zeros12(),
         children: [],
       })
     }
@@ -592,15 +743,15 @@ export class TreasuryDashboardService {
       }
     }
 
-    // Aggregate monthly amounts bottom-up (children sum into parents)
-    function aggregate(node: CatNode): number[] {
-      const total = [...node.ownMonthly]
+    // Aggregate bottom-up (children sum into parents) — cada série em separado.
+    function aggregate(node: CatNode): void {
+      const s = [...node.ownSettled], o = [...node.ownOpen], p = [...node.ownProgrammed]
       for (const child of node.children) {
-        const childTotal = aggregate(child)
-        for (let i = 0; i < 12; i++) total[i] += childTotal[i]
+        aggregate(child)
+        for (let i = 0; i < 12; i++) { s[i] += child.settled[i]; o[i] += child.open[i]; p[i] += child.programmed[i] }
       }
-      node.monthly = total
-      return total
+      node.settled = s; node.open = o; node.programmed = p
+      node.monthly = s.map((v, i) => v + o[i] + p[i])
     }
     for (const root of roots) aggregate(root)
 
@@ -616,6 +767,9 @@ export class TreasuryDashboardService {
         type: node.type,
         color: node.color,
         monthly: node.monthly,
+        monthlySettled: node.settled,
+        monthlyOpen: node.open,
+        monthlyProgrammed: node.programmed,
         children: node.children.filter(hasData).map(serializeNode),
       }
     }
@@ -627,6 +781,11 @@ export class TreasuryDashboardService {
       months: MONTH_LABELS.map((label, i) => ({ month: i + 1, label })),
       startingBalances,
       endingBalances,
+      // Contribuição (com sinal) de em aberto/programadas na âncora startingBalances[0].
+      // O frontend devolve estas parcelas à âncora quando esconde os toggles, para o
+      // saldo só-fechadas reconciliar com o saldo real (KPI).
+      anchorOpenContribution,
+      anchorProgrammedContribution,
       incomeTotal: monthlyIncome,
       expenseTotal: monthlyExpense,
       // Subdivisão por status semântico para o chart Cash Flow:
@@ -639,8 +798,16 @@ export class TreasuryDashboardService {
       expenseSettled: monthlySettledExpense,
       expenseOpen: monthlyOpenExpense,
       expenseProgrammed: monthlyProgrammedExpense,
-      uncategorizedIncome: uncatIncome,
-      uncategorizedExpense: uncatExpense,
+      // "Sem categoria": total + subdivisão por estado (settled = movimentos,
+      // open/programmed = pendentes) para reagir aos toggles na tabela.
+      uncategorizedIncome: uncatIncome.map((v, i) => v + uncatOpenIncome[i] + uncatProgrammedIncome[i]),
+      uncategorizedExpense: uncatExpense.map((v, i) => v + uncatOpenExpense[i] + uncatProgrammedExpense[i]),
+      uncategorizedIncomeSettled: uncatIncome,
+      uncategorizedIncomeOpen: uncatOpenIncome,
+      uncategorizedIncomeProgrammed: uncatProgrammedIncome,
+      uncategorizedExpenseSettled: uncatExpense,
+      uncategorizedExpenseOpen: uncatOpenExpense,
+      uncategorizedExpenseProgrammed: uncatProgrammedExpense,
       categories: roots.filter(hasData).map(serializeNode),
     }
   }
@@ -711,14 +878,16 @@ export class TreasuryDashboardService {
         orderBy: { date: 'asc' },
         select: { date: true },
       }),
-      // Only fetch pending docs due AFTER today — docs due today belong to actuals, not forecast
+      // Pendentes por data efetiva (promessa de pagamento ?? vencimento), em toda a
+      // janela visível — incl. semanas passadas (forecast contínuo, como no mensal).
+      // Exclui a mãe de um split (children); as parcelas entram pela sua promessa.
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
-        select: { dueDate: true, pendingAmount: true, categoryId: true },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: rangeStart, lte: rangeEnd } }, { promisedPaymentDate: null, dueDate: { gte: rangeStart, lte: rangeEnd } }] },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, categoryId: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gt: endOfToday, lte: rangeEnd } },
-        select: { dueDate: true, pendingAmount: true, categoryId: true },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: rangeStart, lte: rangeEnd } }, { promisedPaymentDate: null, dueDate: { gte: rangeStart, lte: rangeEnd } }] },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true, categoryId: true },
       }),
       this.prisma.treasuryCategory.findMany({
         where: { clientId, deletedAt: null, isArchived: false },
@@ -749,33 +918,33 @@ export class TreasuryDashboardService {
       const catIncome = new Map<string, number>()
       const catExpense = new Map<string, number>()
 
-      if (!wk.isFuture) {
-        // Actual movements
-        for (const m of pastMovements) {
-          if (m.date < wk.start || m.date > wk.end) continue
-          const amt = Number(m.amount)
-          if (amt > 0) {
-            income += amt
-            if (m.categoryId) catIncome.set(m.categoryId, (catIncome.get(m.categoryId) ?? 0) + amt)
-          } else {
-            expense += Math.abs(amt)
-            if (m.categoryId) catExpense.set(m.categoryId, (catExpense.get(m.categoryId) ?? 0) + Math.abs(amt))
-          }
-        }
-      } else {
-        // Forecast from pending docs
-        for (const r of pendingReceivables) {
-          if (!r.dueDate || r.dueDate < wk.start || r.dueDate > wk.end) continue
-          const amt = Number(r.pendingAmount ?? 0)
+      // Movimentos reais (settled) — só existem no passado/atual
+      for (const m of pastMovements) {
+        if (m.date < wk.start || m.date > wk.end) continue
+        const amt = Number(m.amount)
+        if (amt > 0) {
           income += amt
-          if (r.categoryId) catIncome.set(r.categoryId, (catIncome.get(r.categoryId) ?? 0) + amt)
+          if (m.categoryId) catIncome.set(m.categoryId, (catIncome.get(m.categoryId) ?? 0) + amt)
+        } else {
+          expense += Math.abs(amt)
+          if (m.categoryId) catExpense.set(m.categoryId, (catExpense.get(m.categoryId) ?? 0) + Math.abs(amt))
         }
-        for (const p of pendingPayables) {
-          if (!p.dueDate || p.dueDate < wk.start || p.dueDate > wk.end) continue
-          const amt = Number(p.pendingAmount ?? 0)
-          expense += amt
-          if (p.categoryId) catExpense.set(p.categoryId, (p.categoryId ? (catExpense.get(p.categoryId) ?? 0) + amt : amt))
-        }
+      }
+      // Pendentes (open/programmed) pela data efetiva (promessa ?? vencimento) — em
+      // qualquer semana, incl. passadas (forecast contínuo, como no mensal).
+      for (const r of pendingReceivables) {
+        const eff = r.promisedPaymentDate ?? r.dueDate
+        if (!eff || eff < wk.start || eff > wk.end) continue
+        const amt = Number(r.pendingAmount ?? 0)
+        income += amt
+        if (r.categoryId) catIncome.set(r.categoryId, (catIncome.get(r.categoryId) ?? 0) + amt)
+      }
+      for (const p of pendingPayables) {
+        const eff = p.promisedPaymentDate ?? p.dueDate
+        if (!eff || eff < wk.start || eff > wk.end) continue
+        const amt = Number(p.pendingAmount ?? 0)
+        expense += amt
+        if (p.categoryId) catExpense.set(p.categoryId, (catExpense.get(p.categoryId) ?? 0) + amt)
       }
 
       const openingBalance = running
@@ -837,14 +1006,17 @@ export class TreasuryDashboardService {
     ])
     const startingBalance = bankAccounts.reduce((sum, a) => sum + (balances.get(a.id) ?? 0), 0)
 
+    // Data efetiva = promessa de pagamento ?? vencimento. Exclui a mãe de um split
+    // (children); as parcelas entram pela sua própria promessa.
+    const horizon = new Date(Date.now() + days * 86400000)
     const [pendingReceivables, pendingPayables] = await Promise.all([
       this.prisma.treasuryReceivable.findMany({
-        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: now, lte: new Date(Date.now() + days * 86400000) } },
-        select: { dueDate: true, pendingAmount: true },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: now, lte: horizon } }, { promisedPaymentDate: null, dueDate: { gte: now, lte: horizon } }] },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true },
       }),
       this.prisma.treasuryPayable.findMany({
-        where: { clientId, deletedAt: null, NOT: { parentId: { not: null }, recurrenceId: null }, status: { in: ['OPEN', 'PARTIAL'] }, dueDate: { gte: now, lte: new Date(Date.now() + days * 86400000) } },
-        select: { dueDate: true, pendingAmount: true },
+        where: { clientId, deletedAt: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, OR: [{ promisedPaymentDate: { gte: now, lte: horizon } }, { promisedPaymentDate: null, dueDate: { gte: now, lte: horizon } }] },
+        select: { dueDate: true, promisedPaymentDate: true, pendingAmount: true },
       }),
     ])
 
@@ -855,10 +1027,10 @@ export class TreasuryDashboardService {
       const date = new Date(Date.now() + d * 86400000)
       const dateStr = date.toISOString().slice(0, 10)
       const income = pendingReceivables
-        .filter((r) => r.dueDate?.toISOString().slice(0, 10) === dateStr)
+        .filter((r) => (r.promisedPaymentDate ?? r.dueDate)?.toISOString().slice(0, 10) === dateStr)
         .reduce((s, r) => s + Number(r.pendingAmount ?? 0), 0)
       const expense = pendingPayables
-        .filter((p) => p.dueDate?.toISOString().slice(0, 10) === dateStr)
+        .filter((p) => (p.promisedPaymentDate ?? p.dueDate)?.toISOString().slice(0, 10) === dateStr)
         .reduce((s, p) => s + Number(p.pendingAmount ?? 0), 0)
 
       balance = balance + income - expense

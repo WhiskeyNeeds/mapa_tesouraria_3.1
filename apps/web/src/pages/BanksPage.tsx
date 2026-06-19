@@ -5,9 +5,10 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatIbanInput, sanitizeIban, validateIban } from '@/lib/iban'
+import { useStickyHScrollbar } from '@/lib/useStickyHScrollbar'
 import KpiCard from '@/components/ui/KpiCard'
 import Modal from '@/components/ui/Modal'
-import { Plus, Upload, Building2, FileUp, FileText, FileSpreadsheet, CheckCircle2, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw, History, RotateCcw } from 'lucide-react'
+import { Plus, Upload, Building2, FileUp, FileText, FileSpreadsheet, CheckCircle2, Circle, Trash2, Search, X, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ChevronDown, PenLine, AlertTriangle, Tag, Download, Pencil, FilterX, RefreshCw, History, RotateCcw } from 'lucide-react'
 
 const SUPPORTED_BANKS = ['CGD', 'BCP', 'BPI', 'Bankinter', 'Santander', 'NovoBanco'] as const
 type SupportedBank = typeof SUPPORTED_BANKS[number]
@@ -64,7 +65,7 @@ function BankAvatar({ bankName }: { bankName: string }) {
 }
 
 interface BankAccount { id: string; name: string; bankName: string; currentBalance: number; minBalance?: number | null; ibanLast4: string; currency: string; lowBalanceWarning?: boolean; importedCount: number }
-interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { id: string; name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string } }
+interface Movement { id: string; date: string; amount: number; description: string; status: string; source: string; balanceAfter?: number | null; category?: { id: string; name: string; color: string }; bankAccount?: { id: string; name: string; bankName: string }; reconciliation?: { state: 'RECONCILED' | 'PARTIAL'; isDryRun: boolean; allocated: number } | null }
 
 interface ReconciliationLink {
   reconciliationId: string
@@ -201,6 +202,7 @@ interface BalanceCheckResult { accountId: string; accountName: string; gaps: Bal
 export default function BanksPage() {
   const { selectedClientId } = useAuth()
   const qc = useQueryClient()
+  const hScroll = useStickyHScrollbar<HTMLDivElement>()
   const toast = useToast()
   const [selectedAccount, setSelectedAccount] = useState<string>('')
   const [page, setPage] = useState(1)
@@ -645,9 +647,9 @@ export default function BanksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold text-gray-900">Bancos & Movimentos</h1>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={() => {
             setImportFile(null)
             setImportPdfFile(null)
@@ -911,8 +913,8 @@ export default function BanksPage() {
             </button>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div ref={hScroll} className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[860px] lg:min-w-0">
               <thead>
                 <tr className="text-xs text-gray-500 uppercase border-b border-gray-100">
                   <th
@@ -949,7 +951,7 @@ export default function BanksPage() {
               <tbody className="divide-y divide-gray-50">
                 {movements?.items.map((m) => {
                   const gap = gapMap.get(m.id)
-                  const isExpandable = m.status === 'PARTIAL' || m.status === 'RECONCILED'
+                  const isExpandable = !!m.reconciliation
                   const isMovExpanded = expandedMovementIds.has(m.id)
                   const colSpan = selectedAccount ? 6 : 7
                   return (
@@ -999,7 +1001,29 @@ export default function BanksPage() {
                         )}
                         <td className="px-5 py-3 text-gray-900 max-w-xs">
                           <span className="truncate block">{m.description}</span>
-                          {m.source === 'MANUAL' && <span className="text-xs text-gray-400">manual</span>}
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            {m.source === 'MANUAL' && <span className="text-xs text-gray-400">manual</span>}
+                            {(() => {
+                              const rec = m.reconciliation
+                              // Totalmente reconciliado: sem badge (a indicação é para os NÃO reconciliados).
+                              if (rec?.state === 'RECONCILED') return null
+                              if (rec?.state === 'PARTIAL') {
+                                return (
+                                  <span
+                                    className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700"
+                                    title={rec.isDryRun ? 'Parcialmente reconciliado em modo simulação (dry-run)' : 'Parcialmente reconciliado'}
+                                  >
+                                    <AlertTriangle className="w-3 h-3" /> Parcial{rec.isDryRun ? ' (simulação)' : ''}
+                                  </span>
+                                )
+                              }
+                              return (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                                  <Circle className="w-3 h-3" /> Não reconciliado
+                                </span>
+                              )
+                            })()}
+                          </div>
                         </td>
                         <td className="px-3 py-3 relative">
                           {m.status === 'RECONCILED' ? (
@@ -1291,6 +1315,19 @@ export default function BanksPage() {
                 <p className={`text-xs mt-1 ${ibanInvalid ? 'text-red-500' : ibanChecksumWarning ? 'text-amber-600' : 'text-gray-400'}`}>
                   {ibanFeedback}
                 </p>
+              </div>
+
+              <div>
+                <label className="label">Saldo mínimo (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="input w-40"
+                  value={newAccount.minBalance}
+                  onChange={(e) => setNewAccount({ ...newAccount, minBalance: e.target.value })}
+                  placeholder="Sem mínimo"
+                />
+                <p className="text-xs text-gray-400 mt-1">Deixe vazio para desativar o alerta de saldo baixo.</p>
               </div>
 
               {createAccount.isError && (

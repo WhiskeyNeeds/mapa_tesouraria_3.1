@@ -22,20 +22,25 @@ export async function payablesRoutes(fastify: FastifyInstance) {
   fastify.get(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const q = request.query as {
-      status?: string; origin?: TreasuryDocOrigin; categoryId?: string
+      status?: string; origin?: TreasuryDocOrigin; categoryId?: string; uncategorized?: string; budgetId?: string; unbudgeted?: string
       entityName?: string; dueDateFrom?: string; dueDateTo?: string; docDateFrom?: string; docDateTo?: string; paymentDateFrom?: string; paymentDateTo?: string
-      isRecurrent?: string; overdue?: string; tocSupplierId?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
+      isRecurrent?: string; overdue?: string; pastPaymentDeadline?: string; tocSupplierId?: string; bucket?: 'fornecedores' | 'outras'; readyToPay?: string; reconcilable?: string; sortBy?: string; sortDir?: string; page?: string; limit?: string
     }
     const statusValue = q.status?.includes(',')
       ? (q.status.split(',') as TreasuryDocStatus[])
       : (q.status as TreasuryDocStatus | undefined)
-    const validSortBy = ['dueDate', 'totalAmount', 'pendingAmount', 'entityName', 'reference', 'promisedPaymentDate', 'status'].includes(q.sortBy ?? '') ? q.sortBy as 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'status' : undefined
+    const validSortBy = ['dueDate', 'totalAmount', 'pendingAmount', 'entityName', 'reference', 'promisedPaymentDate', 'settledAt', 'status'].includes(q.sortBy ?? '') ? q.sortBy as 'dueDate' | 'totalAmount' | 'pendingAmount' | 'entityName' | 'reference' | 'promisedPaymentDate' | 'settledAt' | 'status' : undefined
     const validSortDir = q.sortDir === 'asc' || q.sortDir === 'desc' ? q.sortDir : undefined
     return reply.send(await svc.list(clientId, {
       ...q,
       status: statusValue,
+      uncategorized: q.uncategorized === 'true',
+      unbudgeted: q.unbudgeted === 'true',
       isRecurrent: q.isRecurrent !== undefined ? q.isRecurrent === 'true' : undefined,
       overdue: q.overdue === 'true',
+      pastPaymentDeadline: q.pastPaymentDeadline === 'true',
+      readyToPay: q.readyToPay === 'true' ? true : undefined,
+      reconcilable: q.reconcilable === 'true',
       sortBy: validSortBy,
       sortDir: validSortDir,
       page: q.page ? parseInt(q.page) : undefined,
@@ -45,7 +50,12 @@ export async function payablesRoutes(fastify: FastifyInstance) {
 
   fastify.get(`${prefix}/kpis`, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
-    return reply.send(await svc.getKpis(clientId))
+    const q = request.query as { days?: string; all?: string }
+    const days = q.days ? parseInt(q.days) : undefined
+    return reply.send(await svc.getKpis(clientId, {
+      all: q.all === 'true',
+      days: days != null && Number.isFinite(days) ? days : undefined,
+    }))
   })
 
   fastify.post(`${prefix}/apply-rules`, { onRequest: auth }, async (request, reply) => {
@@ -83,6 +93,13 @@ export async function payablesRoutes(fastify: FastifyInstance) {
   fastify.get(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     return reply.send(await svc.getById(clientId, id))
+  })
+
+  fastify.get(`${prefix}/by-toc/:tocDocId`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, tocDocId } = request.params as { clientId: string; tocDocId: string }
+    const found = await svc.findLocalIdByTocDoc(clientId, tocDocId)
+    if (!found) return reply.status(404).send({ error: 'Sem registo local para este documento' })
+    return reply.send(found)
   })
 
   fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
@@ -154,15 +171,58 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     }))
   })
 
+  fastify.patch(`${prefix}/bulk-category`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids, categoryId } = request.body as { ids: string[]; categoryId: string | null }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    if (categoryId === undefined) return reply.status(400).send({ message: 'Categoria em falta' })
+    return reply.send(await svc.bulkSetCategory(clientId, request.user.sub, ids, categoryId))
+  })
+
+  fastify.patch(`${prefix}/bulk-budget`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids, budgetId } = request.body as { ids: string[]; budgetId: string | null }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    if (budgetId === undefined) return reply.status(400).send({ message: 'Budget em falta' })
+    return reply.send(await svc.bulkSetBudget(clientId, request.user.sub, ids, budgetId))
+  })
+
+  fastify.patch(`${prefix}/bulk-status`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids, status } = request.body as { ids: string[]; status: 'PAID' | 'OPEN' }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    if (!['PAID', 'OPEN'].includes(status)) return reply.status(400).send({ message: 'Estado inválido' })
+    return reply.send(await svc.bulkSetStatus(clientId, request.user.sub, ids, status))
+  })
+
+  fastify.post(`${prefix}/bulk-delete`, { onRequest: auth }, async (request, reply) => {
+    const { clientId } = request.params as { clientId: string }
+    const { ids } = request.body as { ids: string[] }
+    if (!Array.isArray(ids) || ids.length === 0) return reply.status(400).send({ message: 'Nenhum documento selecionado' })
+    return reply.send(await svc.bulkDelete(clientId, request.user.sub, ids))
+  })
+
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const body = request.body as Parameters<TreasuryPayablesService['update']>[3]
     return reply.send(await svc.update(clientId, request.user.sub, id, body))
   })
 
+  fastify.post(`${prefix}/:id/pay`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    return reply.send(await svc.pay(clientId, request.user.sub, id))
+  })
+
   fastify.post(`${prefix}/:id/settle`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    return reply.send(await svc.settle(clientId, request.user.sub, id))
+    const body = (request.body ?? {}) as { paymentReference?: string; date?: string }
+    return reply.send(await svc.settle(clientId, request.user.sub, id, { paymentReference: body.paymentReference, date: body.date }))
+  })
+
+  fastify.post(`${prefix}/:id/commit`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const body = (request.body ?? {}) as { reference: string; amount: number; date: string }
+    return reply.send(await svc.commit(clientId, request.user.sub, id, { reference: body.reference, amount: body.amount, date: body.date }))
   })
 
   fastify.post(`${prefix}/:id/unsettle`, { onRequest: auth }, async (request, reply) => {
@@ -197,6 +257,16 @@ export async function payablesRoutes(fastify: FastifyInstance) {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const { date } = request.body as { date: string | null }
     return reply.send(await svc.setPromisedDate(clientId, request.user.sub, id, date))
+  })
+
+  fastify.patch(`${prefix}/:id/ready-to-pay`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    // promisedPaymentDate é opcional e só aplicado ao desmarcar (ready=false):
+    // string → define a data; null → repõe a data de vencimento; ausente → não toca.
+    // reason é o motivo (obrigatório quando se define uma nova data) — gera nota + tarefa.
+    const { ready, promisedPaymentDate, reason } = request.body as { ready: boolean; promisedPaymentDate?: string | null; reason?: string }
+    if (typeof ready !== 'boolean') return reply.status(400).send({ message: 'Campo "ready" em falta' })
+    return reply.send(await svc.setReadyToPay(clientId, request.user.sub, id, ready, promisedPaymentDate, reason))
   })
 
   fastify.post(`${prefix}/:id/split`, { onRequest: auth }, async (request, reply) => {

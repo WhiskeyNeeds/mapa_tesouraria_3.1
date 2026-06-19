@@ -99,7 +99,7 @@ export default function Layout() {
     : `relative flex-shrink-0 ${sidebarOpen ? 'w-64' : 'w-16'}`
 
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-900">
       {/* Backdrop (só em mobile, com sidebar aberta) */}
       {isMobile && sidebarOpen && (
         <div
@@ -168,7 +168,7 @@ export default function Layout() {
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
-        <header className="h-16 bg-white flex items-center px-5 gap-4 flex-shrink-0 z-10"
+        <header className="h-16 bg-white dark:bg-slate-800 dark:border-b dark:border-slate-700 flex items-center px-5 gap-4 flex-shrink-0 z-10"
           style={{ boxShadow: '0 1px 0 0 rgba(0,0,0,0.06)' }}>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -243,7 +243,7 @@ export default function Layout() {
         </header>
 
         {/* Content */}
-        <main className="flex-1 overflow-auto p-6">
+        <main className="flex-1 overflow-auto p-4 lg:p-6">
           <Outlet />
         </main>
       </div>

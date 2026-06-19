@@ -46,8 +46,10 @@ export function formatCurrency(value: number, currency = 'EUR'): string {
   return parts.map((p) => (p.type === 'group' ? '\u202F' : p.value)).join('')
 }
 
-export function formatDate(date: string | Date, fmt = 'dd/MM/yyyy'): string {
+export function formatDate(date: string | Date | null | undefined, fmt = 'dd/MM/yyyy'): string {
+  if (date == null || date === '') return '—'
   const d = typeof date === 'string' ? parseISO(date) : date
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—'
   return format(d, fmt, { locale: pt })
 }
 
@@ -92,17 +94,25 @@ export function tocStatusVariant(status: unknown): 'green' | 'yellow' | 'red' | 
   return 'gray'
 }
 
-export function statusLabel(status: string): string {
+// `settledInToc` distingue a origem do estado SETTLED: liquidado no próprio
+// Estados de documento: "Pago" (PAID) é intermédio — pagamento registado mas
+// ainda não liquidado; "Liquidado" (SETTLED) é o fecho final (recibo no caso TOC).
+// O 2.º argumento mantém-se por compatibilidade com callers existentes mas já
+// não altera o resultado (o "Pago" passou a ser o estado PAID dedicado).
+export function statusLabel(status: string, _settledInToc = true, full = false): string {
+  // Na tabela usa-se a forma abreviada; no detalhe (full) o texto completo.
+  if (status === 'PARTIAL') return full ? 'Parcialmente liquidado' : 'Parc. Liq.'
   const map: Record<string, string> = {
-    OPEN: 'Emitido', PARTIAL: 'Parcialmente liquidado', SETTLED: 'Liquidado', VOID: 'Anulado',
+    OPEN: 'Emitido', PARTIAL: 'Parc. Liq.', PAID: 'Pago', SETTLED: 'Liquidado', VOID: 'Anulado',
     UNCLASSIFIED: 'Por classificar', CLASSIFIED: 'Classificado', RECONCILED: 'Reconciliado',
     DRAFT: 'Rascunho', CONFIRMED: 'Confirmado', REVERSED: 'Estornado',
   }
   return map[status] ?? status
 }
 
-export function statusVariant(status: string): 'green' | 'yellow' | 'red' | 'gray' | 'blue' {
+export function statusVariant(status: string): 'green' | 'yellow' | 'red' | 'gray' | 'blue' | 'teal' | 'purple' {
   if (['SETTLED', 'CONFIRMED', 'RECONCILED', 'CLASSIFIED'].includes(status)) return 'green'
+  if (status === 'PAID') return 'teal'
   if (['PARTIAL', 'DRAFT'].includes(status)) return 'yellow'
   if (['VOID', 'REVERSED'].includes(status)) return 'red'
   if (['OPEN', 'UNCLASSIFIED'].includes(status)) return 'blue'
