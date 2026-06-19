@@ -1314,7 +1314,9 @@ function CashflowStatementTable({ showOpen, showProgrammed }: { showOpen: boolea
 
 export default function DashboardPage() {
   const { selectedClientId } = useAuth()
-  const [days, setDays] = useState(30)
+  // Janela fixa (30d) dos indicadores (médias/rácios) e dos painéis por categoria.
+  // O seletor 30/60/90 foi removido — não governava o gráfico nem os KPIs.
+  const days = 30
   // Filtro de página (topo): "Em aberto" e "Programadas". Aplica-se a TODA a página
   // — KPIs (A Receber/A Pagar/Posição Líquida/Disponível) e gráfico de cash flow.
   // Os dados fechados (movimentos reais) contam sempre. Default: ambos visíveis.
@@ -1437,13 +1439,6 @@ export default function DashboardPage() {
               {showProgrammed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
               Programadas
             </button>
-          </div>
-          <div className="flex gap-2">
-            {[30, 60, 90].map((d) => (
-              <button key={d} onClick={() => setDays(d)} className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${days === d ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}>
-                {d}d
-              </button>
-            ))}
           </div>
         </div>
       </div>
