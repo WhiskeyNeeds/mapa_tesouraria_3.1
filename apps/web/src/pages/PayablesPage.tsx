@@ -1046,10 +1046,11 @@ export default function PayablesPage() {
   const payStatusVariant = (status: string): ReturnType<typeof statusVariant> =>
     status === 'SCHEDULED' ? 'yellow' : statusVariant(status)
   const outrasAll = (data?.items ?? []).filter((p) => !p.tocPurchasesDocId && (!p.parentId || !!p.recurrenceId))
-  const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (p: Payable) => {
     if (p.recurrenceId && !p.parentId) return 'programadas' as const
-    if (p.recurrenceId && p.parentId && String(p.dueDate).slice(0, 10) > todayYmd) return 'futuras' as const
+    // "Futuras" = ocorrências ainda não comprometidas (SCHEDULED). Ao comprometer
+    // passam a OPEN → caem em "abertas" (mesmo com data futura): classificação pelo ESTADO.
+    if (p.status === 'SCHEDULED') return 'futuras' as const
     return isClosed(p.status) ? ('fechadas' as const) : ('abertas' as const)
   }
   const matchesOutrasFilter = (p: Payable, f: OutrasFilterState): boolean => {
@@ -2604,17 +2605,11 @@ export default function PayablesPage() {
                     </div>
                   )}
 
-                  {/* Marcar como Pago — bloqueado em recorrências futuras (dueDate > hoje) */}
-                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (() => {
-                    const isFutureRec = !!(panelDoc.recurrenceId && panelDoc.parentId && String(panelDoc.dueDate).slice(0, 10) > todayYmd)
-                    return (
+                  {/* Marcar como Pago — disponível em aberto (incl. comprometidas). As futuras são SCHEDULED e não chegam aqui. */}
+                  {(panelDoc.status === 'OPEN' || panelDoc.status === 'PARTIAL') && (
                       <button
-                        onClick={() => {
-                          if (isFutureRec) return
-                          payPayable.mutate(panelDoc.id)
-                        }}
-                        disabled={payPayable.isPending || isFutureRec}
-                        title={isFutureRec ? 'Recorrência futura — só pode ser paga a partir da data de vencimento' : undefined}
+                        onClick={() => payPayable.mutate(panelDoc.id)}
+                        disabled={payPayable.isPending}
                         className="w-full flex items-center gap-3 p-3.5 rounded-xl border border-gray-200 hover:bg-teal-50 hover:border-teal-200 text-left transition-colors group disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <div className="w-9 h-9 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0 group-hover:bg-teal-200 transition-colors">
@@ -2622,11 +2617,10 @@ export default function PayablesPage() {
                         </div>
                         <div>
                           <div className="font-medium text-gray-900 text-sm">Marcar como Pago</div>
-                          <div className="text-xs text-gray-500">{isFutureRec ? 'Disponível a partir de ' + formatDate(panelDoc.dueDate) : 'Registar pagamento total (sem liquidar)'}</div>
+                          <div className="text-xs text-gray-500">Registar pagamento total (sem liquidar)</div>
                         </div>
                       </button>
-                    )
-                  })()}
+                  )}
 
                   {/* Marcar como Liquidada — só a partir de Pago; exige registar o comprovativo (referência + data). */}
                   {panelDoc.status === 'PAID' && panelDoc.settledVia !== 'INSTALLMENTS' && panelDoc.settledVia !== 'RECONCILIATION' && (

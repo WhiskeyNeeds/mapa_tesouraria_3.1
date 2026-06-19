@@ -909,10 +909,12 @@ export default function ReceivablesPage() {
   const recvStatusVariant = (status: string): ReturnType<typeof statusVariant> =>
     status === 'SCHEDULED' ? 'yellow' : statusVariant(status)
   const outrasAll = (data?.items ?? []).filter((r) => !r.tocSalesDocId && (!r.parentId || !!r.recurrenceId))
-  const todayYmd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
   const outrasCategorise = (r: Receivable) => {
     if (r.recurrenceId && !r.parentId) return 'programadas' as const
-    if (r.recurrenceId && r.parentId && String(r.dueDate).slice(0, 10) > todayYmd) return 'futuras' as const
+    // "Futuras" = ocorrências ainda não comprometidas (SCHEDULED). Ao comprometer
+    // passam a OPEN → caem em "abertas" (mesmo com data futura), por isso a
+    // classificação é pelo ESTADO, não pela data.
+    if (r.status === 'SCHEDULED') return 'futuras' as const
     return isClosed(r.status) ? ('fechadas' as const) : ('abertas' as const)
   }
   const matchesOutrasFilter = (r: Receivable, f: OutrasFilterState): boolean => {
