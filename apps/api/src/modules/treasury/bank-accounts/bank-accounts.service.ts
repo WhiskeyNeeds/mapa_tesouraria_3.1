@@ -132,6 +132,7 @@ export class TreasuryBankAccountsService {
   async update(clientId: string, id: string, data: Partial<{
     name: string
     bankName: string
+    openingBalance: number
     minBalance: number | null
     isActive: boolean
   }>) {
