@@ -1527,10 +1527,16 @@ export class TreasuryReceivablesService {
     //   - locais COM tocLink E TOC docs puros vão ao tocSalesDocument
     // Evita-se assim a dupla contagem que existia quando o local copiava os
     // valores do TOC.
+    // "Em aberto" = OPEN/PARTIAL, independentemente da data. As ocorrências de
+    // recorrência comprometidas (OPEN) contam mesmo com vencimento futuro; as
+    // futuras NÃO comprometidas são SCHEDULED e ficam de fora pelo filtro de estado.
+    // (Antes exigia-se dueDate <= now, o que excluía recorrências comprometidas
+    // com data futura e desalinhava do cash flow / posição líquida.) Exclui só as
+    // raízes-template (recurrenceId != null && parentId == null).
     const abertasClause: Prisma.TreasuryReceivableWhereInput = {
       OR: [
         { recurrenceId: null },
-        { AND: [{ parentId: { not: null } }, { dueDate: { lte: now } }] },
+        { parentId: { not: null } },
       ],
     }
     const localOnlyClause: Prisma.TreasuryReceivableWhereInput = {

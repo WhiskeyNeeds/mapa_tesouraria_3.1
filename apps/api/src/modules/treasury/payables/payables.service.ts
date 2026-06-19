@@ -1581,10 +1581,13 @@ export class TreasuryPayablesService {
         : new Date(now.getFullYear(), now.getMonth(), 1)
     // "Abertas": emitted but not settled. Excludes recurrence templates (parentless
     // with recurrenceId) and future recurrence instances (dueDate > now).
+    // "Em aberto" = OPEN/PARTIAL, independentemente da data (ver receivables).
+    // Recorrências comprometidas (OPEN) contam mesmo com vencimento futuro; as
+    // futuras não comprometidas são SCHEDULED e ficam de fora pelo filtro de estado.
     const abertasClause: Prisma.TreasuryPayableWhereInput = {
       OR: [
         { recurrenceId: null },
-        { AND: [{ parentId: { not: null } }, { dueDate: { lte: now } }] },
+        { parentId: { not: null } },
       ],
     }
     const localOnlyClause: Prisma.TreasuryPayableWhereInput = {
