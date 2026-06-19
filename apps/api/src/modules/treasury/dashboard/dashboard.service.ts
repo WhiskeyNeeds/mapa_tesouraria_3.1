@@ -120,12 +120,12 @@ export class TreasuryDashboardService {
         _count: true,
       }),
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null, date: { gte: from } },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: { gte: from } },
         select: { date: true, amount: true },
         orderBy: { date: 'asc' },
       }),
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null } },
         include: { category: { select: { name: true, color: true } }, bankAccount: { select: { name: true } } },
         orderBy: { date: 'desc' },
         take: 10,
@@ -435,7 +435,7 @@ export class TreasuryDashboardService {
     const ACTIVE_TOC_STATUS = [1, 2, 5]
     const effDate = { OR: [{ promisedPaymentDate: dateCond }, { promisedPaymentDate: null, dueDate: dateCond }] }
     const [movs, rec, pay, tocAnnotatedRec, tocAnnotatedPay, tocSales, tocPurch] = await Promise.all([
-      this.prisma.treasuryBankMovement.findMany({ where: { clientId, deletedAt: null, date: dateCond }, select: { amount: true } }),
+      this.prisma.treasuryBankMovement.findMany({ where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: dateCond }, select: { amount: true } }),
       // Só locais PUROS (sem tocLink): as faturas TOC contam pelo espelho.
       this.prisma.treasuryReceivable.findMany({ where: { clientId, deletedAt: null, tocSalesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
       this.prisma.treasuryPayable.findMany({ where: { clientId, deletedAt: null, tocPurchasesDocId: null, status: { in: ['OPEN', 'PARTIAL', 'SCHEDULED'] }, children: { none: { recurrenceId: null, deletedAt: null } }, ...effDate }, select: { pendingAmount: true, status: true } }),
@@ -487,7 +487,7 @@ export class TreasuryDashboardService {
 
     const [movements, categories, bankAccounts, tocSalesPending, tocPurchPending] = await Promise.all([
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null, date: { gte: start, lte: end } },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: { gte: start, lte: end } },
         select: { date: true, amount: true, categoryId: true },
       }),
       this.prisma.treasuryCategory.findMany({
@@ -862,11 +862,11 @@ export class TreasuryDashboardService {
       }),
       // Use endOfToday so movements recorded today are included in the current week's actuals
       this.prisma.treasuryBankMovement.findMany({
-        where: { clientId, deletedAt: null, date: { gte: rangeStart, lte: endOfToday } },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null }, date: { gte: rangeStart, lte: endOfToday } },
         select: { date: true, amount: true, categoryId: true, bankAccountId: true },
       }),
       this.prisma.treasuryBankMovement.findFirst({
-        where: { clientId, deletedAt: null },
+        where: { clientId, deletedAt: null, bankAccount: { isActive: true, deletedAt: null } },
         orderBy: { date: 'asc' },
         select: { date: true },
       }),
