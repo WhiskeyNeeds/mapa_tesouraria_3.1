@@ -39,8 +39,9 @@ export async function budgetsRoutes(fastify: FastifyInstance) {
   fastify.get(`${prefix}/:id/events`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
     const q = request.query as { limit?: string; before?: string }
+    const n = Number(q.limit)
     return reply.send(await svc.listEvents(clientId, id, {
-      limit: q.limit ? Number(q.limit) : undefined,
+      limit: Number.isFinite(n) ? n : undefined,
       before: q.before,
     }))
   })
