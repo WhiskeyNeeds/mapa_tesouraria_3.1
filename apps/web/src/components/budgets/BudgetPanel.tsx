@@ -37,6 +37,41 @@ interface BudgetDetail {
 interface Category { id: string; name: string; type: 'REVENUE' | 'EXPENSE'; color: string | null }
 interface Budget { id: string; name: string }
 
+interface BudgetEvent { id: string; action: string; createdAt: string; actor: { id: string; name: string } | null; payload: Record<string, unknown> | null }
+interface BudgetEventsPage { events: BudgetEvent[]; nextCursor: string | null }
+
+function fmtAmount(v: unknown): string {
+  const n = Number(v ?? 0)
+  return formatCurrency(Number.isFinite(n) ? n : 0)
+}
+
+function formatBudgetEvent(action: string, payload: Record<string, unknown> | null): string {
+  const p = payload ?? {}
+  const ent = (p.entityName as string) ?? '—'
+  const amt = fmtAmount(p.amount)
+  switch (action) {
+    case 'budget.create': return 'Budget criado'
+    case 'budget.delete': return 'Budget eliminado'
+    case 'budget.update': {
+      const changes = (p.changes ?? {}) as Record<string, { from: unknown; to: unknown }>
+      if (changes.status) {
+        return changes.status.to === 'ARCHIVED' ? 'Budget arquivado' : 'Budget reativado'
+      }
+      const labels: Record<string, string> = { name: 'Nome', totalAmount: 'Valor', startDate: 'Início', endDate: 'Fim', color: 'Cor', description: 'Descrição' }
+      const parts = Object.keys(changes).map((k) => labels[k] ?? k)
+      return parts.length ? `Editado: ${parts.join(', ')}` : 'Budget editado'
+    }
+    case 'budget.rule_add': return `Regra adicionada: «${(p.categoryName as string) ?? '—'}»${p.textPattern ? ` (${p.textPattern})` : ''}`
+    case 'budget.rule_remove': return `Regra removida: «${(p.categoryName as string) ?? '—'}»`
+    case 'budget.txn_auto_assign': return `Fatura de ${ent} (${amt}) atribuída automaticamente`
+    case 'budget.txn_confirm': return `Fatura de ${ent} (${amt}) confirmada`
+    case 'budget.txn_move_in': return p.fromBudgetName ? `Fatura de ${ent} (${amt}) movida de «${p.fromBudgetName}»` : `Fatura de ${ent} (${amt}) adicionada`
+    case 'budget.txn_move_out': return `Fatura de ${ent} (${amt}) movida para «${(p.toBudgetName as string) ?? '—'}»`
+    case 'budget.txn_unassign': return `Fatura de ${ent} (${amt}) removida do budget`
+    default: return action
+  }
+}
+
 const STATUS_LABEL: Record<string, string> = { OPEN: 'Aberto', PARTIAL: 'Parcial', PAID: 'Pago', VOID: 'Anulado' }
 const STATUS_COLOR: Record<string, string> = {
   OPEN: 'bg-amber-50 text-amber-700',
@@ -59,7 +94,7 @@ export default function BudgetPanel({
   const { selectedClientId } = useAuth()
   const toast = useToast()
   const qc = useQueryClient()
-  const [activeTab, setActiveTab] = useState<'transactions' | 'rules' | 'review'>('transactions')
+  const [activeTab, setActiveTab] = useState<'transactions' | 'rules' | 'review' | 'history'>('transactions')
   const [newRule, setNewRule] = useState({ categoryId: '', textPattern: '' })
   const [showNewRule, setShowNewRule] = useState(false)
   const [movingDocId, setMovingDocId] = useState<string | null>(null)
@@ -82,6 +117,12 @@ export default function BudgetPanel({
     queryKey: ['budgets-active', selectedClientId],
     queryFn: () => api.get(`/treasury/${selectedClientId}/budgets?status=ACTIVE`),
     enabled: !!selectedClientId && movingDocId !== null,
+  })
+
+  const { data: eventsPage, isLoading: eventsLoading } = useQuery<BudgetEventsPage>({
+    queryKey: ['budget-events', selectedClientId, budgetId],
+    queryFn: () => api.get(`/treasury/${selectedClientId}/budgets/${budgetId}/events?limit=100`),
+    enabled: !!selectedClientId && !!budgetId && activeTab === 'history',
   })
 
   const invalidate = () => {
@@ -195,6 +236,7 @@ export default function BudgetPanel({
           { key: 'transactions', label: 'Transações' },
           { key: 'rules', label: 'Regras' },
           { key: 'review', label: `Para rever${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
+          { key: 'history', label: 'Histórico' },
         ] as const).map((t) => (
           <button
             key={t.key}
@@ -395,6 +437,29 @@ export default function BudgetPanel({
                   ✓ Confirmar todas ({pendingCount})
                 </button>
               </>
+            )}
+          </div>
+        )}
+
+        {/* Tab: Histórico */}
+        {activeTab === 'history' && (
+          <div className="space-y-3">
+            {eventsLoading ? (
+              <p className="text-xs text-gray-400 italic text-center py-8">A carregar…</p>
+            ) : (eventsPage?.events.length ?? 0) === 0 ? (
+              <p className="text-xs text-gray-400 italic text-center py-8">Sem histórico para este budget.</p>
+            ) : (
+              <ol className="relative border-l border-gray-200 ml-1.5 space-y-4">
+                {eventsPage!.events.map((ev) => (
+                  <li key={ev.id} className="ml-4">
+                    <span className="absolute -left-1.5 w-3 h-3 rounded-full bg-gray-300 border-2 border-white" />
+                    <p className="text-sm text-gray-800">{formatBudgetEvent(ev.action, ev.payload)}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {new Date(ev.createdAt).toLocaleString('pt-PT')} · {ev.actor ? `por ${ev.actor.name}` : 'Sistema'}
+                    </p>
+                  </li>
+                ))}
+              </ol>
             )}
           </div>
         )}
