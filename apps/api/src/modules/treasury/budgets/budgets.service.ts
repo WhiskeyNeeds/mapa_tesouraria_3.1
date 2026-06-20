@@ -288,6 +288,33 @@ export class TreasuryBudgetsService {
     })
   }
 
+  async listEvents(clientId: string, budgetId: string, opts: { limit?: number; before?: string } = {}) {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
+    const rows = await this.prisma.treasuryAuditLog.findMany({
+      where: {
+        clientId,
+        entityType: 'Budget',
+        entityId: budgetId,
+        ...(opts.before ? { createdAt: { lt: new Date(opts.before) } } : {}),
+      },
+      include: { user: { select: { id: true, name: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+    })
+    const hasMore = rows.length > limit
+    const page = hasMore ? rows.slice(0, limit) : rows
+    return {
+      events: page.map((r) => ({
+        id: r.id,
+        action: r.action,
+        createdAt: r.createdAt.toISOString(),
+        actor: r.user ? { id: r.user.id, name: r.user.name } : null,
+        payload: r.payload ?? null,
+      })),
+      nextCursor: hasMore ? page[page.length - 1].createdAt.toISOString() : null,
+    }
+  }
+
   async assertCompatible(clientId: string, budgetId: string, expectedType: TreasuryCategoryType) {
     const budget = await this.prisma.treasuryBudget.findFirst({
       where: { id: budgetId, clientId, deletedAt: null },

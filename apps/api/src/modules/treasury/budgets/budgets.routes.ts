@@ -35,4 +35,13 @@ export async function budgetsRoutes(fastify: FastifyInstance) {
     await svc.delete(clientId, request.user.sub, id)
     return reply.status(204).send()
   })
+
+  fastify.get(`${prefix}/:id/events`, { onRequest: auth }, async (request, reply) => {
+    const { clientId, id } = request.params as { clientId: string; id: string }
+    const q = request.query as { limit?: string; before?: string }
+    return reply.send(await svc.listEvents(clientId, id, {
+      limit: q.limit ? Number(q.limit) : undefined,
+      before: q.before,
+    }))
+  })
 }
