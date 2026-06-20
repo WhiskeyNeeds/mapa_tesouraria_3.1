@@ -65,7 +65,7 @@ function formatBudgetEvent(action: string, payload: Record<string, unknown> | nu
     case 'budget.rule_remove': return `Regra removida: «${(p.categoryName as string) ?? '—'}»`
     case 'budget.txn_auto_assign': return `Fatura de ${ent} (${amt}) atribuída automaticamente`
     case 'budget.txn_confirm': return `Fatura de ${ent} (${amt}) confirmada`
-    case 'budget.txn_move_in': return p.fromBudgetName ? `Fatura de ${ent} (${amt}) movida de «${p.fromBudgetName}»` : `Fatura de ${ent} (${amt}) adicionada`
+    case 'budget.txn_move_in': return (p.fromBudgetName as string) ? `Fatura de ${ent} (${amt}) movida de «${p.fromBudgetName as string}»` : `Fatura de ${ent} (${amt}) adicionada`
     case 'budget.txn_move_out': return `Fatura de ${ent} (${amt}) movida para «${(p.toBudgetName as string) ?? '—'}»`
     case 'budget.txn_unassign': return `Fatura de ${ent} (${amt}) removida do budget`
     default: return action
@@ -450,7 +450,7 @@ export default function BudgetPanel({
               <p className="text-xs text-gray-400 italic text-center py-8">Sem histórico para este budget.</p>
             ) : (
               <ol className="relative border-l border-gray-200 ml-1.5 space-y-4">
-                {eventsPage!.events.map((ev) => (
+                {(eventsPage?.events ?? []).map((ev) => (
                   <li key={ev.id} className="ml-4">
                     <span className="absolute -left-1.5 w-3 h-3 rounded-full bg-gray-300 border-2 border-white" />
                     <p className="text-sm text-gray-800">{formatBudgetEvent(ev.action, ev.payload)}</p>
