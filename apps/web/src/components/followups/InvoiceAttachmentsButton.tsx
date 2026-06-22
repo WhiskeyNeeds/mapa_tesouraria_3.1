@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, API_BASE } from '@/lib/api'
 import { useToast } from '@/contexts/ToastContext'
 import { Paperclip, FileText, Trash2, Download, Loader2, UploadCloud } from 'lucide-react'
 import type { FollowupDirection, InvoiceAttachment } from './types'
@@ -56,7 +56,7 @@ export default function InvoiceAttachmentsButton({ clientId, direction, docId, o
       const form = new FormData()
       form.append('file', file)
       form.append(idKey, docId)
-      const res = await fetch(`/api/v1/treasury/${clientId}/invoice-attachments`, {
+      const res = await fetch(`${API_BASE}/treasury/${clientId}/invoice-attachments`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
         body: form,
@@ -200,7 +200,7 @@ export default function InvoiceAttachmentsButton({ clientId, direction, docId, o
                   </div>
                   <div className="flex-1 min-w-0">
                     <a
-                      href={`/api/v1/treasury/${clientId}/invoice-attachments/${a.id}/download`}
+                      href={`${API_BASE}/treasury/${clientId}/invoice-attachments/${a.id}/download`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="block text-sm font-medium text-gray-800 hover:text-blue-700 truncate"
@@ -221,7 +221,7 @@ export default function InvoiceAttachmentsButton({ clientId, direction, docId, o
                   </div>
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <a
-                      href={`/api/v1/treasury/${clientId}/invoice-attachments/${a.id}/download`}
+                      href={`${API_BASE}/treasury/${clientId}/invoice-attachments/${a.id}/download`}
                       target="_blank"
                       rel="noopener noreferrer"
                       title="Abrir / descarregar"

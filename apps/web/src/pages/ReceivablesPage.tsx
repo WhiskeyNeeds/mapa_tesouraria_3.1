@@ -2,7 +2,7 @@ import { Fragment, useState, useMemo, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, API_BASE } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant, tocStatusLabel } from '@/lib/utils'
@@ -648,7 +648,7 @@ export default function ReceivablesPage() {
     if (dueDateTo) p.set('dueDateTo', dueDateTo)
     if (docDateFrom) p.set('docDateFrom', docDateFrom)
     if (docDateTo) p.set('docDateTo', docDateTo)
-    const res = await fetch(`/api/v1/treasury/${selectedClientId}/receivables/export.csv?${p}`, {
+    const res = await fetch(`${API_BASE}/treasury/${selectedClientId}/receivables/export.csv?${p}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return

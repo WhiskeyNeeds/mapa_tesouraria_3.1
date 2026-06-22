@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, API_BASE } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -523,7 +523,7 @@ export default function BanksPage() {
       form.append('file', file)
       form.append('bankAccountId', bankAccountId)
       form.append('bank', bank)
-      const url = `/api/v1/treasury/${selectedClientId}/movements/upload${force ? '?force=true' : ''}`
+      const url = `${API_BASE}/treasury/${selectedClientId}/movements/upload${force ? '?force=true' : ''}`
       const res = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -565,7 +565,7 @@ export default function BanksPage() {
       form.append('file', file)
       form.append('bank', bank)
       form.append('bankAccountId', bankAccountId)
-      const res = await fetch(`/api/v1/treasury/${selectedClientId}/movements/upload/preview`, {
+      const res = await fetch(`${API_BASE}/treasury/${selectedClientId}/movements/upload/preview`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: form,
@@ -632,7 +632,7 @@ export default function BanksPage() {
     if (direction) p.set('direction', direction)
     if (statusFilter) p.set('status', statusFilter)
     if (categoryFilter) p.set('categoryId', categoryFilter)
-    const res = await fetch(`/api/v1/treasury/${selectedClientId}/movements/export.csv?${p}`, {
+    const res = await fetch(`${API_BASE}/treasury/${selectedClientId}/movements/export.csv?${p}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return
