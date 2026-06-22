@@ -41,6 +41,9 @@ const BANK_IMPORT_OPTIONS = PORTUGUESE_BANKS.map((name) => ({
   supported: name in BANK_PARSER_CODES,
 }))
 
+// Bancos com parser de extrato em PDF suportado
+const PDF_IMPORT_BANKS: ReadonlySet<SupportedBank> = new Set(['Santander', 'BPI'])
+
 const BANK_BRAND: Record<string, { abbr: string; bg: string }> = {
   'Bankinter': { abbr: 'BK', bg: '#FF6200' },
   'Millennium BCP': { abbr: 'BCP', bg: '#DA2128' },
@@ -343,8 +346,10 @@ export default function BanksPage() {
     enabled: !!selectedClientId && !!selectedAccount,
   })
 
+  // Shares the ['balance-check', …] prefix so every invalidateQueries(['balance-check'])
+  // refreshes the per-card alerts instantly (React Query matches keys by prefix).
   const { data: balanceCheckAll = [] } = useQuery<BalanceCheckResult[]>({
-    queryKey: ['balance-check-all', selectedClientId],
+    queryKey: ['balance-check', 'all', selectedClientId],
     queryFn: () => api.get(`/treasury/${selectedClientId}/movements/balance-check`),
     enabled: !!selectedClientId && accounts.length > 0,
   })
@@ -1765,7 +1770,7 @@ export default function BanksPage() {
                     const bankName = BANK_CODE_TO_NAME[bank]
                     const first = accounts.find((a) => a.bankName === bankName)
                     setImportAccountId(first?.id ?? '')
-                    if (bank !== 'Santander') setImportPdfFile(null)
+                    if (!PDF_IMPORT_BANKS.has(bank)) setImportPdfFile(null)
                   }}
                 >
                   {BANK_IMPORT_OPTIONS.map((b) => (
@@ -1834,9 +1839,9 @@ export default function BanksPage() {
                   </a>
                 </div>
 
-                {/* PDF — Santander */}
+                {/* PDF — bancos com parser suportado (Santander, BPI) */}
                 <div>
-                  {importBank === 'Santander' ? (
+                  {PDF_IMPORT_BANKS.has(importBank) ? (
                     <>
                       <input
                         ref={pdfFileInputRef}

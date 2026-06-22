@@ -47,33 +47,74 @@ function extractPeriod(text: string): { start: string; end: string } | null {
 }
 
 // ── Santander PDF ─────────────────────────────────────────────────────────────
-// Format (page 2 of Extrato Consolidado):
-//   02-02 02-02 ORDENADO P/ JOANA CATARINA ... -1.580,77 6.062,34
-//   Each line: DATE_MOV DATE_VAL DESCRIPTION SIGNED_AMOUNT UNSIGNED_BALANCE
+// Format (page 2 of Extrato Consolidado). NOTE: pdf-parse glues the columns
+// together with NO whitespace — both dates run together, and the amount+balance
+// are stuck to the description:
+//   "02-0202-02ORDENADO ... FR-E1241422-1.580,776.062,34"
+//   layout: DATE_MOV DATE_VAL | description | SIGNED_AMOUNT | UNSIGNED_BALANCE
+//
+// Because reference numbers can be glued directly to the amount
+// (e.g. "...MYLAN-28652188811.229,16"), the amount cannot be parsed reliably by
+// lexing alone. The running balance (which always ends the line) is the source of
+// truth, so each amount is derived as the delta vs. the previous balance — the same
+// strategy used by the BPI PDF parser.
+
+/** Portuguese amount token: 1.234,56 / -1.234,56 (dot thousands, comma decimal) */
+const PT_TOKEN = /[-+]?\d{1,3}(?:\.\d{3})*,\d{2}/
+/** Two glued dates at the start of a movement line: "02-0202-02" */
+const SANTANDER_HEAD = /^(\d{2}-\d{2})(\d{2}-\d{2})(.*)$/
+
+function findInitialBalance(lines: string[]): number | null {
+  for (let i = 0; i < lines.length; i++) {
+    if (!/saldo\s*inicial/i.test(lines[i])) continue
+    // Number may be on the same line or a following one ("Saldo InicialEUR" / "7.643,11")
+    for (let j = i; j < Math.min(i + 3, lines.length); j++) {
+      const m = lines[j].match(PT_TOKEN)
+      if (m) return parsePortugueseAmount(m[0])
+    }
+    return null
+  }
+  return null
+}
 
 function parseSantanderPDF(text: string, period: { start: string; end: string }): ParsedMovement[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim())
-  // Movement line starts with DD-MM DD-MM
-  const LINE_RE = /^(\d{2}-\d{2})\s+(\d{2}-\d{2})\s+(.+?)\s+([-+]?\d{1,3}(?:\.\d{3})*,\d{2})\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s*$/
+
+  let prevBalance = findInitialBalance(lines)
+  if (prevBalance === null) return []
 
   const results: ParsedMovement[] = []
   for (const line of lines) {
-    const m = LINE_RE.exec(line)
-    if (!m) continue
-    const [, dateMov, dateVal, rawDesc, amtStr, balStr] = m
-    const date        = parseDateDDMM(dateMov, '-', period.start, period.end)
-    const bookingDate = parseDateDDMM(dateVal, '-', period.start, period.end)
+    const head = SANTANDER_HEAD.exec(line)
+    if (!head) continue
+    const [, dateMov, dateVal, rest] = head
+
+    // First PT token closes the amount; the trailing PT token is the running balance.
+    const amtMatch = rest.match(PT_TOKEN)
+    if (!amtMatch || amtMatch.index === undefined) continue
+    const afterAmt = rest.slice(amtMatch.index + amtMatch[0].length)
+    const balMatch = afterAmt.match(PT_TOKEN)
+    if (!balMatch) continue
+
+    const balanceAfter = parsePortugueseAmount(balMatch[0])
+    if (isNaN(balanceAfter)) continue
+
+    const date = parseDateDDMM(dateMov, '-', period.start, period.end)
     if (!date) continue
-    const amount      = parsePortugueseAmount(amtStr)
-    const balanceAfter = parsePortugueseAmount(balStr)
-    if (isNaN(amount) || isNaN(balanceAfter)) continue
+    const bookingDate = parseDateDDMM(dateVal, '-', period.start, period.end)
+
+    // Amount derived from the balance delta (authoritative, sign-safe).
+    const amount = Math.round((balanceAfter - prevBalance) * 100) / 100
+    const description = rest.slice(0, amtMatch.index).replace(/\s{2,}/g, ' ').trim()
+
     results.push({
       date,
-      bookingDate: bookingDate !== date ? bookingDate : undefined,
-      description: rawDesc.replace(/\s{2,}/g, ' ').trim(),
+      bookingDate: bookingDate && bookingDate !== date ? bookingDate : undefined,
+      description: description || 'Movimento',
       amount,
       balanceAfter,
     })
+    prevBalance = balanceAfter
   }
   return results
 }
@@ -112,7 +153,15 @@ function parseBPIPDF(text: string, period: { start: string; end: string }): Pars
   }
   if (rowOut.length >= 3) return rowOut
 
-  // ── Strategy B: Column-based ──────────────────────────────────────────────────
+  // ── Strategy B: Column-streamed ───────────────────────────────────────────────
+  // pdf-parse emits the movement table as separate column streams, NOT as rows.
+  // Per page the tokens arrive in distinct blocks, always in this order:
+  //   descriptions… → saldos… → dates… → valores…
+  // followed by the next page's descriptions, and so on. So each movement's amount
+  // is its own VALOR (sign-safe: debits carry "-", credits none) and the running
+  // balance is the printed SALDO — both read directly, never inferred by lexing.
+  // A small state machine segments the stream per page; then we pair
+  // description[i] ↔ valor[i] ↔ saldo[i].
   const SKIP_RES = [
     // Table column headers
     /^(data\s*(mov|val)?|descri[çc][aã]o(\s+do\s+movimento)?|moeda|valor|saldo)$/i,
@@ -145,92 +194,88 @@ function parseBPIPDF(text: string, period: { start: string; end: string }): Pars
     /^(partic\b|rua\s|av(enida)?\s)/i,
   ]
 
-  // Any standalone space-thousands number (signed or unsigned)
-  const NUM_RE  = /^(-?\s*\d{1,3}(?:\s\d{3})*,\d{2})$/
-  const DATE_RE = /^(\d{2}\/\d{2})$/
+  const NUM_RE  = /^-?\s*\d{1,3}(?:\s\d{3})*,\d{2}$/   // standalone space-thousands amount
+  const DATE_RE = /^\d{2}\/\d{2}$/
 
-  // Extract initial balance from "SALDO ANTERIOR CONTABILISTICO  44 919,61"
-  let initBal: number | null = null
-  for (const line of lines) {
-    const m = line.match(/saldo\s+anterior\s+(?:contabilistico\s+)?(\d[\d\s]*,\d{2})\s*$/i)
-    if (m) { initBal = parseSpaceAmt(m[1]); break }
-  }
-
-  const descs: string[] = []
-  const nums:  number[] = []   // all standalone numbers in appearance order
-  const dates: string[] = []
+  type Page = { descs: string[]; saldos: number[]; dates: string[]; valores: number[] }
+  const pages: Page[] = []
+  let cur: Page | null = null
+  let phase: 'desc' | 'saldo' | 'date' | 'valor' = 'desc'
+  let started = false
+  const newPage = (): Page => { const p: Page = { descs: [], saldos: [], dates: [], valores: [] }; pages.push(p); return p }
 
   for (const line of lines) {
-    if (SKIP_RES.some((r) => r.test(line))) continue
-    const n = NUM_RE.exec(line)
-    if (n) { nums.push(parseSpaceAmt(n[1])); continue }
-    const d = DATE_RE.exec(line)
-    if (d) { dates.push(d[1]); continue }
-    descs.push(line)
-  }
-
-  if (!descs.length || !nums.length) return []
-
-  // ── Identify VALOR / SALDO pairs via running-balance constraint ───────────────
-  // If nums alternates (VALOR, SALDO) and initBal + valor[0] = saldo[0], etc. → valid pairs
-  // Otherwise treat all nums as SALDOs and derive amounts as deltas.
-  let amounts: number[] | null = null
-  let saldos:  number[] = []
-
-  if (initBal !== null && nums.length >= 2 && nums.length % 2 === 0) {
-    let valid = true
-    let prev  = initBal
-    const tv: number[] = []
-    const ts: number[] = []
-    for (let i = 0; i < nums.length; i += 2) {
-      const expected = Math.round((prev + nums[i]) * 100) / 100
-      if (Math.abs(expected - nums[i + 1]) > 0.05) { valid = false; break }
-      tv.push(nums[i]); ts.push(nums[i + 1])
-      prev = nums[i + 1]
+    if (!started) {
+      // Discard the whole document header until the opening-balance marker.
+      if (/saldo\s+anterior/i.test(line)) { started = true; cur = newPage(); phase = 'desc' }
+      continue
     }
-    if (valid && tv.length >= 3) { amounts = tv; saldos = ts }
-  }
-
-  if (!amounts) {
-    saldos  = nums
-    const chain = initBal !== null ? [initBal, ...saldos] : saldos
-    if (chain.length < 2) return []
-    amounts = []
-    for (let i = 1; i < chain.length; i++) {
-      amounts.push(Math.round((chain[i] - chain[i - 1]) * 100) / 100)
+    // Classify numbers and dates BEFORE skip rules: a DD/MM date ("02/02") also
+    // matches the page-ref skip pattern ("1/2"), so it must be recognised first.
+    if (NUM_RE.test(line)) {
+      const v = parseSpaceAmt(line)
+      if (phase === 'desc' || phase === 'saldo') { phase = 'saldo'; cur!.saldos.push(v) }
+      else { phase = 'valor'; cur!.valores.push(v) }   // first number after the dates → VALOR block
+    } else if (DATE_RE.test(line)) {
+      if (phase !== 'valor') { phase = 'date'; cur!.dates.push(line) }
+    } else if (SKIP_RES.some((r) => r.test(line))) {
+      continue
+    } else {
+      // Free text. A description block following the VALOR block means a new page.
+      if (phase === 'valor') { cur = newPage(); phase = 'desc'; cur.descs.push(line) }
+      else if (phase === 'desc') { cur!.descs.push(line) }
+      // Text seen mid saldo/date block is interleaved noise → ignore.
     }
   }
 
-  // ── Align dates: first ceil(N/2) = DATA MOV, rest = DATA VAL ─────────────────
-  const half    = Math.ceil(dates.length / 2)
-  const movDates = dates.slice(0, half)
-  const valDates = dates.slice(half)
+  if (!pages.length) return []
 
-  // ── Build output ──────────────────────────────────────────────────────────────
-  const n   = Math.min(descs.length, amounts.length)
+  // Opening balance: prefer it inline ("SALDO ANTERIOR … 44 919,61"); otherwise it
+  // is the first saldo token of page 1.
+  let inlineOpen: number | null = null
+  for (const line of lines) {
+    const m = line.match(/saldo\s+anterior\s+(?:contabilistico\s+)?(-?\d[\d\s]*,\d{2})\s*$/i)
+    if (m) { inlineOpen = parseSpaceAmt(m[1]); break }
+  }
+
   const out: ParsedMovement[] = []
+  let opening = inlineOpen ?? pages[0].saldos[0] ?? 0
 
-  for (let i = 0; i < n; i++) {
-    const amount = amounts[i]
-    if (isNaN(amount) || amount === 0) continue
+  for (let p = 0; p < pages.length; p++) {
+    const page = pages[p]
+    const n = page.valores.length
+    if (n === 0) continue
+    // On page 1 the saldo block leads with the opening balance (unless it was inline).
+    const afterBalances = (p === 0 && inlineOpen === null) ? page.saldos.slice(1) : page.saldos
+    // Value dates are the last n entries of the date block; the sparser leading
+    // entries are the DATA MOV column (only printed for some movements).
+    const valDates = page.dates.slice(-n)
 
-    const desc = descs[i].replace(/^\d{2}\/\d{2}\s+/, '').replace(/\s{2,}/g, ' ').trim()
-    if (!desc) continue
+    let prev = opening
+    for (let i = 0; i < n; i++) {
+      const amount = page.valores[i]
+      const desc = page.descs[i]
+      if (desc === undefined) break
+      // Printed SALDO is authoritative; fall back to the running sum if a balance
+      // token is missing so the chain stays usable.
+      const expected = Math.round((prev + amount) * 100) / 100
+      const balanceAfter = afterBalances[i] != null ? afterBalances[i] : expected
 
-    const date = movDates[i]
-      ? parseDateDDMM(movDates[i], '/', period.start, period.end)
-      : period.start
-    const bd = valDates[i]
-      ? parseDateDDMM(valDates[i], '/', period.start, period.end)
-      : undefined
-
-    out.push({
-      date,
-      bookingDate: bd && bd !== date ? bd : undefined,
-      description: desc,
-      amount,
-      balanceAfter: saldos[i] != null && !isNaN(saldos[i]) ? saldos[i] : undefined,
-    })
+      // The running balance is ordered by VALUE date, and the whole balance
+      // subsystem (consistency checks, day-grouped chaining) keys off `date` — so
+      // `date` MUST be the value date. Card-purchase descriptions also carry an
+      // earlier operation date ("02/02 COMPRA …"); keep it in bookingDate (it is
+      // stored but not shown) and strip it from the description.
+      const valDate = valDates[i] ? parseDateDDMM(valDates[i], '/', period.start, period.end) : ''
+      const date = valDate || period.start
+      const movMatch = desc.match(/^(\d{2})\/(\d{2})\b/)
+      const opDate = movMatch ? parseDateDDMM(`${movMatch[1]}/${movMatch[2]}`, '/', period.start, period.end) : ''
+      const bookingDate = opDate && opDate !== date ? opDate : undefined
+      const cleanDesc = desc.replace(/^\d{2}\/\d{2}\s+/, '').replace(/\s{2,}/g, ' ').trim()
+      if (cleanDesc) out.push({ date, bookingDate, description: cleanDesc, amount, balanceAfter })
+      prev = balanceAfter
+    }
+    opening = prev
   }
 
   return out
@@ -345,7 +390,7 @@ export async function parsePDF(buffer: Buffer, bank?: SupportedBank): Promise<Pa
   return extractMovementsFromText(text, bank)
 }
 
-function extractMovementsFromText(text: string, bank?: SupportedBank): ParsedMovement[] {
+export function extractMovementsFromText(text: string, bank?: SupportedBank): ParsedMovement[] {
   const period = extractPeriod(text)
   const textLow = text.toLowerCase()
 
