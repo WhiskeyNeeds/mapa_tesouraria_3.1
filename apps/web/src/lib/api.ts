@@ -1,4 +1,10 @@
-const BASE = `${import.meta.env.VITE_API_URL ?? ''}/api/v1`
+// Base da API. Em produção, VITE_API_URL aponta para o domínio da API
+// (ex.: https://api.mapa.ricardodomingos.eu). Em dev fica vazio e usa-se o
+// proxy do Vite (/api -> localhost:3001). Exportada para que os fetch() crus
+// (uploads, exports, downloads) usem exatamente a mesma base que o cliente.
+const API_ORIGIN = import.meta.env.VITE_API_URL ?? ''
+export const API_BASE = `${API_ORIGIN}/api/v1`
+const BASE = API_BASE
 
 function getToken(): string | null {
   return localStorage.getItem('access_token')

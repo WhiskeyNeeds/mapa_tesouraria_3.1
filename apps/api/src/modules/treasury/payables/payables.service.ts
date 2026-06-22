@@ -5,6 +5,7 @@ import { TreasuryRecurrencesService } from '../recurrences/recurrences.service.j
 import { TreasuryBudgetsService } from '../budgets/budgets.service.js'
 import { TreasuryBudgetRulesService } from '../budget-rules/budget-rules.service.js'
 import { audit, diffEntity } from '../../../lib/audit.js'
+import { auditBudgetTxnTransition } from '../../../lib/budget-events.js'
 import { matchClassificationRule } from '../../../lib/classification.js'
 import { mapTocStatus, resolveStatusOverlay } from '../../../lib/toc-overlay.js'
 import { clearBareTocPurchaseStub } from '../../../lib/toc-sync/dedup.js'
@@ -721,6 +722,15 @@ export class TreasuryPayablesService {
       },
     })
 
+    if (resolvedBudgetId && budgetAutoAssigned) {
+      await auditBudgetTxnTransition(this.prisma, {
+        clientId, userId, docType: 'payable', docId: created.id,
+        entityName: created.entityName ?? null, amount: Number(created.totalAmount ?? 0),
+        beforeBudgetId: null, beforeAuto: false,
+        afterBudgetId: resolvedBudgetId, afterAuto: true,
+      })
+    }
+
     // When a new recurrence template was just created, kick off the engine immediately
     // so the user sees the future instances populated in the "Futuras" tab on next list.
     if (data.recurrence) {
@@ -879,6 +889,18 @@ export class TreasuryPayablesService {
     }
 
     const updated = await this.prisma.treasuryPayable.update({ where: { id }, data: updateData })
+
+    // Eventos de associação ao budget (entityType='Budget').
+    const afterBudgetId = data.budgetId !== undefined ? data.budgetId : item.budgetId
+    const afterAuto = data.budgetAutoAssigned !== undefined
+      ? data.budgetAutoAssigned
+      : data.budgetId !== undefined ? false : item.budgetAutoAssigned
+    await auditBudgetTxnTransition(this.prisma, {
+      clientId, userId, docType: 'payable', docId: id,
+      entityName: item.entityName ?? null, amount: Number(item.totalAmount ?? 0),
+      beforeBudgetId: item.budgetId ?? null, beforeAuto: !!item.budgetAutoAssigned,
+      afterBudgetId: afterBudgetId ?? null, afterAuto: !!afterAuto,
+    })
 
     // Cascade para instâncias futuras geradas a partir desta programada.
     // Simétrico ao receivables: replica campos relevantes nos filhos com

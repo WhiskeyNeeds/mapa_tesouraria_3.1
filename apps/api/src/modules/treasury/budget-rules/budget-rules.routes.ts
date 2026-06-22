@@ -24,7 +24,7 @@ export async function budgetRulesRoutes(fastify: FastifyInstance) {
   fastify.post(prefix, { onRequest: auth }, async (request, reply) => {
     const { clientId } = request.params as { clientId: string }
     const body = request.body as { budgetId: string; categoryId: string; textPattern?: string }
-    return reply.status(201).send(await svc.create(clientId, body))
+    return reply.status(201).send(await svc.create(clientId, request.user.sub, body))
   })
 
   fastify.patch(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
@@ -35,7 +35,7 @@ export async function budgetRulesRoutes(fastify: FastifyInstance) {
 
   fastify.delete(`${prefix}/:id`, { onRequest: auth }, async (request, reply) => {
     const { clientId, id } = request.params as { clientId: string; id: string }
-    await svc.delete(clientId, id)
+    await svc.delete(clientId, request.user.sub, id)
     return reply.status(204).send()
   })
 }

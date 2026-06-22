@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, API_BASE } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { formatCurrency, formatDate, isWeekend, refSortKey, shiftToWorkday, statusLabel, statusVariant } from '@/lib/utils'
@@ -483,7 +483,7 @@ export default function PayablesPage() {
     if (dueDateTo) p.set('dueDateTo', dueDateTo)
     if (docDateFrom) p.set('docDateFrom', docDateFrom)
     if (docDateTo) p.set('docDateTo', docDateTo)
-    const res = await fetch(`/api/v1/treasury/${selectedClientId}/payables/export.csv?${p}`, {
+    const res = await fetch(`${API_BASE}/treasury/${selectedClientId}/payables/export.csv?${p}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return

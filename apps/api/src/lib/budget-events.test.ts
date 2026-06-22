@@ -53,4 +53,14 @@ describe('auditBudgetTxnTransition', () => {
     await auditBudgetTxnTransition(p, { ...base, userId: 'u1', beforeBudgetId: 'bA', beforeAuto: false, afterBudgetId: 'bA', afterAuto: false })
     expect((p as never as { treasuryAuditLog: { create: ReturnType<typeof vi.fn> } }).treasuryAuditLog.create).not.toHaveBeenCalled()
   })
+
+  it('findMany rejeita (db down): resolve sem lançar', async () => {
+    const p = {
+      treasuryAuditLog: { create: vi.fn().mockResolvedValue({}) },
+      treasuryBudget: { findMany: vi.fn().mockRejectedValue(new Error('db down')) },
+    } as never
+    await expect(
+      auditBudgetTxnTransition(p, { ...base, userId: 'u1', beforeBudgetId: 'bA', beforeAuto: false, afterBudgetId: 'bB', afterAuto: false }),
+    ).resolves.toBeUndefined()
+  })
 })
