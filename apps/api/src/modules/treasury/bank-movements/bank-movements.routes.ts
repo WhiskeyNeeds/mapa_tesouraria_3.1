@@ -7,6 +7,10 @@ import { findBalanceInconsistencies } from './balance-consistency.js'
 import type { TreasuryMovementStatus } from '@prisma/client'
 import { httpError } from '../../../lib/errors.js'
 
+// A importação de extratos em PDF do Banco BPI está desativada — usar o ficheiro Excel (.xls/.xlsx).
+const PDF_BPI_BLOCKED_MSG =
+  'A importação de extratos em PDF do Banco BPI está desativada. Utilize o ficheiro Excel (.xls/.xlsx).'
+
 export async function bankMovementsRoutes(fastify: FastifyInstance) {
   const svc = new TreasuryBankMovementsService(fastify.prisma)
   const prefix = '/treasury/:clientId/movements'
@@ -131,6 +135,8 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     const isPDF = originalFileName?.toLowerCase().endsWith('.pdf') ||
       (fileBuffer.length >= 4 && fileBuffer.slice(0, 4).toString('ascii') === '%PDF')
 
+    if (isPDF && bank === 'BPI') return reply.status(422).send({ error: PDF_BPI_BLOCKED_MSG })
+
     let movements: Awaited<ReturnType<typeof parsePDF>>
     try {
       movements = isPDF
@@ -201,6 +207,12 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
     if (!bankAccountId) throw httpError(400, 'bankAccountId is required')
     if (!bank) throw httpError(400, 'bank is required (CGD | BCP | BPI | Bankinter | Santander | NovoBanco | TEMPLATE)')
 
+    const isPDF = originalFileName?.toLowerCase().endsWith('.pdf') ||
+      (fileBuffer.length >= 4 && fileBuffer.slice(0, 4).toString('ascii') === '%PDF')
+
+    // Importação de PDF do BPI está desativada — falha cedo, antes de qualquer trabalho na BD.
+    if (isPDF && bank === 'BPI') return reply.status(422).send({ error: PDF_BPI_BLOCKED_MSG })
+
     // Check if account already has imported movements
     const existingCount = await fastify.prisma.treasuryBankMovement.count({
       where: { clientId, bankAccountId, deletedAt: null, source: { not: 'MANUAL' } },
@@ -219,9 +231,6 @@ export async function bankMovementsRoutes(fastify: FastifyInstance) {
         data: { deletedAt: new Date() },
       })
     }
-
-    const isPDF = originalFileName?.toLowerCase().endsWith('.pdf') ||
-      (fileBuffer.length >= 4 && fileBuffer.slice(0, 4).toString('ascii') === '%PDF')
 
     // File-level duplicate check (account-scoped) — only blocks if the existing import still has active movements
     const fileSha256 = createHash('sha256').update(fileBuffer).digest('hex')

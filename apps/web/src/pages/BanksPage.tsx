@@ -42,7 +42,9 @@ const BANK_IMPORT_OPTIONS = PORTUGUESE_BANKS.map((name) => ({
 }))
 
 // Bancos com parser de extrato em PDF suportado
-const PDF_IMPORT_BANKS: ReadonlySet<SupportedBank> = new Set(['Santander', 'BPI'])
+// Nota: o BPI tem parser de PDF (parseBPIPDF), mas a importação por PDF está
+// desativada — usar o ficheiro Excel para contas BPI. Ver guarda em bank-movements.routes.ts.
+const PDF_IMPORT_BANKS: ReadonlySet<SupportedBank> = new Set(['Santander'])
 
 const BANK_BRAND: Record<string, { abbr: string; bg: string }> = {
   'Bankinter': { abbr: 'BK', bg: '#FF6200' },
