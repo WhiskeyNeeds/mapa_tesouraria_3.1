@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import type { PrismaClient, ToconlineConfig } from '@prisma/client'
 import { encrypt, decrypt } from '../../plugins/encrypt.js'
 import { httpError } from '../../lib/errors.js'
+import { tocLog, rtFingerprint } from '../../lib/toc-refresh-logger.js'
 import type { RedisClient } from '../../plugins/redis.js'
 
 const TOC_STATE_PREFIX = 'toconline:state:'
@@ -99,8 +100,18 @@ export class ToconlineService {
         scope: 'commercial',
       }),
     })
-    if (!res.ok) throw httpError(502, 'TOConline token exchange failed')
+    if (!res.ok) {
+      tocLog('auth_exchange_fail', { clientId, httpStatus: res.status })
+      throw httpError(502, 'TOConline token exchange failed')
+    }
     const data = await res.json() as { access_token: string; refresh_token?: string; expires_in?: number }
+
+    tocLog('auth_ok', {
+      clientId,
+      hasRefreshToken: !!data.refresh_token,
+      rt: rtFingerprint(data.refresh_token),
+      expiresIn: data.expires_in ?? null,
+    })
 
     await this.prisma.toconlineConfig.update({
       where: { clientId },
@@ -125,6 +136,12 @@ export class ToconlineService {
     const accessToken = data.accessToken.trim()
     const refreshToken = data.refreshToken?.trim() || null
     if (!accessToken) throw httpError(400, 'accessToken não pode ser vazio')
+    tocLog('tokens_set_manually', {
+      clientId,
+      hasRefreshToken: !!refreshToken,
+      rt: rtFingerprint(refreshToken),
+      expiresIn: data.expiresIn ?? null,
+    })
     const result = await this.prisma.toconlineConfig.update({
       where: { clientId },
       data: {
@@ -212,7 +229,7 @@ export class ToconlineService {
         let body401 = ''
         try { body401 = JSON.stringify(await res.clone().json()) } catch { body401 = await res.text().catch(() => '') }
         console.error(`[TOConline] 401 on GET ${path} for ${clientId}: ${body401}`)
-        await this.tryRefreshToken(clientId, cfg)
+        await this.tryRefreshToken(clientId, cfg, false, 'api_401')
         const cfg2 = await this.requireActiveConfig(clientId)
         const token2 = decrypt(cfg2.accessToken!)
         res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token2}` } })
@@ -284,7 +301,7 @@ export class ToconlineService {
     })
 
     if (res.status === 401) {
-      await this.tryRefreshToken(clientId, cfg)
+      await this.tryRefreshToken(clientId, cfg, false, 'api_401')
       const cfg2 = await this.requireActiveConfig(clientId)
       const token2 = decrypt(cfg2.accessToken!)
       res = await fetch(`${cfg.baseUrl}${path}`, {
@@ -311,7 +328,7 @@ export class ToconlineService {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     })
     if (res.status === 401) {
-      await this.tryRefreshToken(clientId, cfg)
+      await this.tryRefreshToken(clientId, cfg, false, 'api_401')
       const cfg2 = await this.requireActiveConfig(clientId)
       const token2 = decrypt(cfg2.accessToken!)
       res = await fetch(`${cfg.baseUrl}${path}`, {
@@ -339,7 +356,7 @@ export class ToconlineService {
     })
 
     if (res.status === 401) {
-      await this.tryRefreshToken(clientId, cfg)
+      await this.tryRefreshToken(clientId, cfg, false, 'api_401')
       const cfg2 = await this.requireActiveConfig(clientId)
       const token2 = decrypt(cfg2.accessToken!)
       res = await fetch(`${cfg.baseUrl}${path}`, {
@@ -362,11 +379,13 @@ export class ToconlineService {
     clientId: string,
     cfg: Awaited<ReturnType<typeof this.requireConfig>>,
     force = false,
+    reason = 'unknown',
   ) {
     // Serialise refreshes per clientId: parallel callers wait for the in-flight one,
     // then re-read fresh config — TOConline invalidates the previous refresh_token on each use.
     const inFlight = this.refreshLocks.get(clientId)
     if (inFlight) {
+      tocLog('refresh_waited_inflight', { clientId, reason })
       await inFlight
       return
     }
@@ -375,19 +394,21 @@ export class ToconlineService {
       const fresh = await this.requireConfig(clientId)
       if (!force && fresh.tokenExpiresAt && fresh.tokenExpiresAt.getTime() - Date.now() > 60_000 && fresh.status === 'ACTIVE') {
         // Another caller already refreshed while we were queued.
+        tocLog('refresh_skipped_recent', { clientId, reason, tokenExpiresAt: fresh.tokenExpiresAt.toISOString() })
         return
       }
-      await this.doRefresh(clientId, fresh)
+      await this.doRefresh(clientId, fresh, reason)
     })().finally(() => this.refreshLocks.delete(clientId))
 
     this.refreshLocks.set(clientId, job)
     await job
   }
 
-  private async doRefresh(clientId: string, cfg: Awaited<ReturnType<typeof this.requireConfig>>) {
+  private async doRefresh(clientId: string, cfg: Awaited<ReturnType<typeof this.requireConfig>>, reason = 'unknown') {
     if (!cfg.refreshToken) {
       const msg = 'Sem refresh token — o access token expirou e não é possível renovar automaticamente. Insira um novo token manualmente.'
       console.error(`[TOConline] no refresh_token for ${clientId}`)
+      tocLog('refresh_impossible_no_rt', { clientId, reason })
       await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: msg } })
       throw httpError(401, msg)
     }
@@ -395,6 +416,16 @@ export class ToconlineService {
     const secret = decrypt(cfg.tocClientSecret)
     const rt = decrypt(cfg.refreshToken)
     const credentials = Buffer.from(`${cfg.tocClientId}:${secret}`).toString('base64')
+
+    tocLog('refresh_attempt', {
+      clientId,
+      reason,
+      oauthUrl: cfg.oauthUrl,
+      tocClientId: cfg.tocClientId,
+      rt: rtFingerprint(rt),
+      tokenExpiresAt: cfg.tokenExpiresAt?.toISOString() ?? null,
+      status: cfg.status,
+    })
 
     const res = await fetch(`${cfg.oauthUrl}/token`, {
       method: 'POST',
@@ -424,12 +455,32 @@ export class ToconlineService {
       console.error(`[TOConline] refresh_token failed for ${clientId} (HTTP ${res.status}): ${detail}`)
       console.error(`[TOConline] refresh raw response body: ${rawBody}`)
       console.error(`[TOConline] refresh request: oauthUrl=${cfg.oauthUrl}, tocClientId=${cfg.tocClientId}, rt_preview=${rt.slice(0, 4)}...${rt.slice(-4)} (len=${rt.length})`)
+      tocLog('refresh_fail', {
+        clientId,
+        reason,
+        httpStatus: res.status,
+        detail,
+        rawBody: rawBody.slice(0, 500),
+        rt: rtFingerprint(rt),
+        tokenExpiresAt: cfg.tokenExpiresAt?.toISOString() ?? null,
+      })
       await this.prisma.toconlineConfig.update({ where: { clientId }, data: { status: 'ERROR', lastError: `Refresh falhou: ${detail}` } })
       this.invalidateCache(clientId)
       throw httpError(401, `TOConline refresh falhou: ${detail}`)
     }
 
     const data = await res.json() as { access_token: string; refresh_token?: string; expires_in?: number }
+    // PONTO-CHAVE do diagnóstico: o TOConline devolve (ou não) um refresh_token
+    // novo no refresh? Se não devolver, o RT original expira 8h após a
+    // autorização e a integração morre nessa altura, faça-se o que se fizer.
+    tocLog('refresh_ok', {
+      clientId,
+      reason,
+      newRtReturned: !!data.refresh_token,
+      rtChanged: data.refresh_token ? data.refresh_token !== rt : false,
+      rtAfter: rtFingerprint(data.refresh_token ?? rt),
+      expiresIn: data.expires_in ?? null,
+    })
     await this.prisma.toconlineConfig.update({
       where: { clientId },
       data: {
@@ -1123,7 +1174,7 @@ export class ToconlineService {
     })
     for (const cfg of expiring) {
       try {
-        await this.tryRefreshToken(cfg.clientId, cfg)
+        await this.tryRefreshToken(cfg.clientId, cfg, false, 'background_expiring')
         console.info(`[TOConline] background token refreshed for ${cfg.clientId}`)
       } catch {
         // error already persisted to DB as ERROR status inside tryRefreshToken
@@ -1142,7 +1193,7 @@ export class ToconlineService {
     console.info(`[TOConline] startup refresh: ${configs.length} config(s) to process`)
     for (const cfg of configs) {
       try {
-        await this.tryRefreshToken(cfg.clientId, cfg, true)
+        await this.tryRefreshToken(cfg.clientId, cfg, true, 'startup_force')
         console.info(`[TOConline] startup refresh OK for ${cfg.clientId}`)
       } catch {
         // error already persisted to DB inside doRefresh
@@ -1283,7 +1334,7 @@ export class ToconlineService {
     }
     // Proactively refresh if token expires within the next 60 seconds
     if (cfg.tokenExpiresAt && cfg.tokenExpiresAt.getTime() - Date.now() < 60_000) {
-      await this.tryRefreshToken(clientId, cfg)
+      await this.tryRefreshToken(clientId, cfg, false, 'proactive_expiry')
       return this.requireConfig(clientId)
     }
     return cfg
