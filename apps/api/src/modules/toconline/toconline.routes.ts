@@ -567,4 +567,20 @@ export async function toconlineRoutes(fastify: FastifyInstance) {
     const states = await fastify.prisma.tocSyncState.findMany({ where: { clientId } })
     return reply.send(states)
   })
+
+  // Diagnóstico: devolve o log dedicado do ciclo de tokens TOConline
+  // (apps/api/src/lib/toc-refresh-logger.ts). Só contém fingerprints de
+  // tokens, nunca valores completos. Admin-only.
+  fastify.get('/toconline/refresh-log', { onRequest: [fastify.requireAdmin] }, async (request, reply) => {
+    const { readFile } = await import('node:fs/promises')
+    const { TOC_REFRESH_LOG_FILE } = await import('../../lib/toc-refresh-logger.js')
+    try {
+      const content = await readFile(TOC_REFRESH_LOG_FILE, 'utf8')
+      reply.header('Cache-Control', 'no-store')
+      reply.header('Content-Disposition', 'attachment; filename="toconline-refresh.log"')
+      return reply.type('text/plain; charset=utf-8').send(content)
+    } catch {
+      return reply.status(404).send({ message: 'Ainda não há eventos registados (o ficheiro de log não existe).' })
+    }
+  })
 }

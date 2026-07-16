@@ -24,3 +24,6 @@ apps/web/vite.config.js
 /playwright/.cache/
 /playwright/.auth/
 
+# Logs de diagnostico (toc-refresh-logger)
+logs/
+*.log
